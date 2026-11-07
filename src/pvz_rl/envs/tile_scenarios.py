@@ -21,7 +21,7 @@ from pvz_rl.learning.deadline import check_deadline
 LEGACY_SKILLS = ("peashooter", "cherry_bomb")
 BOMB_SKILLS = ("cherry_bomb", "cherry_bomb_obstacle")
 ATTACKER_EXERCISES = (*BOMB_SKILLS, "attacker_pre")
-SKILLS = (*LEGACY_SKILLS, "cherry_bomb_obstacle", "attacker_pre", "attacker")
+SKILLS = (*LEGACY_SKILLS, "cherry_bomb_obstacle", "attacker_pre", "prediction", "attacker")
 
 
 def is_bomb_skill(skill):
@@ -30,6 +30,14 @@ def is_bomb_skill(skill):
 
 def is_placement_skill(skill):
     return skill in (*ATTACKER_EXERCISES, "attacker")
+
+
+def is_single_frame_skill(skill):
+    return is_placement_skill(skill) or skill == "prediction"
+
+
+def prediction_settings(cfg):
+    return cfg["training"].get("tile_scenarios", {}).get("prediction")
 
 
 def attacker_mix(cfg):

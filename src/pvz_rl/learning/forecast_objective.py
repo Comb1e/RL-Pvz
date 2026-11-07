@@ -65,16 +65,35 @@ def _token_loss_components(logits, targets):
     return per_lane.sum(-2) / lanes.sum(-1).clamp_min(1)[..., None]
 
 
+def scene_outcome_loss(logits, targets):
+    """Unweighted categorical loss for each fully labeled scene."""
+    return _token_loss_components(logits, targets).sum(-1)
+
+
 def _effect_objective(policy, observations, rows, memory, features, feature_rows, root_count):
     """Average known terms, lanes, valid tokens and decision roots equally."""
     device = policy.device
     per_root = memory[0].new_zeros((len(rows), 2), dtype=torch.float32)
-    null_rows = np.flatnonzero(rows["null_target_valid"])
-    tokens = torch.as_tensor(rows["null_target_valid"].astype(np.float32), device=device)
+    has_null = rows["null_target_valid"]
+    null_rows = np.flatnonzero(has_null)
+    root, token = np.nonzero(
+        rows["effect_valid"] & ((rows["effect_actions"] != 0) | ~has_null[:, None])
+    )
+    actions = np.where(
+        token == 0, rows["executed_action"][root], rows["effect_actions"][root, token]
+    )
+    wait = np.flatnonzero(actions == 0)
+    wait_rows = np.union1d(null_rows, root[wait])
+    if len(wait_rows):
+        at = torch.as_tensor(wait_rows, device=device)
+        wait_logits = policy.effect_values(policy.null_features((memory[0][at], memory[1][at])))
+    tokens = torch.as_tensor(has_null.astype(np.float32), device=device)
     metric_tokens = []
     if len(null_rows):
         at = torch.as_tensor(null_rows, device=device)
-        null_logits = policy.effect_values(policy.null_features((memory[0][at], memory[1][at])))
+        null_logits = wait_logits[
+            torch.as_tensor(np.searchsorted(wait_rows, null_rows), device=device)
+        ]
         target = torch.as_tensor(
             outcome_codes(
                 np.array(rows["baseline_outcomes"][null_rows]), reference_tau(policy.layout.rules)
@@ -84,19 +103,16 @@ def _effect_objective(policy, observations, rows, memory, features, feature_rows
         )
         per_root = per_root.index_add(0, at, _token_loss_components(null_logits, target))
         metric_tokens.append((null_logits, target))
-    root, token = np.nonzero(rows["effect_valid"] & (rows["effect_actions"] != 0))
     if len(root):
-        actions = rows["effect_actions"][root, token].astype(np.int64)
+        actions = actions.astype(np.int64)
         branches, tiles = (actions - 1) // 45 + 1, (actions - 1) % 45
-        # Illegal tiles in an available branch retain their own tile features.
-        unavailable = (token == 0) & ~rows["branch_usable"][root] & rows["null_target_valid"][root]
         lookup = np.full((len(rows), 10), -1, np.int64)
         banks = []
         if features is not None:
             at = np.asarray(feature_rows)
             lookup[at, (rows["action"][at].astype(np.int64) - 1) // 45 + 1] = np.arange(len(at))
             banks.append(features)
-        legal = np.flatnonzero(~unavailable)
+        legal = np.flatnonzero(actions != 0)
         missing = np.unique(np.stack((root[legal], branches[legal]), -1), axis=0)
         missing = missing[lookup[missing[:, 0], missing[:, 1]] < 0]
         if len(missing):
@@ -110,22 +126,21 @@ def _effect_objective(policy, observations, rows, memory, features, feature_rows
                     memory=memory,
                 )
             )
-        gathered = memory[0].new_zeros((len(root), policy.cfg["policy"]["shared_width"]))
+        predictions = memory[0].new_zeros((len(root), 5, policy.effect_width))
         if len(legal):
             bank = banks[0] if len(banks) == 1 else torch.cat(banks)
             selected = bank[
                 torch.as_tensor(lookup[root[legal], branches[legal]], device=device),
                 torch.as_tensor(tiles[legal], device=device),
             ]
-            gathered = gathered.index_copy(0, torch.as_tensor(legal, device=device), selected)
-        rejected = np.flatnonzero(unavailable)
-        if len(rejected):
-            at = torch.as_tensor(root[rejected], device=device)
-            selected = policy.null_features(
-                (memory[0][at], memory[1][at]), torch.as_tensor(branches[rejected], device=device)
+            predictions = predictions.index_copy(
+                0, torch.as_tensor(legal, device=device), policy.effect_values(selected)
             )
-            gathered = gathered.index_copy(0, torch.as_tensor(rejected, device=device), selected)
-        predictions = policy.effect_values(gathered)
+        if len(wait):
+            selected = torch.as_tensor(np.searchsorted(wait_rows, root[wait]), device=device)
+            predictions = predictions.index_copy(
+                0, torch.as_tensor(wait, device=device), wait_logits[selected]
+            )
         targets = torch.as_tensor(
             np.array(rows["effect_labels"][root, token]), device=device, dtype=torch.long
         )

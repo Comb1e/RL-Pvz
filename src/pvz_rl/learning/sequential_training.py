@@ -26,6 +26,7 @@ from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
 from pvz_rl.envs.tile_scenarios import (
     attacker_exercise_scores,
     is_placement_skill,
+    is_single_frame_skill,
     placement_settings,
     placement_source,
     skill_plant,
@@ -148,6 +149,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def fitting_parameter_stage(self):
         if self._fit_kind != "tile_only":
             return None
+        if self.tile_skills.phase == "prediction":
+            return "prediction_only"
         if not self.outcome_training or self.outcome_weight <= 0:
             return "tile"
         return (
@@ -290,7 +293,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._ensure_teacher()
         settings = self.cfg["training"].get("forecasts", {})
         injection = (
-            not is_placement_skill(self.tile_skills.phase)
+            not is_single_frame_skill(self.tile_skills.phase)
             and forecast_forks_enabled(self.cfg, self.tile_skills.phase)
             and self.training_games >= settings.get("injection_after_games", 4096)
         )
@@ -302,9 +305,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         )
         self._resolved_forecast_schedule = dict(
             injection=injection,
-            auxiliary_scale=min(
-                1.0, (total + self.cohort_games) / max(1, settings.get("warmup_games", 2048))
-            ),
+            auxiliary_scale=1.0
+            if self.tile_skills.phase == "prediction"
+            else min(1.0, (total + self.cohort_games) / max(1, settings.get("warmup_games", 2048))),
             n_step=settings.get("injected_n_step", 20) if injection else settings.get("n_step", 5),
             gamma_tick=0.5 ** (1 / (half_life * self.cfg["environment"]["decision_ticks"])),
         )
@@ -315,6 +318,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             network.auxiliary_scale = self._resolved_forecast_schedule["auxiliary_scale"]
         self._stats["forecast_schedule"] = dict(self._resolved_forecast_schedule)
         self._stats["forecast_mode"] = forecast_mode(self.cfg, self.tile_skills.phase)
+        if self.tile_skills.phase == "prediction":
+            self._stats["fitting_objective"] = "prediction_only"
         # Resource admission can fail before the first action. Retain a complete
         # empty ticket state so recovery can use the already prepared boards.
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
@@ -322,7 +327,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._wait_outcomes = None
         from pvz_rl.learning.auxiliary_settings import enabled as hybrid_enabled
 
-        if (hybrid_enabled(self.cfg) or is_placement_skill(self.tile_skills.phase)) and (
+        if (hybrid_enabled(self.cfg) or is_single_frame_skill(self.tile_skills.phase)) and (
             self.peashooter_rule_training
             or (self.outcome_training and forecast_forks_enabled(self.cfg, self.tile_skills.phase))
         ):
@@ -347,7 +352,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             from pvz_rl.learning.wait_outcomes import WaitOutcomes
 
             owner = (
-                PlacementOutcomes if is_placement_skill(self.tile_skills.phase) else WaitOutcomes
+                PlacementOutcomes if is_single_frame_skill(self.tile_skills.phase) else WaitOutcomes
             )
             self._wait_outcomes = owner(self.env, self._buffer)
         if getattr(self.env, "auxiliary", None) is not None:
@@ -507,16 +512,17 @@ class CudaSequentialQ(CudaCohortLifecycle):
             source_decisions = self._scheduler.decisions.copy()
             masks = env.action_masks().clone()
             branch_available = env.branch_availability()
+            legal = None
             if new.any():
                 supplied = None
-                if self.tile_skills.active:
+                if self.tile_skills.active and self.tile_skills.phase != "prediction":
                     supplied = env.supplied_branches(self.tile_skills.phase, branch_available)
                 with env.profiler.track("online_inference"):
                     result = self._runner.decide(
                         self._last_obs,
                         masks,
                         active=enabled,
-                        deterministic=False,
+                        deterministic=self.tile_skills.phase == "prediction",
                         defer_check=True,
                         plan=plan,
                         branch_usable=branch_available,
@@ -545,15 +551,14 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._runner.valid &= details["valid"]
                 if self.outcome_training:
                     if forecast_version(self.cfg) >= 2:
+                        legal = env.engine_action_masks_device()
                         if not hasattr(self, "_collection_effect"):
                             self._collection_effect = torch.zeros(
                                 (self.n_envs, 2, 5, 10), device=self.device
                             )
                         self._collection_effect[enabled] = self.policy.effect_action_display(
-                            details["observations"],
-                            actions,
+                            env.effective_actions(actions, legal),
                             details["board_memory"],
-                            branch_available,
                         )[enabled]
                 self.policy._effect_decision_cache = None
             if not hasattr(self, "_collection_packed"):
@@ -615,7 +620,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             ):
                 from pvz_rl.learning.effect_collection import begin_effects
 
-                self._pending_effect = begin_effects(self, actions, details, issued_host)
+                if legal is None:
+                    legal = env.engine_action_masks_device()
+                self._pending_effect = begin_effects(self, actions, details, issued_host, legal)
                 self._scheduler.pending |= issued_host
             with env.profiler.track("encoding"):
                 counts = torch.where(executing, env.features.summary_tensor[: self.n_envs, 0], 0)
@@ -659,7 +666,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._wait_outcomes.arm(self._pending_effect)
             env.step_device(actions, active=executing)
             forecast_host = None
-            if self.outcome_training and not is_placement_skill(self.tile_skills.phase):
+            if self.outcome_training and not is_single_frame_skill(self.tile_skills.phase):
                 from pvz_rl.envs.field_tracking import FIELD_HEADER
 
                 count = self.cfg["environment"]["decision_ticks"] + 1
@@ -1229,6 +1236,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._cached_metrics = (loss, self._cached_metrics[1], self._cached_metrics[2])
             self.logger.record("train/primary_loss", loss)
             self._stats["primary_loss"] = loss
+            if self.tile_skills.phase == "prediction":
+                self._cached_fit_examples = self._outcome_decisions
             if is_placement_skill(self.tile_skills.phase):
                 self._cached_fit_examples = self.cohort_games
                 for key, number in zip(
@@ -1252,6 +1261,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     values[1] / values[2] if values[2] else None,
                 )
         loss, selected_error, placement_gap = self._cached_metrics
+        if self.tile_skills.phase == "prediction":
+            loss = None
         self.logger.record("train/q_loss", loss)
         self.logger.record("train/selected_action_error", selected_error)
         self.logger.record("train/placement_gap", placement_gap)
@@ -1377,6 +1388,21 @@ class CudaSequentialQ(CudaCohortLifecycle):
         from pvz_rl.learning.forecast_objective import forecast_auxiliary
 
         observations = collate_observations(observations, self.device)
+        if self.tile_skills.phase == "prediction":
+            with self.policy.board_context(observations) as memory:
+                loss, metrics = forecast_auxiliary(
+                    self.policy,
+                    observations,
+                    rows,
+                    memory,
+                    decision_count=self._outcome_decisions,
+                    stage="prediction",
+                )
+            self.policy._primary_graph = None
+            self.policy._last_outcome_metrics = metrics
+            self.policy._last_species_consistency_loss = loss.new_zeros(())
+            self.policy._last_species_consistency_metrics = loss.new_zeros(4, dtype=torch.float64)
+            return loss, loss.new_empty(0), loss.new_empty(0)
         branches, _ = action_parts(torch.as_tensor(np.array(rows["action"]), device=self.device))
         requested = np.flatnonzero(rows["active"] & rows["branch_usable"] & (rows["action"] > 0))
         at = torch.as_tensor(requested, device=self.device)
@@ -1650,7 +1676,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             )
             and (
                 hybrid_enabled(self.cfg)
-                or is_placement_skill(self.tile_skills.phase)
+                or is_single_frame_skill(self.tile_skills.phase)
                 or (extra and extra.get("auxiliary_simulation"))
             )
         ):
@@ -1742,7 +1768,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             from pvz_rl.learning.wait_outcomes import WaitOutcomes
 
             owner = (
-                PlacementOutcomes if is_placement_skill(self.tile_skills.phase) else WaitOutcomes
+                PlacementOutcomes if is_single_frame_skill(self.tile_skills.phase) else WaitOutcomes
             )
             self._wait_outcomes = owner(self.env, self._buffer, extra["wait_outcomes"])
         elif (
@@ -1757,7 +1783,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             from pvz_rl.learning.wait_outcomes import WaitOutcomes
 
             owner = (
-                PlacementOutcomes if is_placement_skill(self.tile_skills.phase) else WaitOutcomes
+                PlacementOutcomes if is_single_frame_skill(self.tile_skills.phase) else WaitOutcomes
             )
             self._wait_outcomes = owner(self.env, self._buffer)
         if (

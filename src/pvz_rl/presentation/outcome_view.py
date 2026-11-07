@@ -61,9 +61,10 @@ def draw_live_outcomes(surface, frame, rect):
     surface.blit(font.render(stamp, True, (184, 205, 186)), (rect.x + 8, rect.y + 23))
     panels = []
     if has_effects:
+        suffix = "Wait" if decision.get("executed_action") == 0 else "proposal"
         panels.extend(
             zip(
-                ("Static field after proposal", "Probe after proposal"),
+                (f"Static field after {suffix}", f"Probe after {suffix}"),
                 decision["effect_prediction"],
                 strict=True,
             )

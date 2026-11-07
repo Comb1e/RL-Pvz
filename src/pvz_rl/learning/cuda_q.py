@@ -442,15 +442,18 @@ class CudaCohortLifecycle(BaseAlgorithm):
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
                         ranking = is_placement_skill(self.tile_skills.phase)
+                        prediction = self.tile_skills.phase == "prediction"
                         rules = getattr(self, "peashooter_rule_training", False)
                         self.prefit_errors = self._buffer.finalize(
                             cohort=self.cohort_number,
-                            diagnostics=not (ranking or rules),
+                            diagnostics=not (ranking or rules or prediction),
                         )
-                        if ranking or rules:
+                        if ranking or rules or prediction:
                             self.prefit_errors = {}
                             self._buffer.reward_summary["supervision"] = (
-                                "prioritized_lane_cross_entropy_v1"
+                                "prediction_only"
+                                if prediction
+                                else "prioritized_lane_cross_entropy_v1"
                                 if rules
                                 else placement_settings(self.cfg, self.tile_skills.phase).get(
                                     "ranking_objective", "top1_hinge_v1"

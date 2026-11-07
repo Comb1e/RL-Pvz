@@ -52,7 +52,7 @@ Start autonomous training when ready:
 ```
 
 Default progression is
-`cherry_bomb → cherry_bomb_obstacle → attacker_pre → attacker → peashooter → easy → standard → shared`.
+`cherry_bomb → cherry_bomb_obstacle → attacker_pre → prediction → attacker → peashooter → easy → standard → shared`.
 Use `--stage NAME --until-stage-complete` for one stage, or `--games N` for a
 completed-episode budget. Explicit normal stages skip preliminary stages. Omit
 `--init-from` to start with random weights.
@@ -61,9 +61,14 @@ Each stage can start from the previous stage's weights;
 [pre_train.ps1](tools/pre_train.ps1) chains them in order:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train --stage attacker --until-stage-complete `
-  --init-from runs\compact-stages\attacker_pre\final.zip --output runs\compact-stages\attacker
+.\.venv\Scripts\python.exe -m pvz_rl train --stage prediction --until-stage-complete `
+  --init-from runs\compact-stages\attacker_pre\final.zip --output runs\compact-stages\prediction `
+  --gpu 0 --gpu-profile rtx4070-laptop
 ```
+
+`prediction` fits the selected action's field and probe forecasts on randomized
+current frames. All 200 validation scenes must have a categorical loss of 0.05
+or less. Use its `final.zip` to initialize `attacker`.
 
 `attacker` mixes the three placement exercises in shuffled 640-board cohorts
 (64 Cherry Bomb, 256 Obstacle, 320 Attacker Pre) and requires 200/200 on a fresh

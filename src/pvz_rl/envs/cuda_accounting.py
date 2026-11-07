@@ -67,6 +67,29 @@ class AccountingCudaBatch(CudaBatch):
     def set_sky_sun_rate(self, rate):
         self.sky_sun_rate = validate_sky_sun_rate(rate, self.rules)
 
+    def apply_actions_device(self, actions):
+        """Validate and apply a trusted proposal batch without advancing scene time."""
+        self._step(
+            (self.n,),
+            (32,),
+            (
+                self.header,
+                self.plants,
+                self.zombies,
+                self.projectiles,
+                self.mowers,
+                self.cooldowns,
+                self._schedules,
+                self._events,
+                self._event_counts,
+                self.facts,
+                actions,
+                self.n,
+                0,
+                1,
+            ),
+        )
+
     def enable_field_tracking(self, saved=None):
         from pvz_rl.envs.field_tracking import FIELD_HEADER
 

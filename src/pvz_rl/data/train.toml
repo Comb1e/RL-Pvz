@@ -179,6 +179,20 @@ cuda_warmup = true # Natural initial cooldown only; distance labels use no candi
 oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown warmup.
 oracle_vram_mib = 1024
 
+[training.prediction]
+forecast_mode = "prediction_only"
+extra_actions = 0
+n_envs = 640
+probe_interval_games = 10000
+validation_cases = 200
+validation_max_loss = 0.05 # Every scene must meet this unweighted categorical NLL.
+plants = [0, 20]
+live_zombies = [0, 10]
+defeated_zombies = [0, 30]
+pending_zombies = [0, 20]
+sun = [0, 500]
+ready_probability = 0.5 # Applied independently to each card slot and mower.
+
 [training.attacker]
 forecast_mode = "placement_outcomes"
 extra_actions = 0

@@ -32,7 +32,9 @@ from pvz_rl.envs.tile_scenarios import (
     attacker_exercise_scores,
     attacker_mix,
     is_placement_skill,
+    is_single_frame_skill,
     placement_settings,
+    prediction_settings,
 )
 from pvz_rl.evaluation.runner import evaluate, summarize
 from pvz_rl.learning.budget import (
@@ -893,7 +895,7 @@ class ResearchCallback(BaseCallback):
             skills = self.model.tile_skills
             state = exploration_state(self.cfg, skills.episodes[skills.phase])
             apply_exploration_state(self.model, state)
-            if is_placement_skill(skills.phase) and skills.stage_order is not None:
+            if is_single_frame_skill(skills.phase) and skills.stage_order is not None:
                 from pvz_rl.learning.exploration import set_exploration_rate
 
                 set_exploration_rate(self.model, 0.0, plant_rate=0.0)
@@ -986,9 +988,7 @@ class ResearchCallback(BaseCallback):
                 raise ValueError("Another validation panel remains pending")
             if kind not in self.validation_panels:
                 if kind in ("tile", "curriculum"):
-                    count = (
-                        tile_validation_count(self.cfg, domain) if domain == "attacker" else None
-                    )
+                    count = tile_validation_count(self.cfg, domain) if kind == "tile" else None
                     panel = curriculum_probe_seeds(self.cfg, count=count)
                 else:
                     panel = random_validation_seeds(self.cfg, limit=self.validation_limit)
@@ -1006,9 +1006,13 @@ class ResearchCallback(BaseCallback):
                         optimizer_step=optimizer_step(self.model),
                     ),
                 )
+            evidence = (
+                f"{cohort.get('games', 0)} completed scenes"
+                if domain == "prediction"
+                else f"{cohort.get('wins', 0)}/{cohort.get('games', 0)} cohort successes"
+            )
             self.progress.emit(
-                f"Validation check: {cohort.get('wins', 0)}/{cohort.get('games', 0)} "
-                f"cohort successes; {'launch' if allowed else 'skip'}; "
+                f"Validation check: {evidence}; {'launch' if allowed else 'skip'}; "
                 f"next check after {progress + self.validation_trigger.interval_for(domain):,} "
                 f"{domain} episodes",
                 force=True,
@@ -1171,14 +1175,26 @@ class ResearchCallback(BaseCallback):
             names = ", ".join(skills.validation_skills)
             self.progress.phase(Phase.VALIDATING, f"Tile stage validation: {names}")
             try:
-                results = validate_tile_skills(
-                    self.cfg,
-                    self.model,
-                    self.validation_panels["tile"],
-                    deadline=self.operation_deadline(final),
-                    progress=self.progress,
-                    skills=skills.validation_skills,
-                )
+                if skills.phase == "prediction":
+                    from pvz_rl.evaluation.prediction import validate_prediction
+
+                    results = {
+                        "prediction": validate_prediction(
+                            self.cfg,
+                            self.model,
+                            self.validation_panels["tile"],
+                            deadline=self.operation_deadline(final),
+                        )
+                    }
+                else:
+                    results = validate_tile_skills(
+                        self.cfg,
+                        self.model,
+                        self.validation_panels["tile"],
+                        deadline=self.operation_deadline(final),
+                        progress=self.progress,
+                        skills=skills.validation_skills,
+                    )
             except BudgetExpired:
                 self.progress.emit(
                     "Tile validation incomplete; mastery remains pending", force=True
@@ -1192,6 +1208,14 @@ class ResearchCallback(BaseCallback):
             breakdown = (
                 attacker_exercise_scores(results["attacker"]) if previous == "attacker" else None
             )
+            prediction_metrics = {}
+            if previous == "prediction":
+                losses = [row["loss"] for row in results["prediction"]]
+                finite = all(loss is not None for loss in losses)
+                prediction_metrics = dict(
+                    mean_loss=sum(losses) / count if finite else None,
+                    worst_loss=max(losses) if finite else None,
+                )
             with atomic_transition():
                 skills.observe(scores, self.cfg)
                 self.complete_validation("tile")
@@ -1210,12 +1234,21 @@ class ResearchCallback(BaseCallback):
                             stage_episodes=skills.episodes[previous],
                             cases=results,
                             **({"exercise_scores": breakdown} if breakdown is not None else {}),
+                            **prediction_metrics,
                             optimizer_step=optimizer_step(self.model),
                             training_steps=self.model.num_timesteps,
                         ),
                     )
                 self.save_checkpoint("latest.zip")
             detail = str(scores)
+            if prediction_metrics:
+                mean, worst = prediction_metrics.values()
+                detail = f"prediction {scores['prediction']}/{count}"
+                detail += (
+                    f", mean loss {mean:.6f}, worst loss {worst:.6f}"
+                    if mean is not None
+                    else ", non-finite scene loss"
+                )
             if breakdown is not None:
                 detail = (
                     f"attacker {scores['attacker']}/{count} overall ("
@@ -1722,6 +1755,7 @@ def train(
         f"{cohort_envs(cfg, 'peashooter')} Peashooter lanes, {cohort_envs(cfg)} normal lanes, "
         f"{cohort_envs(cfg, 'cherry_bomb')} Cherry Bomb lanes, "
         f"{cfg['training'].get('tile_scenarios', {}).get('attacker', {}).get('n_envs', 0)} attacker-pre lanes, "
+        f"{(prediction_settings(cfg) or {}).get('n_envs', 0)} prediction lanes, "
         f"{(attacker_mix(cfg) or {}).get('n_envs', 0)} mixed attacker lanes; simulator {simulator(cfg)}; "
         "one complete game per environment per cohort; "
         f"{budget_label}; "
@@ -1738,7 +1772,9 @@ def train(
         force=True,
     )
     target_kind = (
-        "successful-set placement supervision with absolute action outcomes"
+        "unweighted categorical fitting of post-action forecasts"
+        if selected_stage(cfg) == "prediction"
+        else "successful-set placement supervision with absolute action outcomes"
         if is_placement_skill(selected_stage(cfg))
         else "n-step Q targets with absolute action outcomes"
     )
@@ -1919,7 +1955,7 @@ def train(
                     tb_log_name=condition,
                 )
             except TrainingGamesComplete:
-                progress.emit("Game target reached; final Q update completed", force=True)
+                progress.emit("Training budget reached; final fitting pass completed", force=True)
                 callback._on_training_end()
             except TrainingStageComplete:
                 progress.emit("Mastery reached; finalizing its checkpoint", force=True)

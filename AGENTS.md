@@ -10,15 +10,16 @@ This file owns project-specific invariants and the code map.
   No dependency downloads in smoke checks or formal training without a request.
 - `src/pvz_rl/data/train.toml` is the single parameter source for training and demo
   overlays. Preserve user tuning. Group stage settings under `training.cherry_bomb`,
-  `cherry_bomb_obstacle`, `attacker_pre`, `attacker`, `peashooter` and `normal`; resolve once
+  `cherry_bomb_obstacle`, `attacker_pre`, `prediction`, `attacker`, `peashooter` and `normal`; resolve once
   into the runtime layout. Shared scenario sampling attempts live in `tile_scenarios`.
 - Fresh policy inputs are public board facts: entity records and 18 globals.
   Simulated field/probe outcomes are private auxiliary targets, never observations.
   Future spawns are suppressed inside forks; IDs, schedules, seeds and snapshots stay private.
 - Encode once per decision/fitting call: shared encoder, ten-way action Q head,
   action-conditioned 45-query decoder. Wait/unavailable branches skip collection
-  decoding; early rejected proposals still decode their own outcome token during
-  fitting. Later stages use a pooled null branch for Wait labels. All tiles remain
+  decoding. Exact pre-action legality routes every rejected forecast through the
+  same pooled Wait features as explicit Wait. Preserve the proposal for Q and
+  teacher fitting. Later stages retain valid Wait references. All tiles remain
   candidates. Cache memory within one forward only; branch impossibility precedes tile invalidity.
 - All models are outcome-only. Factual prediction heads, horizon/snapshot labels,
   losses, summaries, storage and legacy resumes are removed. Early stages use
@@ -40,7 +41,8 @@ This file owns project-specific invariants and the code map.
 - Static forks own physical/RNG storage, suppress actions/future spawns/logs and
   resolve mowers before recording home entry. Continue other lanes after a loss;
   probes inherit damaged plants and spent mowers. The real game is unchanged.
-  Fresh inference and validation compute no field/probe simulations. Learned
+  Inference and ordinary gameplay validation compute no field/probe simulations.
+  Prediction validation computes exact private targets after the greedy proposal. Learned
   outcome summaries retain detached tile-Q injection and its schedule.
 - `absolute-wait-trajectory-v4` follows real Waits/rejections and records guarded per-tick
   field observations. One semantic probe belongs to each owned interval, anchored
@@ -144,7 +146,7 @@ This file owns project-specific invariants and the code map.
 
 ## Stages and validation
 
-- Fresh progression: `cherry_bomb → cherry_bomb_obstacle → attacker_pre → attacker → peashooter
+- Fresh progression: `cherry_bomb → cherry_bomb_obstacle → attacker_pre → prediction → attacker → peashooter
   → easy → standard → shared`. Explicit normal stages start directly. Preserve
   normal stage indices, independent budgets/counters and saved stage orders.
 - Both bomb stages have no exploration/search. Obstacle boards have exactly one
@@ -158,15 +160,22 @@ This file owns project-specific invariants and the code map.
   One shared pool and one active CUDA oracle prepare the mixed cohort. Validation
   requires all 200 wins and reuses the saved panel on retry. Weights-only stage
   transfers use `--init-from`; recovery retains the saved stage order.
-- Only real completed episodes advance budgets and validation clocks. Check at
+- Prediction uses 640 seeded, engine-validated current frames per cohort and one
+  exact target for each greedy proposal's effective action. Average all 20 known
+  outcome terms per scene and weight scenes equally. Train the forecast path
+  without warmup, Q, or teachers. Freeze both Q readouts and their EMA. Check a
+  saved 200-scene validation panel every 10,000 completed scenes after a full
+  fitted cohort. Each scene must meet the inclusive 0.05 loss threshold.
+- Only completed episodes or prediction scenes advance budgets and validation clocks. Check at
   configured intervals after fully fitted cohorts. Entire configured cohorts must
-  strictly exceed the qualification threshold; shortened cohorts cannot qualify.
+  strictly exceed the qualification threshold for game objectives. Prediction uses
+  the fitted cohort size. Shortened cohorts cannot qualify.
   Skips wait another interval. Cherry Bomb and Peashooter strictly exceed their
   configured mastery thresholds; other fresh stages require perfect validation.
 - Every validation uses fresh random seeds outside reserved splits. Save panels
   before execution and retry interruptions against the same weights before fitting.
-  Greedy validation uses public-only inputs and has no private simulations,
-  exploration, auxiliary-label sampling or fitting updates.
+  Greedy validation uses public-only inputs with no exploration, auxiliary-label
+  sampling or fitting updates. Only prediction validates against private forks.
   Release idle scratch/graphs without losing workers or speculative seed state.
 
 ## Code structure
@@ -179,7 +188,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `config.py`, `data/train.toml`, `gpu.py` | Stage tuning, validation panels, model dimensions and device selection. |
 | `policy/` | Shared public encoder, conditional tile decoder, action/tile/outcome readouts, stateless runner and bounded graphs/batching. |
 | `envs/` | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `field_tracking.py` owns guarded per-tick depth and home-entry hooks. |
-| `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py` | Validated automatic exercises, persistent preparation, bounded oracles and conservative attacker labels. |
+| `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py`, `prediction_scenarios.py` | Validated automatic exercises, persistent preparation, bounded oracles, conservative attacker labels and seeded prediction frames. |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Cohort orchestration, collection/fitting, reporting and atomic recovery. |
 | `envs/field_tracking.py`, `wait_capture.py`, `static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu` | Guarded field observations, exact real-tick capture, isolated field/probe phases, bounded refillable workers, verified suffix caching and queue recovery. |
 | `learning/forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py` | Absolute field/probe targets, shared-forward categorical losses and calibration. |

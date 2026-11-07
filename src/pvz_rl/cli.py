@@ -249,7 +249,7 @@ def main(argv=None):
     training.add_argument(
         "--stage",
         choices=SELECTABLE_STAGES,
-        help="train only the selected stage; stop at mastery or budget",
+        help="train only the selected stage; prediction fits post-action forecasts only",
     )
     training.add_argument(
         "--until-stage-complete",

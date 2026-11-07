@@ -292,7 +292,7 @@ class AuxiliarySimulationService:
     def _prewarm_cuda(self):
         from pvz_rl.envs.auxiliary_cuda import CudaWorkers, device_bytes
         from pvz_rl.envs.snapshot_packet import PACK
-        from pvz_rl.envs.tile_scenarios import is_placement_skill
+        from pvz_rl.envs.tile_scenarios import is_single_frame_skill
         from pvz_rl.envs.wait_capture import WaitCapture
 
         cp, b = self.env.cp, self.env.batch
@@ -306,7 +306,9 @@ class AuxiliarySimulationService:
         # Single-placement exercises retain only occupied pre-action packets.
         # Wait intervals additionally own two full-tick boundary states. Reserve
         # those only for their actual owner, including before it is constructed.
-        capture = 0 if is_placement_skill(self.env.tile_scenario) else WaitCapture.required_bytes(b)
+        capture = (
+            0 if is_single_frame_skill(self.env.tile_scenario) else WaitCapture.required_bytes(b)
+        )
         budget = min(self.settings["auxiliary_vram_mib"] * 2**20, max(0, free - headroom))
         if budget < capture + 2**20:
             raise MemoryError("Exact boundary captures exceed the combined auxiliary VRAM cap")

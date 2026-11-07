@@ -360,6 +360,7 @@ def build_run_report(run, cfg=None):
             f"Cherry Bomb: {escape(skills.get('episodes', {}).get('cherry_bomb', 0))}; "
             f"Obstacle: {escape(skills.get('episodes', {}).get('cherry_bomb_obstacle', 0))}; "
             f"Attacker pre: {escape(skills.get('episodes', {}).get('attacker_pre', 0))}; "
+            f"Prediction: {escape(skills.get('episodes', {}).get('prediction', 0))}; "
             f"Attacker: {escape(skills.get('episodes', {}).get('attacker', 0))}. "
             f"Generation failures: {escape(skills.get('generation_failures', 0))}. "
             + mastery
@@ -375,7 +376,8 @@ def build_run_report(run, cfg=None):
     trigger = status.get("validation_trigger", {})
     if trigger.get("enabled"):
         run_progress += (
-            f"<p>Validation requires full-cohort success strictly above {trigger['cohort_success_threshold']:.0%}. "
+            f"<p>Validation normally requires full-cohort success strictly above {trigger['cohort_success_threshold']:.0%}. "
+            "Prediction validation requires a full fitted cohort at its interval. "
             f"Next check: {escape(trigger.get('next_check'))} completed episodes. "
             f"Pending validation: {escape(trigger.get('pending') or 'none')}.</p>"
         )
@@ -404,12 +406,20 @@ def build_run_report(run, cfg=None):
                 f"<br>{escape(skill)} {score['wins']}/{score['games']}"
                 for skill, score in probe.get("exercise_scores", {}).items()
             )
+            prediction_losses = ""
+            if probe.get("stage") == "prediction" and "mean_loss" in probe:
+                mean, worst = probe["mean_loss"], probe["worst_loss"]
+                prediction_losses = (
+                    f"<br>Mean loss {mean:.6f}<br>Worst loss {worst:.6f}"
+                    if mean is not None
+                    else "<br>Non-finite scene loss"
+                )
             run_progress += (
                 f"<tr><td>{escape(probe.get('stage', 'pre'))}</td>"
                 f"<td>{probe.get('stage_episodes', probe['episodes'])}</td>"
                 + "".join(
                     f"<td>{probe['scores'][skill]}/{counts.get(skill, cfg['curriculum']['probe_cases'])}"
-                    f"{breakdown if skill == 'attacker' else ''}</td>"
+                    f"{breakdown if skill == 'attacker' else prediction_losses if skill == 'prediction' else ''}</td>"
                     if skill in probe["scores"]
                     else "<td>—</td>"
                     for skill in TILE_STAGES

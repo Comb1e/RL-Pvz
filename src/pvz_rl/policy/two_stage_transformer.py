@@ -75,6 +75,8 @@ class TwoStageTransformerPolicy(nn.Module):
 
     @staticmethod
     def _eligible(name, stage):
+        if stage == "prediction_only":
+            return not name.startswith(("species_head.", "tile_head."))
         if stage == "tile_outcomes":
             return not name.startswith("species_head.")
         if stage == "placement_outcomes":
@@ -146,6 +148,7 @@ class TwoStageTransformerPolicy(nn.Module):
             "tile",
             "tile_outcomes",
             "placement_outcomes",
+            "prediction_only",
         ):
             raise ValueError("Parameter stage must be species, tile or outcome fitting")
         return tuple(
@@ -169,6 +172,7 @@ class TwoStageTransformerPolicy(nn.Module):
             "tile",
             "tile_outcomes",
             "placement_outcomes",
+            "prediction_only",
         ):
             raise ValueError("Parameter stage must be species, tile or outcome fitting")
         return tuple(
@@ -312,10 +316,9 @@ class TwoStageTransformerPolicy(nn.Module):
         """Stable 56-slot carrier; effect_sizes defines each block's valid classes."""
         return self.effect_head(features).reshape(*features.shape[:-1], 5, self.effect_width)
 
-    def null_features(self, memory, branches=None):
+    def null_features(self, memory):
         pooled = memory[0][:, 0]
-        if branches is None:
-            branches = torch.zeros(len(pooled), dtype=torch.long, device=pooled.device)
+        branches = torch.zeros(len(pooled), dtype=torch.long, device=pooled.device)
         return self.null_projection(pooled + self.tile_decoder.branch_embedding(branches))
 
     def tile_values(self, features, *, null=None):
@@ -481,20 +484,20 @@ class TwoStageTransformerPolicy(nn.Module):
         details["board_memory"] = memory
         return actions, details
 
-    def effect_action_display(self, observations, actions, memory, branch_usable):
-        """Gather cached tile effects; Wait/unavailable commands use the pooled null."""
+    def effect_action_logits(self, effective_actions, memory):
+        """Gather accepted-action forecasts, sharing the exact Wait path for rejections."""
         cache = getattr(self, "_effect_decision_cache", None)
         if cache is None:
-            return observations.globals.new_zeros((len(actions), 2, 5, 10))
-        branches, tiles = action_parts(actions)
-        usable = branch_usable.gather(1, branches[:, None]).flatten()
-        # An unavailable attempted branch has no tile, but keeps the same
-        # branch-conditioned null representation used by its fitting record.
-        logits = self.effect_values(self.null_features(memory, branches))
+            raise RuntimeError("Decision forecasts require retained tile logits")
+        branches, tiles = action_parts(effective_actions)
+        logits = self.effect_values(self.null_features(memory))
         for rows, candidates, predictions in cache:
             chosen = predictions[torch.arange(len(rows), device=self.device), tiles[rows]]
-            selected = (branches[rows] == candidates) & usable[rows]
+            selected = branches[rows] == candidates
             logits = logits.index_copy(
                 0, rows, torch.where(selected[:, None, None], chosen, logits[rows])
             )
-        return effect_forecast(logits)
+        return logits
+
+    def effect_action_display(self, effective_actions, memory):
+        return effect_forecast(self.effect_action_logits(effective_actions, memory))

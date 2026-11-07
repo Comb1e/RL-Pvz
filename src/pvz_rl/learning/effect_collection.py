@@ -5,7 +5,7 @@ import torch
 
 from pvz_rl.config import effect_extra_actions
 from pvz_rl.envs.actions import ActionSchema
-from pvz_rl.envs.tile_scenarios import is_placement_skill
+from pvz_rl.envs.tile_scenarios import is_placement_skill, is_single_frame_skill
 from pvz_rl.policy.sequential_q import action_parts
 
 
@@ -41,18 +41,12 @@ def interval_alternatives(action, legal, branch, scores, rng):
     return runner_up, random
 
 
-def begin_effects(model, actions, details, issued):
+def begin_effects(model, actions, details, issued, legal):
     env, policy = model.env, model.policy
     enabled = np.flatnonzero(issued)
     proposed = actions.detach().cpu().numpy()
-    scratch_masks = env.cp.empty_like(env.batch.masks)
-    env.batch._mask(
-        ((env.batch.n * ActionSchema.size + 255) // 256,),
-        (256,),
-        (env.batch.header, env.batch.plants, env.batch.cooldowns, scratch_masks, env.batch.n),
-    )
-    legal = scratch_masks.get()
-    placement = is_placement_skill(model.tile_skills.phase)
+    legal = legal.cpu().numpy()
+    placement = is_single_frame_skill(model.tile_skills.phase)
     maximum = effect_extra_actions(model.cfg, model.tile_skills.phase)
     effective_wait = (proposed == 0) | ~legal[np.arange(env.num_envs), proposed]
     sampled = issued.copy() if maximum else np.zeros_like(issued)
@@ -89,7 +83,7 @@ def begin_effects(model, actions, details, issued):
     jobs, shortages = [], 0
     for slot in enabled:
         action = int(proposed[slot])
-        if placement and action == 0:
+        if is_placement_skill(model.tile_skills.phase) and action == 0:
             raise RuntimeError("A placement exercise cannot propose Wait")
         selected = [action, None, None]
         if sampled[slot]:
@@ -151,7 +145,7 @@ def validate_effect_request(request, model):
         return
     count = model.n_envs
     if request.get("version") == 4:
-        if request.get("ready") is not True or request.get("placement") != is_placement_skill(
+        if request.get("ready") is not True or request.get("placement") != is_single_frame_skill(
             model.tile_skills.phase
         ):
             raise ValueError("Absolute action tickets disagree with the model protocol")

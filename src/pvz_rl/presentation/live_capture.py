@@ -20,7 +20,7 @@ from pvz_game.types import (
 
 from pvz_rl.envs.cuda_features import METRIC_INDICES
 from pvz_rl.envs.rewards import REWARD_METRICS
-from pvz_rl.envs.tile_scenarios import is_placement_skill
+from pvz_rl.envs.tile_scenarios import is_single_frame_skill
 from pvz_rl.learning.objective import COMPONENTS, components, training_rewards
 from pvz_rl.presentation.live_view import Activity, LiveSession, PanelState
 
@@ -193,17 +193,17 @@ class CudaLiveCapture:
         # after the step, from headers already transferred for episode outcomes.
         capacity = (
             self.env.num_envs
-            if is_placement_skill(self.env.tile_scenario)
+            if is_single_frame_skill(self.env.tile_scenario)
             else len(self.session.selection.panels)
         )
-        if not is_placement_skill(self.env.tile_scenario):
+        if not is_single_frame_skill(self.env.tile_scenario):
             self._resize(capacity, {k: v.shape[1:] for k, v in self.source.items()})
         if self.indices is not None and self.indices.numel() != capacity:
             self.indices = None
         if self.indices is None:
             self.indices = torch.tensor(
                 list(range(capacity))
-                if is_placement_skill(self.env.tile_scenario)
+                if is_single_frame_skill(self.env.tile_scenario)
                 else [p.env for p in self.session.selection.panels],
                 device=self.env.header_tensor.device,
             )
@@ -214,7 +214,7 @@ class CudaLiveCapture:
     def after_step(self, compact, *, completed_headers=None):
         started = perf_counter()
         panels = self.session.selection.panels
-        cache_completed = is_placement_skill(self.env.tile_scenario)
+        cache_completed = is_single_frame_skill(self.env.tile_scenario)
         terminal = []
         for i, p in enumerate(panels):
             if p.state == PanelState.RESULT or i in self.session.selection.pending:

@@ -2,7 +2,7 @@
 
 from dataclasses import asdict, dataclass, field
 
-from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, SKILLS, attacker_mix
+from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, SKILLS, attacker_mix, prediction_settings
 from pvz_rl.learning.budget import validation_interval_games
 from pvz_rl.learning.curriculum import TILE_STAGES
 
@@ -10,6 +10,8 @@ TILE_SCENARIO_PROTOCOL = "tile-skill-prerequisites-v1"
 
 
 def tile_validation_count(cfg, skill):
+    if skill == "prediction":
+        return prediction_settings(cfg)["validation_cases"]
     return (
         attacker_mix(cfg)["validation_cases"]
         if skill == "attacker"
@@ -46,6 +48,7 @@ class TileSkillState:
         # Old saved stage orders and joint probes never acquire a new lesson.
         self.episodes.setdefault("cherry_bomb_obstacle", 0)
         self.episodes.setdefault("attacker_pre", 0)
+        self.episodes.setdefault("prediction", 0)
         self.episodes.setdefault("attacker", 0)
         self.scores = dict(self.scores)
         self.stage_probes = dict(self.stage_probes)
@@ -162,4 +165,6 @@ def initial_tile_state(cfg, family="preset"):
         order = [skill for skill in order if skill != "attacker_pre"]
     if attacker_mix(cfg) is None:
         order = [skill for skill in order if skill != "attacker"]
+    if prediction_settings(cfg) is None:
+        order = [skill for skill in order if skill != "prediction"]
     return TileSkillState(phase=order[0] if enabled else "complete", stage_order=order).to_dict()

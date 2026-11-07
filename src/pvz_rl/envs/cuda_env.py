@@ -32,8 +32,10 @@ from pvz_rl.envs.tile_scenarios import (
     BombGenerationFailure,
     bomb_tile_distances,
     is_placement_skill,
+    is_single_frame_skill,
     peashooter_level,
     placement_source,
+    prediction_settings,
     preparation_settings,
     shuffled_attacker_exercises,
     skill_plant,
@@ -147,7 +149,7 @@ class ScenarioQueue:
             if self.tile_scenario == "peashooter":
                 level, family = "easy", "tile_peashooter"
                 spec = peashooter_level(self.rules, seed)
-            elif is_placement_skill(self.tile_scenario):
+            elif is_single_frame_skill(self.tile_scenario):
                 level, family = "easy", "tile_" + self.tile_scenario
             else:
                 spec = scenario(level, family, seed, self.rules, cfg)
@@ -288,6 +290,18 @@ class ScenarioQueue:
                 scratch_lanes=prep.cuda.batch.n if prep.cuda is not None else 0,
                 host_reserved_bytes=self.reserved_bytes,
             )
+        elif self.tile_scenario == "prediction":
+            from pvz_rl.envs.prediction_scenarios import prediction_snapshot
+
+            boards = {}
+            for index, _, _, seed, _ in staged:
+                check_deadline(self.deadline)
+                boards[index] = dict(snapshot=prediction_snapshot(self.cfg, seed, self.rules))
+            self.tile_boards.update(boards)
+            staged = [
+                (*s[:4], LevelSpec.from_dict(boards[s[0]]["snapshot"]["level"])) for s in staged
+            ]
+            self.preparation_metrics = dict(warmup_backend="snapshot")
         else:
             self.preparation_metrics = {}
         # Atomic consumption: unfinished preparation can be regenerated on resume.
@@ -375,6 +389,14 @@ class CudaVecEnv(VecEnv):
             for level, fam, seed in cases:
                 game.reset(scenario(level, fam, seed, self.queue.rules, cfg), seed)
                 counts.append(game.observe().counts.initial_total)
+        prediction = prediction_settings(cfg)
+        if prediction is not None:
+            counts.append(
+                sum(
+                    prediction[k][1]
+                    for k in ("live_zombies", "defeated_zombies", "pending_zombies")
+                )
+            )
         self.batch = AccountingCudaBatch(
             count,
             zombie_capacity=max(1, *counts),
@@ -462,15 +484,19 @@ class CudaVecEnv(VecEnv):
         self.batch.set_sky_sun_rate(
             peashooter_sky_sun_rate(self.cfg) if self.tile_scenario == "peashooter" else 1.0
         )
-        if is_placement_skill(self.tile_scenario):
-            self.tile_boards = deepcopy(self.queue.tile_boards)
+        if is_single_frame_skill(self.tile_scenario):
             from pvz_rl.envs.cuda_snapshots import upload_snapshots
 
+            boards = self.queue.tile_boards
             upload_snapshots(
                 self.batch,
-                [self.tile_boards[i]["snapshot"] for i in indices],
+                [boards[i]["snapshot"] for i in indices],
                 indices=indices,
             )
+            if self.tile_scenario == "prediction":
+                boards.clear()  # Physical roots and scene seeds already have owners.
+            else:
+                self.tile_boards = deepcopy(boards)
         else:
             from pvz_rl.envs.cuda_snapshots import reset_owned
 
@@ -541,7 +567,7 @@ class CudaVecEnv(VecEnv):
             settings["fork_max_jobs"] = max(1, int(self.enabled_envs.sum())) * (
                 5 if self.training else 1
             )
-            if is_placement_skill(self.tile_scenario):
+            if is_single_frame_skill(self.tile_scenario):
                 settings["fork_suffix_cache"] = False  # Only one query per board.
             settings["headroom_mib"] = self.cfg["training"]["performance"].get(
                 "collection_vram_headroom_mib", 0
@@ -579,6 +605,14 @@ class CudaVecEnv(VecEnv):
 
     def action_masks(self):
         return self.features.mask_tensor
+
+    def engine_action_masks_device(self):
+        """Exact pre-action legality, separate from unmasked policy proposals."""
+        return torch.from_dlpack(self.batch.action_masks_device())
+
+    @staticmethod
+    def effective_actions(proposals, legal):
+        return torch.where(legal.gather(1, proposals[:, None]).squeeze(1), proposals, 0)
 
     def branch_availability(self, active=None):
         """Return pre-action card availability and empty-board Dig rejection.
@@ -653,6 +687,7 @@ class CudaVecEnv(VecEnv):
             per_tick=self._per_tick,
             publish=False,
             observation_active=self.cp.asarray(self.enabled_envs),
+            action_only=self.tile_scenario == "prediction",
         )
         if self.static_forks is not None:
             self.static_forks.invalidate(
@@ -725,9 +760,8 @@ class CudaVecEnv(VecEnv):
             self.task_transitions.update(self._tasks[i] for i in np.flatnonzero(self._step_active))
         self._pending_spawns[:] = self._step_state_host["pending_spawns"].numpy()
         compact = host[:, RECORD_OUTCOME]
-        if is_placement_skill(self.tile_scenario):
-            # A supervised exercise ends after its one proposal. Its success
-            # is its private target label, not a whole-game outcome.
+        if is_single_frame_skill(self.tile_scenario):
+            # A one-frame exercise ends after its proposal, even when time did not advance.
             compact[self._step_active, 0] = 1
             compact[self._step_active, 1] = 0
         self.last_transition_host = compact
@@ -746,7 +780,7 @@ class CudaVecEnv(VecEnv):
             compact, actions, self.last_action_result_host, truncation, self._step_active, completed
         )
         reward, done, timed_out = self._step_device_result
-        if is_placement_skill(self.tile_scenario):
+        if is_single_frame_skill(self.tile_scenario):
             done = self._device_active.clone()
             timed_out = torch.zeros_like(done)
         reward = reward.clone()
@@ -771,6 +805,10 @@ class CudaVecEnv(VecEnv):
                     episode_metrics=self.episode_metrics(index, header, total),
                     **{"TimeLimit.truncated": bool(compact[index, 1])},
                 )
+                if self.tile_scenario == "prediction":
+                    completed[index]["episode_metrics"].update(
+                        status="scored", tile_scenario="prediction"
+                    )
                 if is_placement_skill(self.tile_scenario):
                     action = int(actions[index, 0])
                     branch = 1 + (action - 1) // 45 if action else 0

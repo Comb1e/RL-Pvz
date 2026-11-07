@@ -262,13 +262,17 @@ class CudaFeatures:
         publish=True,
         phase="simulation",
         observation_active=None,
+        action_only=False,
     ):
         b, cp = self.batch, self.batch.cp
         with self._track(phase):
             cp.copyto(self.before_assets, self.assets)
             cp.copyto(self.before_header, b.header)
             cp.copyto(self.before_cooldowns, b.cooldowns)
-            b.step_device(actions, ticks=ticks, per_tick=per_tick)
+            if action_only:
+                b.apply_actions_device(actions)
+            else:
+                b.step_device(actions, ticks=ticks, per_tick=per_tick)
         with self._track("encoding"):
             cp.copyto(self.enabled, b.header[:, 17], casting="unsafe")
             if observation_active is not None:

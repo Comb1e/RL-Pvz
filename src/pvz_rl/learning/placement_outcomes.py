@@ -1,4 +1,4 @@
-"""One exact post-proposal field/probe target per single-placement exercise."""
+"""One exact post-proposal field/probe target per single-frame exercise."""
 
 import copy
 from time import perf_counter
@@ -14,17 +14,19 @@ class PlacementOutcomes:
     def __init__(self, env, buffer, state=None):
         self.env, self.buffer, self.auxiliary = env, buffer, env.auxiliary
         if self.auxiliary is None:
-            raise RuntimeError("Placement outcomes require the bounded simulation service")
+            raise RuntimeError("Single-frame outcomes require the bounded simulation service")
+        self.family = "prediction" if env.tile_scenario == "prediction" else "placement"
+        self.jobs_metric = f"{self.family}_jobs"
         self.jobs = {}
         self.published = False
         self.metrics = dict(
-            placement_jobs=0,
             published_rows=0,
             field_ticks=0,
             probe_ticks=0,
             labeling_seconds=0.0,
             live_jobs=0,
         )
+        self.metrics[self.jobs_metric] = 0
         if state is not None:
             if state.get("protocol") != self.protocol:
                 raise ValueError("Incompatible single-placement outcome recovery")
@@ -44,19 +46,20 @@ class PlacementOutcomes:
 
     def observe(self, request, rows, receipt):
         for slot, index in zip(receipt.slots, receipt.rows, strict=True):
-            identity = ("outcomes", "placement", int(index))
+            identity = ("outcomes", self.family, int(index))
             action = int(request["actions"][slot, 0])
-            if action == 0 or request["valid"][slot].sum() != 1:
-                raise RuntimeError("A placement exercise must own exactly one proposal")
-            if bool(rows["accepted"][slot]) != bool(request["legal_proposal"][slot]):
-                raise RuntimeError("Saved placement legality differs from execution")
+            if request["valid"][slot].sum() != 1:
+                raise RuntimeError("A single-frame exercise must own exactly one proposal")
+            effective = action if request["legal_proposal"][slot] else 0
+            if int(rows["executed_action"][slot]) != effective:
+                raise RuntimeError("Saved proposal legality differs from execution")
             self.jobs[identity] = dict(
                 row=int(index),
-                action=action,
+                action=effective,
                 root=request["pre_states"][int(slot)],
                 submitted=False,
             )
-            self.metrics["placement_jobs"] += 1
+            self.metrics[self.jobs_metric] += 1
 
     def _submit_pending(self):
         for identity, job in self.jobs.items():
