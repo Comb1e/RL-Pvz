@@ -194,7 +194,8 @@ extern "C" __global__ void run_fork_jobs(
         for (I k = 0; k < s.h->nz; k++) s.forecast_position(s.z[k]);
       }
     }
-    if ((*s.forecast_phase == 0 || *s.forecast_phase == 1) && s.h->status) {
+    if (*s.forecast_phase < 2 && s.h->status &&
+        (field_only[job] || !s.forecast_waiting_for_mowers())) {
       anchors[job] = s.h->tick;
       if (caching) cache_anchors[root] = field_only[job] ? -1 : s.h->tick;
       if (field_only[job]) *s.forecast_phase = 3;
@@ -222,7 +223,7 @@ extern "C" __global__ void run_fork_jobs(
       s.h->enabled = 0; job_ids[i] = -1; fork_add(progress, 1);
       continue;
     }
-    fork_add(progress + (*s.forecast_phase == 0 ? 11 : 12), 1);
+    fork_add(progress + (*s.forecast_phase < 2 ? 11 : 12), 1);
     s.advance(); used++;
   }
   fork_add(progress + 1, used);

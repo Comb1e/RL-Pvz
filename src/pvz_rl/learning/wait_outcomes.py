@@ -167,10 +167,9 @@ class WaitOutcomes:
             return
         if snapshot is None:
             raise RuntimeError("Unfinished interval lost its exact physical continuation")
+        # A zombie-free capture can still contain moving mowers; the job sets the probe anchor.
         record["origin"] = int(snapshot["tick"])
         record["phase"] = IntervalPhase.PROBE_PENDING if cleared else IntervalPhase.FIELD_PENDING
-        if cleared:
-            record["anchor"] = int(snapshot["tick"])
         self._enqueue(snapshot, interval=identity)
 
     def _close(self, identity, snapshot=None):

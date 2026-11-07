@@ -155,7 +155,8 @@ class StaticFork:
                 if self.phase == "probe" or self.field_only:
                     self.phase = "complete"
                     return True
-                self._probe()
+                if all(mower.state != "moving" for mower in self.game._mowers):
+                    self._probe()
             self.game._status = Status.RUNNING
             drops = self.game._sky_drops
             if self.phase == "field":

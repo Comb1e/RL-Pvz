@@ -26,7 +26,7 @@ extern "C" __global__ void advance_auxiliary(
   forecast+i*20, phases+i, starts+i, sky_rate};
  if(!s.h->enabled || phases[i]==3) return;
  for(I used=0; ;used++) {
-  if(s.h->status) {
+  if(s.h->status && !s.forecast_waiting_for_mowers()) {
    if(phases[i]==0) {
     anchors[i]=s.h->tick;
     for(I row=0;row<5;row++) {

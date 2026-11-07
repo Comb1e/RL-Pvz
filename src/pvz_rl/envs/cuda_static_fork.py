@@ -5,9 +5,20 @@ from weakref import proxy
 
 import numpy as np
 from pvz_game.cuda import CudaBatch
-from pvz_game.cuda.schema import HEADER
+from pvz_game.cuda.schema import HEADER, MOWER_STATES
+
+_MOWER_CHECK = r"""
+__device__ bool forecast_mowers_moving(const Mower *m) {
+  for (I row = 0; row < 5; row++)
+    if (m[row].state == FORECAST_MOWER_MOVING) return true;
+  return false;
+}
+"""
 
 _METHODS = r"""
+  __device__ bool forecast_waiting_for_mowers() {
+    return forecast_phase[0] < 2 && h->status && forecast_mowers_moving(m);
+  }
   __device__ void forecast_position(Zombie &a) {
     if (a.headless || a.health <= 0) return;
     I code = hi(0, 9 - hi(0, floor_div(a.x, G_units_per_tile)));
@@ -51,6 +62,7 @@ def static_fork_source(source):
     if (h->status)
       emit(17, 0, h->status);"""
     hooks = {
+        "struct Sim {": _MOWER_CHECK + "\nstruct Sim {",
         "double *f;": "double *f; I *forecast, *forecast_phase, *forecast_start; double sky_sun_rate;",
         "I ticks, I per_tick) {": "I ticks, I per_tick, I *forecast, I *forecast_phase, I *forecast_start, double sky_sun_rate) {",
         "facts + i * 9};": "facts + i * 9, forecast + i * 20, forecast_phase + i, forecast_start + i, sky_sun_rate};",
@@ -63,6 +75,8 @@ def static_fork_source(source):
         "        if (h->tick < a.vault_until) continue;": "        forecast_position(a);\n        if (h->tick < a.vault_until) continue;",
         "        a.x -= M_jump_shift_pixels * G_units_per_tile / 80;": "        a.x -= M_jump_shift_pixels * G_units_per_tile / 80;\n        forecast_position(a);",
         "    plants();\n    projectiles();": "    for (I j = 0; j < h->nz; j++) forecast_position(z[j]);\n    plants();\n    projectiles();",
+        "    if (!h->enabled || h->status)\n      return;": "    if (!h->enabled || (h->status && !(ticks && !action && forecast_waiting_for_mowers())))\n      return;",
+        "    for (I i = 0; i < ticks && !h->status; i++)": "    for (I i = 0; i < ticks && (!h->status || forecast_waiting_for_mowers()); i++)",
         "    if (per_tick && action && h->accepted)\n      return;": "    forecast_finish();\n    if (per_tick && action && h->accepted)\n      return;",
         "          + random(0, G_sky_interval_jitter_ticks);": "          + random(0, G_sky_interval_jitter_ticks);\n      h->sky_due = h->tick + hi(1, (I)floor((double)(h->sky_due - h->tick) / sky_sun_rate));",
         terminal: "    forecast_finish();",
@@ -73,11 +87,13 @@ def static_fork_source(source):
         source = source.replace(before, after)
     # Probe initialization uses the engine's own spawn construction and gait RNG.
     source += r"""
-extern "C" __global__ void start_probes(I *headers, I *zombies, I *phases, I kind) {
+extern "C" __global__ void start_probes(
+    I *headers, I *zombies, const I *mowers, I *phases, I kind) {
   I i = blockIdx.x;
   if (threadIdx.x) return;
   Header *h = reinterpret_cast<Header *>(headers + i * GAME_HEADER_WIDTH);
-  if (!h->enabled || phases[i] != 1) return;
+  if (!h->enabled || !h->status || phases[i] >= 2 ||
+      forecast_mowers_moving(reinterpret_cast<const Mower *>(mowers + i * 5 * GAME_MOWER_WIDTH))) return;
   Zombie *z = reinterpret_cast<Zombie *>(zombies + i * ZCAP * GAME_ZOMBIE_WIDTH);
   for (I row = 0; row < 5; row++) {
     Zombie a = {};
@@ -95,13 +111,13 @@ extern "C" __global__ void start_probes(I *headers, I *zombies, I *phases, I kin
   phases[i] = 2;
 }
 """
-    return source
+    return f"#define FORECAST_MOWER_MOVING {MOWER_STATES.index('moving')}\n" + source
 
 
 class StaticForkBatch(CudaBatch):
     """Inputs clone D2D; advance() is bounded and snapshot() preserves both phases.
 
-    phase: 0 field, 1 awaiting probe installation, 2 probe, 3 completed.
+    phase: 0 field (including mower settling), 1 legacy awaiting probe, 2 probe, 3 completed.
     """
 
     def __init__(self, *args, sky_sun_rate=1.0, **kwargs):
@@ -188,10 +204,10 @@ class StaticForkBatch(CudaBatch):
 
     def advance(self, ticks=None, probe_kind=2):
         cp = self.cp
-        field_done = (self.forecast_phase == 0) & (self.header[:, 1] == 1)
-        self.forecast_phase[field_done] = 1
         self._probe_kernel(
-            (self.n,), (32,), (self.header, self.zombies, self.forecast_phase, cp.int64(probe_kind))
+            (self.n,),
+            (32,),
+            (self.header, self.zombies, self.mowers, self.forecast_phase, cp.int64(probe_kind)),
         )
         self.step_device(
             cp.zeros(self.n, cp.int64),

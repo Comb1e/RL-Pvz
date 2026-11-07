@@ -40,8 +40,8 @@ Record human gameplay into unused paths and finish with a natural win or loss:
 ```
 
 Demo initialization verifies the replay before fitting. `--init-from` starts fresh
-optimizer and counters from same-version weights; `--resume` continues a
-same-version run exactly. Checkpoints from earlier model versions are rejected.
+optimizer and counters from same-version weights; `--resume` restores a
+same-version run. Checkpoints from earlier model versions are rejected.
 
 Start autonomous training when ready:
 
@@ -70,6 +70,9 @@ Each stage can start from the previous stage's weights;
 current frames. The live viewer labels completed scenes `scored`. All 200
 validation scenes must have a categorical loss of 0.05 or less. Use its
 `final.zip` to initialize `attacker`.
+
+Across stages, a probe starts after the field clears and all moving lawn mowers
+finish. Resumed runs apply this rule to probes that have yet to start.
 
 `attacker` mixes the three placement exercises in shuffled 640-board cohorts
 (64 Cherry Bomb, 256 Obstacle, 320 Attacker Pre) and requires 200/200 on a fresh

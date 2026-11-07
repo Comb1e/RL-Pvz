@@ -40,14 +40,16 @@ This file owns project-specific invariants and the code map.
   that coefficient for both groups; model/labels/collection stay unchanged.
 - Static forks own physical/RNG storage, suppress actions/future spawns/logs and
   resolve mowers before recording home entry. Continue other lanes after a loss;
-  probes inherit damaged plants and spent mowers. The real game is unchanged.
+  probes inherit damaged plants and mower state after all moving mowers finish.
+  The real game is unchanged.
   Inference and ordinary gameplay validation compute no field/probe simulations.
   Prediction validation computes exact private targets after the greedy proposal. Learned
   outcome summaries retain detached tile-Q injection and its schedule.
 - `absolute-wait-trajectory-v4` follows real Waits/rejections and records guarded per-tick
   field observations. One semantic probe belongs to each owned interval, anchored
-  at its first field-clearing state (immediately when empty). Accepted planting/Dig,
-  actual spawn-counter changes and reset/end close intervals; deaths do not.
+  at the first tick with no active zombies or moving mowers. Keep capturing the
+  first zombie-clearance state and finish any mower motion privately. Accepted
+  planting/Dig, actual spawn-counter changes and reset/end close intervals; deaths do not.
   Capture pre-spawn full-tick states before physical/RNG changes, including spawns
   that die within one decision. Finish interrupted fields from those owned roots;
   never replay borrowed prefixes. Rebase breach times and exclude penetration
