@@ -7,6 +7,7 @@ import numpy as np
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.envs.cuda_static_fork import StaticForkBatch
 from pvz_rl.envs.fork_execution import PHYSICAL, ForkExecution
+from pvz_rl.envs.outcome_math import OUTCOME_SHAPE, OUTCOME_SIZE
 from pvz_rl.learning.forecast_labels import FORECAST_PROTOCOL
 
 
@@ -51,7 +52,7 @@ class ForkService:
         )
         per_lane = sum(getattr(source, name)[0].nbytes for name in PHYSICAL) + 65536
         candidates = settings.get("fork_candidates_per_root", 5)
-        queue_fixed = candidates * source.n * (20 + 4) * 8 + 104 + source.n * 8
+        queue_fixed = candidates * source.n * (OUTCOME_SIZE + 4) * 8 + 104 + source.n * 8
         available = max(0, budget - queue_fixed - source.n * 8)
         count = min(
             settings["lanes"],
@@ -124,7 +125,7 @@ class ForkService:
         # from the retained root instead of publishing a half-prepared queue.
         self.execution.begin(indices, actions, baseline=baseline, field_only=field_only)
         self.request = dict(
-            version=2, indices=indices, actions=actions, baseline=baseline, field_only=field_only
+            indices=indices, actions=actions, baseline=baseline, field_only=field_only
         )
         self.results = None
         self.cursor = 0
@@ -182,7 +183,7 @@ class ForkService:
 
     def snapshot(self):
         return dict(
-            version=3,
+            version=4,
             protocol=FORECAST_PROTOCOL,
             settings=self.settings,
             metrics=self.metrics,
@@ -195,7 +196,7 @@ class ForkService:
 
     def restore(self, state):
         if (
-            state.get("version") not in (None, 2, 3)
+            state.get("version") != 4
             or state["protocol"] != FORECAST_PROTOCOL
             or state["settings"]["probe"] != self.settings["probe"]
         ):
@@ -207,32 +208,28 @@ class ForkService:
         else:
             self.begin(
                 request["indices"],
-                None if request.get("baseline", False) else request["actions"],
-                field_only=request.get("field_only"),
+                None if request["baseline"] else request["actions"],
+                field_only=request["field_only"],
             )
-            if state.get("version") in (2, 3):
-                progress = state["execution"]["progress"]
-                result = state["results"]
-                if (
-                    state["cursor"] != progress[0]
-                    or not np.array_equal(state["reported"], progress)
-                    or (
-                        result is not None
-                        and (
-                            progress[0] != len(request["indices"])
-                            or result.shape != (len(request["indices"]), 5, 4)
-                            or result.dtype != np.int64
-                            or not np.array_equal(result, state["execution"]["output"])
-                        )
+            progress = state["execution"]["progress"]
+            result = state["results"]
+            if (
+                state["cursor"] != progress[0]
+                or not np.array_equal(state["reported"], progress)
+                or (
+                    result is not None
+                    and (
+                        progress[0] != len(request["indices"])
+                        or result.shape != (len(request["indices"]), *OUTCOME_SHAPE)
+                        or result.dtype != np.int64
+                        or not np.array_equal(result, state["execution"]["output"])
                     )
-                ):
-                    raise ValueError("Static-fork publication disagrees with pending progress")
-                self.execution.restore(state["execution"])
-                reported = state["reported"]
-                self._reported[:] = np.pad(reported, (0, 13 - len(reported)))
-                self.cursor, self.results = state["cursor"], state["results"]
-            else:
-                self._restore_panel(state)
+                )
+            ):
+                raise ValueError("Static-fork publication disagrees with pending progress")
+            self.execution.restore(state["execution"])
+            self._reported[:] = state["reported"]
+            self.cursor, self.results = state["cursor"], state["results"]
         for key in (
             "forks",
             "ticks",
@@ -254,33 +251,6 @@ class ForkService:
             "probe_ticks",
         ):
             self.metrics[key] = state["metrics"].get(key, 0)
-
-    def _restore_panel(self, state):
-        """Translate the previous panel payload without restarting completed work."""
-        cp, execution = self.source.cp, self.execution
-        prefix, panel = state["cursor"], state["batch"]
-        indices = self.request["indices"]
-        if (
-            not 0 <= prefix <= len(indices)
-            or state["results"].shape != (len(indices), 5, 4)
-            or state["results"].dtype != np.int64
-            or bool(state["request"]["panel_active"]) != (panel is not None)
-        ):
-            raise ValueError("Invalid legacy static-fork panel")
-        execution.output[:prefix] = cp.asarray(state["results"][:prefix])
-        execution.progress[0] = prefix
-        execution.next_job[0] = prefix
-        if panel is not None:
-            if prefix + panel["count"] > len(indices):
-                raise ValueError("Legacy fork panel exceeds its root set")
-            self.batch.restore(panel)
-            execution.workers = max(execution.workers, panel["count"])
-            execution.job_ids[: panel["count"]] = cp.arange(prefix, prefix + panel["count"])
-            execution.next_job[0] = prefix + panel["count"]
-        self.batch.count = execution.workers
-        self.cursor = prefix
-        self._reported[0] = prefix
-        execution.origins.fill(-1)
 
     def close(self):
         self.request = self.results = self.execution = self.batch = None

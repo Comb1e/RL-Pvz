@@ -15,6 +15,7 @@ from pvz_rl.envs.encoding import (
     global_width,
     validate_entity_records,
 )
+from pvz_rl.envs.outcome_math import ABSOLUTE_SIZES, OUTCOME_SHAPE
 from pvz_rl.learning.action_routing import FitRoute, validate_routes
 from pvz_rl.learning.objective import (
     COMPONENTS,
@@ -29,7 +30,7 @@ from pvz_rl.learning.objective import (
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-outcome-trajectory-v6"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-outcome-trajectory-v7"
 
 
 def trajectory_dtype(cfg=None):
@@ -69,8 +70,8 @@ def trajectory_dtype(cfg=None):
         ("null_target_valid", "?"),
         ("effect_actions", "<u2", 5),
         ("effect_valid", "?", 5),
-        ("effect_labels", "i1", (5, 5, 4)),
-        ("baseline_outcomes", "<i8", (5, 4)),
+        ("effect_labels", "i1", (5, *OUTCOME_SHAPE)),
+        ("baseline_outcomes", "<i8", OUTCOME_SHAPE),
         ("target", "<f4"),
         ("accepted", "?"),
         ("route", "u1"),
@@ -1129,7 +1130,7 @@ class CompleteGameBuffer:
                     np.any(rows["field_trace"] > 10)
                     or np.any(rows["effect_actions"] >= A.size)
                     or np.any(rows["effect_labels"] < 0)
-                    or np.any(rows["effect_labels"] >= np.array([11, 6, 2, 11]))
+                    or np.any(rows["effect_labels"] >= ABSOLUTE_SIZES)
                     or not np.isfinite(rows["effect_prediction"]).all()
                 ):
                     raise ValueError("Invalid action outcome targets or predictions")

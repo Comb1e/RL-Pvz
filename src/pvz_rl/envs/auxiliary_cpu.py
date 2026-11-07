@@ -6,6 +6,7 @@ import numpy as np
 from pvz_game import Rules, Status
 from pvz_game.config import LevelSpec
 
+from pvz_rl.envs.outcome_math import OUTCOME_SHAPE
 from pvz_rl.envs.scratch_game import restored_game
 from pvz_rl.envs.static_fork import StaticFork, apply_action
 
@@ -26,13 +27,12 @@ def validate_continuation(job, state, rules):
     if job["family"] == "outcomes":
         labels = np.asarray(state["labels"])
         if (
-            labels.shape != (5, 4)
+            labels.shape != OUTCOME_SHAPE
             or labels.dtype != np.int64
-            or (labels[:, [0, 3]] < 0).any()
-            or (labels[:, [0, 3]] > 10).any()
+            or (labels[:, [0, 2]] < 0).any()
+            or (labels[:, [0, 2]] > 10).any()
             or (labels[:, 1] < -1).any()
-            or (labels[:, 2] < 0).any()
-            or (labels[:, 2] > 1).any()
+            or not np.array_equal(labels[:, 0] == 10, labels[:, 1] >= 0)
         ):
             raise ValueError("Invalid absolute outcome continuation")
         if (

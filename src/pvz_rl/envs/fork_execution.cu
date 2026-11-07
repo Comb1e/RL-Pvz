@@ -99,7 +99,7 @@ extern "C" __global__ void run_fork_jobs(
            (Shot *)(shots + i * QCAP * GAME_PROJECTILE_WIDTH),
            (Mower *)(mowers + i * 5 * GAME_MOWER_WIDTH), cooldowns + i * 8,
            schedules + i * ZCAP * 5, events + i * ECAP * 8, event_counts + i,
-           facts + i * 9, forecast + i * 20, phases + i, starts + i, sky_rate};
+           facts + i * 9, forecast + i * FORECAST_SIZE, phases + i, starts + i, sky_rate};
   while (used < ticks) {
     I job = job_ids[i];
     if (job < 0) {
@@ -114,14 +114,15 @@ extern "C" __global__ void run_fork_jobs(
       const I *om = source_m + root * 5 * GAME_MOWER_WIDTH;
       const I *oc = source_cd + root * 8;
       bool hit = false;
-      // Field-only entries cannot answer a legacy full-probe request.
-      if (baseline && cache.steps && (field_only[job] || cache_anchors[root] >= 0)) {
+      bool cached_field_only = cache_anchors[root] < 0;
+      if (baseline && cache.steps && (field_only[job] != 0) == cached_field_only) {
         for (I e = 0; e < cache.steps; e++) if (cache.ticks[root * cache.steps + e] == original->tick) {
           if (fork_equal(original, op, oz, oq, om, oc,
                          cache.states + (root * cache.steps + e) * cache.stride,
                          cache.zcap, cache.qcap)) {
-            for (I k = 0; k < 20; k++)
-              results[job * 20 + k] = cache.values[(root * cache.steps + e) * 20 + k];
+            for (I k = 0; k < FORECAST_SIZE; k++)
+              results[job * FORECAST_SIZE + k] =
+                  cache.values[(root * cache.steps + e) * FORECAST_SIZE + k];
             anchors[job] = cache_anchors[root];
             fork_add(progress + 2, 1); fork_add(progress, 1); hit = true;
           } else {
@@ -142,7 +143,8 @@ extern "C" __global__ void run_fork_jobs(
         if (field_only[job] && active) fork_add(progress + 10, 1);
         if (field_only[job] && !active) {
           // Empty fields have exact analytic labels; no cloning or simulation.
-          for (I k = 0; k < 20; k++) results[job * 20 + k] = k % 4 == 1 ? -1 : 0;
+          for (I k = 0; k < FORECAST_SIZE; k++)
+            results[job * FORECAST_SIZE + k] = k % FORECAST_TERMS == 1 ? -1 : 0;
           fork_add(progress, 1);
           continue;
         }
@@ -161,7 +163,7 @@ extern "C" __global__ void run_fork_jobs(
       for (I part = 0; part < 5; part++)
         for (I k = 0; k < live[part]; k++) dest[part][k] = parts[part][k];
       *s.forecast_phase = 0; *s.forecast_start = s.h->tick;
-      for (I k = 0; k < 20; k++) s.forecast[k] = k % 4 == 1 ? -1 : 0;
+      for (I k = 0; k < FORECAST_SIZE; k++) s.forecast[k] = k % FORECAST_TERMS == 1 ? -1 : 0;
       s.h->enabled = 1; s.h->status = 0; s.h->total_spawns = s.h->spawn_index;
       s.suffix_steps = 0;
       if (baseline && cache.steps) {
@@ -185,7 +187,7 @@ extern "C" __global__ void run_fork_jobs(
       I elapsed = s.h->tick - *s.forecast_start;
       I e = elapsed / cache.wait_ticks - 1;
       bool lost = false;
-      for (I row = 0; row < 5; row++) lost |= s.forecast[row * 4 + 2] != 0;
+      for (I row = 0; row < 5; row++) lost |= s.forecast[row * FORECAST_TERMS + 1] >= 0;
       if (!lost && elapsed > 0 && elapsed % cache.wait_ticks == 0 && e < cache.steps &&
           s.h->nz <= cache.zcap && s.h->nq <= cache.qcap) {
         cache.ticks[root * cache.steps + e] = s.h->tick;
@@ -195,7 +197,7 @@ extern "C" __global__ void run_fork_jobs(
       }
     }
     if (*s.forecast_phase < 2 && s.h->status &&
-        (field_only[job] || !s.forecast_waiting_for_mowers())) {
+        (field_only[job] || !s.forecast_settling())) {
       anchors[job] = s.h->tick;
       if (caching) cache_anchors[root] = field_only[job] ? -1 : s.h->tick;
       if (field_only[job]) *s.forecast_phase = 3;
@@ -206,18 +208,19 @@ extern "C" __global__ void run_fork_jobs(
     }
     if ((*s.forecast_phase == 2 || *s.forecast_phase == 3) && s.h->status) {
       *s.forecast_phase = 3;
-      for (I k = 0; k < 20; k++) results[job * 20 + k] = s.forecast[k];
+      for (I k = 0; k < FORECAST_SIZE; k++)
+        results[job * FORECAST_SIZE + k] = s.forecast[k];
       if (caching) for (I e = 0; e < cache.steps; e++) {
         I at = cache.ticks[root * cache.steps + e];
         if (at < 0) continue;
         for (I row = 0; row < 5; row++) {
-          I offset = (root * cache.steps + e) * 20 + row * 4;
-          cache.values[offset] = s.forecast[row * 4 + 2] ? 10 :
-              cache.depths[(root * cache.steps + e) * 5 + row];
-          I time = s.forecast[row * 4 + 1];
-          cache.values[offset + 1] = time < 0 ? -1 : time + *s.forecast_start - at;
-          cache.values[offset + 2] = s.forecast[row * 4 + 2];
-          cache.values[offset + 3] = s.forecast[row * 4 + 3];
+          I lane = row * FORECAST_TERMS;
+          I offset = (root * cache.steps + e) * FORECAST_SIZE + lane;
+          I time = s.forecast[lane + 1];
+          I relative = time < 0 ? -1 : time + *s.forecast_start - at;
+          cache.values[offset] = relative >= 0 ? 10 : cache.depths[(root * cache.steps + e) * 5 + row];
+          cache.values[offset + 1] = hi(-1, relative);
+          cache.values[offset + 2] = s.forecast[lane + 2];
         }
       }
       s.h->enabled = 0; job_ids[i] = -1; fork_add(progress, 1);

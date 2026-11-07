@@ -5,6 +5,8 @@ from importlib.resources import files
 import numpy as np
 from pvz_game.cuda import schema
 
+from pvz_rl.envs.outcome_math import OUTCOME_SHAPE, OUTCOME_SIZE
+
 PHYSICAL = ("header", "plants", "zombies", "projectiles", "mowers", "cooldowns")
 
 
@@ -13,11 +15,11 @@ def execution_source(source, *, packed):
         "double sky_sun_rate;": (
             "double sky_sun_rate; I *suffix_depth, *suffix_ticks; I suffix_steps;"
         ),
-        "    I offset = forecast_phase[0] == 0 ? 0 : 3;": """
+        "    I offset = forecast_phase[0] == 0 ? 0 : 2;": """
     if (forecast_phase[0] == 0) for (I e = 0; e < suffix_steps; e++)
       if (suffix_ticks[e] >= 0 && h->tick >= suffix_ticks[e])
         suffix_depth[e * 5 + a.row] = hi(suffix_depth[e * 5 + a.row], code);
-    I offset = forecast_phase[0] == 0 ? 0 : 3;""",
+    I offset = forecast_phase[0] == 0 ? 0 : 2;""",
     }
     for before, after in hooks.items():
         if source.count(before) != 1:
@@ -52,7 +54,7 @@ class ForkExecution:
         self.field_only = cp.zeros_like(self.roots)
         self.anchors = cp.full_like(self.roots, -1)
         self.cache_anchors = cp.full(source.n, -1, cp.int64)
-        self.output = cp.zeros((self.capacity, 5, 4), cp.int64)
+        self.output = cp.zeros((self.capacity, *OUTCOME_SHAPE), cp.int64)
         self.cache_zcap = min(source.zcap, settings.get("fork_cache_zombies", 128))
         self.cache_qcap = min(source.qcap, settings.get("fork_cache_projectiles", 256))
         self.stride = (
@@ -63,7 +65,7 @@ class ForkExecution:
             + 5 * len(schema.MOWER)
             + 8
         )
-        per_entry = source.n * (self.stride + 1 + 5 + 20) * 8
+        per_entry = source.n * (self.stride + 1 + 5 + OUTCOME_SIZE) * 8
         self.steps = min(
             settings.get("fork_cache_steps", 8),
             max(0, int(cache_budget) - source.n * 8) // per_entry,
@@ -76,7 +78,7 @@ class ForkExecution:
                 self.states = cp.empty((source.n, self.steps, self.stride), cp.int64)
                 self.cache_ticks = cp.full((source.n, self.steps), -1, cp.int64)
                 self.depths = cp.zeros((source.n, self.steps, 5), cp.int64)
-                self.values = cp.empty((source.n, self.steps, 5, 4), cp.int64)
+                self.values = cp.empty((source.n, self.steps, *OUTCOME_SHAPE), cp.int64)
                 self.origins = cp.full(source.n, -1, cp.int64)
                 break
             except cp.cuda.memory.OutOfMemoryError:
@@ -184,7 +186,7 @@ class ForkExecution:
 
     def snapshot(self):
         return dict(
-            version=2,
+            version=3,
             workers=self.workers,
             baseline=self.baseline,
             batch=self.batch.snapshot(),
@@ -196,16 +198,12 @@ class ForkExecution:
         )
 
     def restore(self, state):
-        if state.get("version") not in (1, 2):
+        if state.get("version") != 3:
             raise ValueError("Unsupported static-fork execution recovery version")
         if state["workers"] > self.batch.n:
             raise MemoryError("Pending forks need more scratch lanes; free GPU memory and resume")
         n = state["workers"]
         ids, progress, output = state["job_ids"], state["progress"], state["output"]
-        if state.get("version") == 1:
-            progress = np.pad(progress, (0, 3))
-        if progress.shape == (11,):
-            progress = np.pad(progress, (0, 2))
         live = ids[ids >= 0]
         if (
             not 0 <= n <= self.count
@@ -217,7 +215,7 @@ class ForkExecution:
             or progress.dtype != np.int64
             or np.any(progress < 0)
             or not 0 <= progress[0] <= self.count
-            or output.shape != (self.count, 5, 4)
+            or output.shape != (self.count, *OUTCOME_SHAPE)
             or output.dtype != np.int64
             or bool(state["baseline"]) != self.baseline
             or not 0 <= state["next_job"] <= self.count + self.batch.n
@@ -233,7 +231,7 @@ class ForkExecution:
         self.next_job[0] = state["next_job"]
         self.progress[:] = self.cp.asarray(progress)
         self.output[: self.count] = self.cp.asarray(output)
-        anchors = state.get("anchors", np.full(self.count, -1, np.int64))
+        anchors = state["anchors"]
         if anchors.shape != (self.count,) or anchors.dtype != np.int64:
             raise ValueError("Invalid pending probe anchors")
         self.anchors[: self.count] = self.cp.asarray(anchors)

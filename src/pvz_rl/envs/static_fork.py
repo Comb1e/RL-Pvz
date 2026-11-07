@@ -12,7 +12,7 @@ import numpy as np
 from pvz_game import Dig, Game, Place, Status
 from pvz_game.engine import _Zombie
 
-from pvz_rl.envs.outcome_math import depth_code
+from pvz_rl.envs.outcome_math import OUTCOME_SHAPE, SHOOTER_KINDS, depth_code
 from pvz_rl.envs.scratch_game import fork_game, restored_game
 
 
@@ -71,7 +71,7 @@ class StaticFork:
         self.field_ticks = self.probe_ticks = 0
         self.field_only, self.anchor_tick = field_only, -1
         self.sky_sun_rate = sky_sun_rate
-        self.labels = np.zeros((5, 4), np.int64)
+        self.labels = np.zeros(OUTCOME_SHAPE, np.int64)
         self.labels[:, 1] = -1
         self.game._events = []
         self.game._emit = lambda *args, **kwargs: None
@@ -99,7 +99,7 @@ class StaticFork:
 
     def _record(self, zombie):
         if not zombie.headless and zombie.health > 0:
-            column = 0 if self.phase == "field" else 3
+            column = 0 if self.phase == "field" else 2
             # Home is certified only after mower resolution, in advance().
             code = min(
                 9, depth_code(zombie.x, self.game._g["units_per_tile"], self.game._g["house_x"])
@@ -121,13 +121,23 @@ class StaticFork:
                 self.labels[row, 0] = 10
                 if self.labels[row, 1] < 0:
                     self.labels[row, 1] = self.game._tick - self.start
-                self.labels[row, 2] = 1
             else:
-                self.labels[row, 3] = 10
+                self.labels[row, 2] = 10
         if breached:
             self.game._zombies = {
                 k: z for k, z in self.game._zombies.items() if z.row not in breached
             }
+
+    def _settled(self):
+        return (
+            not self.game._projectiles
+            and all(mower.state != "moving" for mower in self.game._mowers)
+            and not any(
+                (plant.kind in SHOOTER_KINDS and plant.burst_due)
+                or (plant.kind == "chomper" and plant.state != "ready")
+                for plant in self.game._plants.values()
+            )
+        )
 
     def _probe(self):
         self.anchor_tick = self.game._tick
@@ -155,7 +165,7 @@ class StaticFork:
                 if self.phase == "probe" or self.field_only:
                     self.phase = "complete"
                     return True
-                if all(mower.state != "moving" for mower in self.game._mowers):
+                if self._settled():
                     self._probe()
             self.game._status = Status.RUNNING
             drops = self.game._sky_drops

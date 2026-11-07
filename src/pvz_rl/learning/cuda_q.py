@@ -107,7 +107,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
 
     @classmethod
     def load(cls, path, *args, **kwargs):
-        if checkpoint_metadata(path)["policy"] not in ("shared_public_outcomes_q_v5",):
+        if checkpoint_metadata(path)["policy"] not in ("shared_public_outcomes_q_v6",):
             raise ValueError("Incompatible checkpoint model family for this loader")
         model = super().load(path, *args, **kwargs)
         model.phase = CohortPhase(model.phase)

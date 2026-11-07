@@ -14,8 +14,8 @@ from pvz_rl.config import (
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.encoding import collate_observations
+from pvz_rl.envs.outcome_math import ABSOLUTE_SIZES, OUTCOME_SIZE
 from pvz_rl.learning.forecast_labels import (
-    ABSOLUTE_SIZES,
     EFFECT_WIDTH,
     effect_forecast,
     effect_summary,
@@ -50,7 +50,9 @@ class TwoStageTransformerPolicy(nn.Module):
         self.tile_decoder = TileDecoder(self.layout, spec)
         width = spec["shared_width"]
         self.species_head = nn.Sequential(nn.Linear(width, 128), nn.ReLU(), nn.Linear(128, 10))
-        self.tile_head = nn.Sequential(nn.Linear(width + 20, 128), nn.ReLU(), nn.Linear(128, 1))
+        self.tile_head = nn.Sequential(
+            nn.Linear(width + OUTCOME_SIZE, 128), nn.ReLU(), nn.Linear(128, 1)
+        )
         self.effect_head = nn.Sequential(
             nn.Linear(width, width), nn.GELU(), nn.Linear(width, 5 * self.effect_width)
         )
@@ -333,7 +335,7 @@ class TwoStageTransformerPolicy(nn.Module):
             if not self.injection_enabled:
                 summaries = torch.zeros_like(summaries)
         else:
-            summaries = features.new_zeros((*features.shape[:-1], 20))
+            summaries = features.new_zeros((*features.shape[:-1], OUTCOME_SIZE))
         return self.tile_head(torch.cat((features, summaries.to(features.dtype)), -1)).squeeze(-1)
 
     def tile_features(self, observations, branches, *, rows=None, plan=None, memory=None):

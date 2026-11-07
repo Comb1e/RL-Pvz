@@ -15,6 +15,7 @@ from random import SystemRandom
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
 from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
 
+from pvz_rl.envs.outcome_math import OUTCOME_SHAPE
 from pvz_rl.envs.tile_scenarios import (
     ATTACKER_EXERCISES,
     BOMB_SKILLS,
@@ -474,7 +475,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
     if (cfg["encoding"]["version"], cfg["policy"]["kind"]) not in {
-        ("entity_public_v4", "shared_public_outcomes_q_v5"),
+        ("entity_public_v4", "shared_public_outcomes_q_v6"),
     }:
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
@@ -516,7 +517,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "nstep_action_outcomes_v4":
+        if objective.get("protocol") != "nstep_action_outcomes_v5":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -581,7 +582,7 @@ def validate_config(cfg: dict) -> None:
         cfg.get("encoding", {}).get("version"),
         cfg.get("policy", {}).get("kind"),
     ) in {
-        ("entity_public_v4", "shared_public_outcomes_q_v5"),
+        ("entity_public_v4", "shared_public_outcomes_q_v6"),
     }
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -1163,13 +1164,13 @@ def validate_config(cfg: dict) -> None:
     env, train = cfg["environment"], cfg["training"]
     if type(train.get("random_cohort_seeds", False)) is not bool:
         raise ValueError("training.random_cohort_seeds must be boolean")
-    expected_method = "nstep_action_outcomes_v4"
+    expected_method = "nstep_action_outcomes_v5"
     if train.get("method") != expected_method:
         raise ValueError(
             "Training requires a supported n-step fork-forecast method and fresh models"
         )
     forecasts = train.get("forecasts", {})
-    if forecast_version(cfg) != 4:
+    if forecast_version(cfg) != 5:
         raise ValueError(
             "Unsupported outcome supervision; old checkpoints are incompatible, start fresh"
         )
@@ -1191,9 +1192,9 @@ def validate_config(cfg: dict) -> None:
         )
         if train.get("stage_forecast_modes", {}).get(stage) != expected:
             raise ValueError(f"Unsupported outcome mode for {stage}; expected {expected}")
-    if forecasts.get("effect_objective") != "absolute_outcome_v3":
+    if forecasts.get("effect_objective") != "absolute_outcome_v4":
         raise ValueError("Training requires absolute action outcomes")
-    if forecasts.get("protocol") != "static-fork-action-outcomes-v2":
+    if forecasts.get("protocol") != "static-fork-action-outcomes-v3":
         raise ValueError("Training requires the outcome-only fork protocol")
     if type(forecasts.get("enabled")) is not bool:
         raise ValueError("training.forecasts.enabled must be boolean")
@@ -1202,7 +1203,7 @@ def validate_config(cfg: dict) -> None:
     if forecasts.get("extra_actions") != 2:
         raise ValueError("training.forecasts.extra_actions must be 2")
     collection = forecasts.get("collection_protocol")
-    if collection != "stage_action_outcomes_v4" or not absolute_outcomes(cfg):
+    if collection != "stage_action_outcomes_v5" or not absolute_outcomes(cfg):
         raise ValueError("Training requires public-only stage action outcomes")
     probability = forecasts.get("wait_effect_sample_probability", 1.0)
     if (
@@ -1237,10 +1238,10 @@ def validate_config(cfg: dict) -> None:
     weights = forecasts.get("shaping_weights")
     if (
         not isinstance(weights, list)
-        or len(weights) != 4
+        or len(weights) != OUTCOME_SHAPE[1]
         or any(type(x) not in (int, float) or not math.isfinite(x) or x < 0 for x in weights)
     ):
-        raise ValueError("training.forecasts.shaping_weights needs four finite nonnegative values")
+        raise ValueError("training.forecasts.shaping_weights needs three finite nonnegative values")
     if any(
         k in train
         for k in (

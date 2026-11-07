@@ -9,7 +9,7 @@ from pvz_rl.learning.forecast_labels import outcome_codes
 
 
 class PlacementOutcomes:
-    protocol = "single-placement-outcomes-v1"
+    protocol = "single-placement-outcomes-v2"
 
     def __init__(self, env, buffer, state=None):
         self.env, self.buffer, self.auxiliary = env, buffer, env.auxiliary

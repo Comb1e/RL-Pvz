@@ -30,8 +30,9 @@ This file owns project-specific invariants and the code map.
   Reserve no Wait boundary buffers for placement exercises; charge only their
   occupied proposal packets and admitted workers to auxiliary VRAM.
   Peashooter/normal use `action_outcomes` with explicit valid Wait references.
-  Predict absolute field depth (11), breach bin (6), lane loss (2) and probe depth
-  (11); preserve the 56-slot carrier, excluding reserved classes. Average known
+  Predict absolute field depth (11), breach bin (6) and probe depth (11); preserve
+  the 56-slot carrier, excluding reserved classes. Field class 10 is equivalent
+  to a recorded breach and supplies the viewer's home probability. Average known
   terms/lanes, valid tokens and roots equally; never invent unsimulated labels.
   Each stage owns separate `static_field_prediction_weight` and
   `probe_prediction_weight`: scale their terms before the unchanged known-term
@@ -40,15 +41,16 @@ This file owns project-specific invariants and the code map.
   that coefficient for both groups; model/labels/collection stay unchanged.
 - Static forks own physical/RNG storage, suppress actions/future spawns/logs and
   resolve mowers before recording home entry. Continue other lanes after a loss;
-  probes inherit damaged plants and mower state after all moving mowers finish.
+  probes inherit damaged plants and mower state after all projectiles clear,
+  queued shots finish, moving mowers stop and surviving Chompers are ready.
   The real game is unchanged.
   Inference and ordinary gameplay validation compute no field/probe simulations.
   Prediction validation computes exact private targets after the greedy proposal. Learned
   outcome summaries retain detached tile-Q injection and its schedule.
-- `absolute-wait-trajectory-v4` follows real Waits/rejections and records guarded per-tick
+- `absolute-wait-trajectory-v5` follows real Waits/rejections and records guarded per-tick
   field observations. One semantic probe belongs to each owned interval, anchored
-  at the first tick with no active zombies or moving mowers. Keep capturing the
-  first zombie-clearance state and finish any mower motion privately. Accepted
+  at the first fully settled tick after zombie clearance. Keep capturing the
+  first zombie-clearance state and finish settling privately. Accepted
   planting/Dig, actual spawn-counter changes and reset/end close intervals; deaths do not.
   Capture pre-spawn full-tick states before physical/RNG changes, including spawns
   that die within one decision. Finish interrupted fields from those owned roots;
@@ -118,7 +120,7 @@ This file owns project-specific invariants and the code map.
   Preserve existing user datasets/recordings. Retain human recording, replay
   verification and demo initialization with their demonstration objectives and
   no auxiliary supervision.
-- Only `shared_public_outcomes_q_v5` checkpoints are supported. Reject every older
+- Only `shared_public_outcomes_q_v6` checkpoints are supported. Reject every older
   checkpoint before environment/CUDA preparation for inference, resume and
   initialization; no conversions or legacy execution. New-version recovery retains
   optimizer/counters, owned roots/rows/choices, partial jobs, unpublished results
@@ -163,7 +165,7 @@ This file owns project-specific invariants and the code map.
   requires all 200 wins and reuses the saved panel on retry. Weights-only stage
   transfers use `--init-from`; recovery retains the saved stage order.
 - Prediction uses 640 seeded, engine-validated current frames per cohort and one
-  exact target for each greedy proposal's effective action. Average all 20 known
+  exact target for each greedy proposal's effective action. Average all 15 known
   outcome terms per scene and weight scenes equally. Train the forecast path
   without warmup, Q, or teachers. Freeze both Q readouts and their EMA. Check a
   saved 200-scene validation panel every 10,000 completed scenes after a full

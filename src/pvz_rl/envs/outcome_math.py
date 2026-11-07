@@ -2,6 +2,11 @@
 
 import numpy as np
 
+ABSOLUTE_SIZES = (11, 6, 11)  # Field depth, breach time, probe depth.
+OUTCOME_SHAPE = (5, len(ABSOLUTE_SIZES))
+OUTCOME_SIZE = OUTCOME_SHAPE[0] * OUTCOME_SHAPE[1]
+SHOOTER_KINDS = ("peashooter", "snow_pea", "repeater")
+
 
 def depth_code(x, units=1000, house=-500):
     if x <= house:

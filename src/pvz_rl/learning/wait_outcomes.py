@@ -14,6 +14,7 @@ from pvz_game.cuda.schema import HEADER
 from pvz_rl.envs.cuda_snapshots import download_snapshots, upload_snapshots
 from pvz_rl.envs.fork_execution import PHYSICAL
 from pvz_rl.envs.fork_service import ForkService
+from pvz_rl.envs.outcome_math import OUTCOME_SHAPE
 from pvz_rl.envs.static_fork import reference_tau
 from pvz_rl.envs.wait_capture import WaitCapture
 from pvz_rl.learning.forecast_labels import outcome_codes
@@ -29,7 +30,7 @@ class IntervalPhase(StrEnum):
 
 
 class WaitOutcomes:
-    protocol = "absolute-wait-trajectory-v4"
+    protocol = "absolute-wait-trajectory-v5"
 
     def __init__(self, env, buffer, state=None):
         self.env, self.buffer = env, buffer
@@ -167,7 +168,7 @@ class WaitOutcomes:
             return
         if snapshot is None:
             raise RuntimeError("Unfinished interval lost its exact physical continuation")
-        # A zombie-free capture can still contain moving mowers; the job sets the probe anchor.
+        # The owned fork settles the zombie-free capture and sets the probe anchor.
         record["origin"] = int(snapshot["tick"])
         record["phase"] = IntervalPhase.PROBE_PENDING if cleared else IntervalPhase.FIELD_PENDING
         self._enqueue(snapshot, interval=identity)
@@ -431,7 +432,7 @@ class WaitOutcomes:
             raise RuntimeError("An unfinished interval cannot publish auxiliary targets")
         self._index(record)
         ticks = np.asarray(ticks)
-        result = np.broadcast_to(record["outcome"], (len(ticks), 5, 4)).copy()
+        result = np.broadcast_to(record["outcome"], (len(ticks), *OUTCOME_SHAPE)).copy()
         at = np.searchsorted(record["ticks"], ticks, side="right")
         observed = (
             np.where(
@@ -452,7 +453,7 @@ class WaitOutcomes:
         homes = np.where((homes < 0) | ((tail >= 0) & (tail < homes)), tail, homes)
         relative = homes[None] - ticks[:, None]
         result[:, :, 1] = np.where(homes[None] >= ticks[:, None], relative, -1)
-        result[:, :, 2] = result[:, :, 1] >= 0
+        result[:, :, 0] = np.where(result[:, :, 1] >= 0, 10, np.minimum(result[:, :, 0], 9))
         return result
 
     def finalize(self):
@@ -592,7 +593,7 @@ class WaitOutcomes:
                 ):
                     raise ValueError("Invalid asynchronous interval lifecycle")
                 if record["phase"] == IntervalPhase.READY and (
-                    np.asarray(record["outcome"]).shape != (5, 4) or record["anchor"] < 0
+                    np.asarray(record["outcome"]).shape != OUTCOME_SHAPE or record["anchor"] < 0
                 ):
                     raise ValueError("A completed interval lost its absolute probe")
             known = set(self.auxiliary.jobs) | set(self.auxiliary.results)
@@ -641,7 +642,11 @@ class WaitOutcomes:
                 raise ValueError("Invalid interval anchor time")
             if record["phase"] == IntervalPhase.READY:
                 outcome = np.asarray(record["outcome"])
-                if outcome.shape != (5, 4) or outcome.dtype != np.int64 or record["anchor"] < 0:
+                if (
+                    outcome.shape != OUTCOME_SHAPE
+                    or outcome.dtype != np.int64
+                    or record["anchor"] < 0
+                ):
                     raise ValueError("Completed interval lost its probe outcome")
         if not 0 <= state["live"] <= len(state["jobs"]):
             raise ValueError("Invalid live Wait job prefix")

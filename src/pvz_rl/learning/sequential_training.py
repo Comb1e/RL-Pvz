@@ -88,7 +88,7 @@ def flat_batches(buffer, decision_budget, spool=None):
 
 
 class CudaSequentialQ(CudaCohortLifecycle):
-    policy_protocol = "shared_public_outcomes_q_v5"
+    policy_protocol = "shared_public_outcomes_q_v6"
     optimizer_version = FIT_SCHEDULE_PROTOCOL
 
     @property
@@ -1222,7 +1222,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     effect_labeled_terms=effects,
                     effect_eligible_decisions=decisions,
                     total_loss=loss,
-                    outcome_objective="absolute_outcome_v3",
+                    outcome_objective="absolute_outcome_v4",
                     outcome_loss=effect if effects else None,
                     outcome_accuracy=effect_correct / effects if effects else None,
                     outcome_brier=effect_brier / effects if effects else None,

@@ -11,7 +11,7 @@ from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 from pvz_rl.provenance import weight_engine_config
 
 TRAINING_CONDITIONS = ("masked",)
-CURRENT_OBJECTIVE = "nstep_action_outcomes_v4"
+CURRENT_OBJECTIVE = "nstep_action_outcomes_v5"
 CURRENT_REWARD = "action_global_value_v5"
 FIT_SCHEDULE_PROTOCOL = "joint_nstep_action_outcome_cohorts_v2"
 
@@ -46,7 +46,7 @@ def current_model_config(cfg):
         identity
         in {
             (
-                "shared_public_outcomes_q_v5",
+                "shared_public_outcomes_q_v6",
                 "entity_public_v4",
                 CURRENT_OBJECTIVE,
                 CURRENT_OBJECTIVE,

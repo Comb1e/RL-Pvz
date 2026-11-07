@@ -22,7 +22,7 @@ from pvz_rl.envs.snapshot_packet import SnapshotPacket, SnapshotRoot
 from pvz_rl.envs.teacher_rules import candidate_targets, choose_rule, lane_facts
 from pvz_rl.learning.auxiliary_settings import DEFAULTS
 
-PROTOCOL = "hybrid-exact-simulation-v1"
+PROTOCOL = "hybrid-exact-simulation-v2"
 
 
 def root_bytes(value):

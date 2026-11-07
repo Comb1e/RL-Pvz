@@ -2,12 +2,16 @@
 
 import torch
 
-OUTCOME_METRIC_WIDTH = 7  # Raw loss, calibration (4), weighted field and weighted probe.
+from pvz_rl.envs.outcome_math import ABSOLUTE_SIZES, OUTCOME_SHAPE
+
+OUTCOME_METRIC_WIDTH = 7  # Raw loss, aggregate calibration (4), weighted field and probe.
 
 
 def reset_calibration(policy):
     policy._forecast_calibration = {
-        "effect": torch.zeros((5, 4, 11, 10, 3), device=policy.device, dtype=torch.float64)
+        "effect": torch.zeros(
+            (*OUTCOME_SHAPE, max(ABSOLUTE_SIZES), 10, 3), device=policy.device, dtype=torch.float64
+        )
     }
 
 
@@ -56,6 +60,6 @@ def calibration_report(policy):
             class_predictions=int(total),
         )
     if policy.absolute_outcomes and "effect" in report:
-        report["effect"]["objective"] = "absolute_outcome_v3"
+        report["effect"]["objective"] = "absolute_outcome_v4"
         report["effect"]["valid_classes"] = list(policy.effect_sizes)
     return report

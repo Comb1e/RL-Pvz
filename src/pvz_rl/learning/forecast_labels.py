@@ -1,30 +1,29 @@
-"""Absolute lane outcomes; fixed 56-slot readout with 30 categorical logits."""
+"""Absolute lane outcomes; fixed 56-slot readout with 28 categorical logits."""
 
 import numpy as np
 import torch
 from torch.nn import functional as F
 
+from pvz_rl.envs.outcome_math import ABSOLUTE_SIZES, time_bin
 from pvz_rl.envs.outcome_math import depth_code as depth_code
-from pvz_rl.envs.outcome_math import time_bin
 
-FORECAST_PROTOCOL = "static-fork-action-outcomes-v2"
+FORECAST_PROTOCOL = "static-fork-action-outcomes-v3"
 DEPTH_CLASSES = 11
 TIME_CLASSES = 6
-EFFECT_SIZES = (21, 11, 3, 21)  # Carrier offsets; unused classes stay reserved.
-EFFECT_WIDTH = sum(EFFECT_SIZES)
-ABSOLUTE_SIZES = (11, 6, 2, 11)
+EFFECT_WIDTH = 56
+EFFECT_OFFSETS = (0, 21, 35)  # Keep the old lane-loss slots reserved.
 
 
 def effect_blocks(logits):
     """Reserved logits never enter a distribution, loss, summary or forecast."""
     return tuple(
-        block[..., :size]
-        for block, size in zip(logits.float().split(EFFECT_SIZES, -1), ABSOLUTE_SIZES, strict=True)
+        logits[..., start : start + size].float()
+        for start, size in zip(EFFECT_OFFSETS, ABSOLUTE_SIZES, strict=True)
     )
 
 
 def outcome_codes(outcomes, tau):
-    """[lane, field depth / relative first home tick / loss / probe depth]."""
+    """Convert relative first home ticks to categorical breach bins."""
     outcomes = np.asarray(outcomes)
     result = outcomes.astype(np.int8).copy()
     result[..., 1] = time_bin(outcomes[..., 1], tau)
@@ -49,8 +48,8 @@ def effect_loss_components(logits, labels):
         losses.append(loss)
         known.append(valid)
     denominator = torch.stack(known, -1).sum(-1).clamp_min(1)
-    field = torch.stack(losses[:3], -1).sum(-1)
-    return torch.stack((field, losses[3]), -1) / denominator[..., None]
+    field_depth, breach, probe = losses
+    return torch.stack((field_depth + breach, probe), -1) / denominator[..., None]
 
 
 def effect_loss(logits, labels):
@@ -59,13 +58,14 @@ def effect_loss(logits, labels):
 
 def effect_forecast(logits):
     """Post-action field/probe CDFs, in home and left-to-right column order."""
-    blocks, result = effect_blocks(logits), []
+    field, _, probe = effect_blocks(logits)
+    result = []
     support = torch.arange(11, device=logits.device)
     thresholds = torch.arange(9, 0, -1, device=logits.device)
-    for term in (0, 3):
-        p = blocks[term].softmax(-1)
+    for block in (field, probe):
+        p = block.softmax(-1)
         cells = (p[..., None, :] * (support >= thresholds[:, None])).sum(-1)
-        home = blocks[2].softmax(-1)[..., 1] if term == 0 else p[..., 10]
+        home = p[..., 10]
         result.append(torch.cat((home[..., None], cells), -1))
     return torch.stack(result, -3)
 

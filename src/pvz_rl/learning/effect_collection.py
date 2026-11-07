@@ -5,6 +5,7 @@ import torch
 
 from pvz_rl.config import effect_extra_actions
 from pvz_rl.envs.actions import ActionSchema
+from pvz_rl.envs.outcome_math import ABSOLUTE_SIZES, OUTCOME_SHAPE
 from pvz_rl.envs.tile_scenarios import is_placement_skill, is_single_frame_skill
 from pvz_rl.policy.sequential_q import action_parts
 
@@ -110,12 +111,12 @@ def begin_effects(model, actions, details, issued, legal):
         ).tolist()
     )
     request = dict(
-        version=4,
+        version=5,
         placement=placement,
         ready=True,
         actions=commands,
         valid=valid,
-        labels=np.zeros((env.num_envs, 5, 5, 4), np.int8),
+        labels=np.zeros((env.num_envs, 5, *OUTCOME_SHAPE), np.int8),
         jobs=jobs,
         shortages=shortages,
         policy_identity=(model.cohort_number, model.optimizer_commits),
@@ -144,7 +145,7 @@ def validate_effect_request(request, model):
             raise ValueError("Pending effect recovery is missing; use an intact checkpoint")
         return
     count = model.n_envs
-    if request.get("version") == 4:
+    if request.get("version") == 5:
         if request.get("ready") is not True or request.get("placement") != is_single_frame_skill(
             model.tile_skills.phase
         ):
@@ -152,7 +153,7 @@ def validate_effect_request(request, model):
         for name, shape, dtype in (
             ("actions", (count, 5), np.uint16),
             ("valid", (count, 5), bool),
-            ("labels", (count, 5, 5, 4), np.int8),
+            ("labels", (count, 5, *OUTCOME_SHAPE), np.int8),
             ("sampled", (count,), bool),
             ("effective_wait", (count,), bool),
             ("legal_proposal", (count,), bool),
@@ -164,7 +165,7 @@ def validate_effect_request(request, model):
             tuple(request["policy_identity"]) != (model.cohort_number, model.optimizer_commits)
             or np.any(request["actions"] >= ActionSchema.size)
             or np.any(request["labels"] < 0)
-            or np.any(request["labels"] >= np.array([11, 6, 2, 11]))
+            or np.any(request["labels"] >= ABSOLUTE_SIZES)
         ):
             raise ValueError("Absolute ticket identity, action or label changed")
         for slot in np.flatnonzero(model._scheduler.pending):

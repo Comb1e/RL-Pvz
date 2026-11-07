@@ -48,8 +48,7 @@ def fork_potential(outcomes, tau, weights):
         (
             outcomes[..., 0] / 10,
             np.where(outcomes[..., 1] < 0, 0, 1 / (1 + np.maximum(0, outcomes[..., 1]) / tau)),
-            outcomes[..., 2],
-            outcomes[..., 3] / 10,
+            outcomes[..., 2] / 10,
         ),
         -1,
     )

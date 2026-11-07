@@ -7,8 +7,12 @@ from pvz_game.cuda.schema import HEADER
 from pvz_rl.envs.cuda_lane_oracle import LaneTransfers
 from pvz_rl.envs.cuda_snapshots import download_snapshots
 from pvz_rl.envs.cuda_static_fork import StaticForkBatch
+from pvz_rl.envs.outcome_math import OUTCOME_SHAPE, OUTCOME_SIZE
 from pvz_rl.envs.scratch_game import EngineSnapshot
 from pvz_rl.envs.snapshot_packet import SnapshotRoot
+
+OUTCOME_VALUES = slice(5, 5 + OUTCOME_SIZE)
+OUTCOME_TIMERS = slice(OUTCOME_VALUES.stop, OUTCOME_VALUES.stop + 2)
 
 FORK_STEP = r"""
 extern "C" __global__ void advance_auxiliary(
@@ -23,10 +27,10 @@ extern "C" __global__ void advance_auxiliary(
   (Zombie *)(zombies+i*ZCAP*GAME_ZOMBIE_WIDTH), (Shot *)(shots+i*QCAP*GAME_PROJECTILE_WIDTH),
   (Mower *)(mowers+i*5*GAME_MOWER_WIDTH), cooldowns+i*8,
   schedules+i*ZCAP*5, events+i*ECAP*8, event_counts+i, facts+i*9,
-  forecast+i*20, phases+i, starts+i, sky_rate};
+  forecast+i*FORECAST_SIZE, phases+i, starts+i, sky_rate};
  if(!s.h->enabled || phases[i]==3) return;
  for(I used=0; ;used++) {
-  if(s.h->status && !s.forecast_waiting_for_mowers()) {
+  if(s.h->status && !s.forecast_settling()) {
    if(phases[i]==0) {
     anchors[i]=s.h->tick;
     for(I row=0;row<5;row++) {
@@ -98,7 +102,9 @@ class CudaWorkers:
             self.transfers.copy.compile()
             self.slots = [None] * count
             self.actions = cp.zeros(count, cp.int64)
-            self.packet = cp.empty((count, 27 if family == "outcomes" else 6), cp.int64)
+            self.packet = cp.empty(
+                (count, OUTCOME_TIMERS.stop if family == "outcomes" else 6), cp.int64
+            )
         self.host_memory = cp.cuda.alloc_pinned_memory(self.packet.nbytes)
         self.host = np.frombuffer(self.host_memory, np.int64, count=self.packet.size).reshape(
             self.packet.shape
@@ -211,12 +217,12 @@ class CudaWorkers:
                         cp.float64(b.sky_sun_rate),
                     ),
                 )
-                self.packet[:, 25:27] = self.timers
+                self.packet[:, OUTCOME_TIMERS] = self.timers
                 self.packet[:, 0] = b.header[:, 0]
                 self.packet[:, 1] = b.forecast_phase
                 self.packet[:, 2] = self.anchors
                 self.packet[:, 3:5] = self.counts
-                self.packet[:, 5:25] = b.forecast.reshape(b.n, 20)
+                self.packet[:, OUTCOME_VALUES] = b.forecast.reshape(b.n, OUTCOME_SIZE)
             else:
                 b.step_device(self.actions, ticks=ticks, per_tick=self.teacher_settings["per_tick"])
                 self.packet[:, :3] = b.header[:, [0, 1, 12]]
@@ -245,7 +251,9 @@ class CudaWorkers:
                 if row[1] != 3:
                     continue
                 result = dict(
-                    outcome=row[5:25].reshape(5, 4).copy(), anchor=int(row[2]), ticks=job["ticks"]
+                    outcome=row[OUTCOME_VALUES].reshape(OUTCOME_SHAPE).copy(),
+                    anchor=int(row[2]),
+                    ticks=job["ticks"],
                 )
             else:
                 if job["action"] and not job.get("placed") and not row[2]:
@@ -268,8 +276,7 @@ class CudaWorkers:
                 )
             results.append((job["id"], result))
             self.slots[slot] = None
-        timer = 25 if self.family == "outcomes" else 4
-        times = self.host[:, timer : timer + 2]
+        times = self.host[:, OUTCOME_TIMERS if self.family == "outcomes" else slice(4, 6)]
         times = times[times[:, 0] > 0]
         milliseconds = float(times[:, 1].max() - times[:, 0].min()) / 1e6 if len(times) else 0.0
         return results, milliseconds
@@ -290,7 +297,7 @@ class CudaWorkers:
                     phase="field" if row[1] == 0 else "probe",
                     start=int(self.batch.forecast_start[slot].get()),
                     anchor=int(row[2]),
-                    labels=row[5:25].reshape(5, 4).copy(),
+                    labels=row[OUTCOME_VALUES].reshape(OUTCOME_SHAPE).copy(),
                 )
             states.append((job["id"], state))
         return states
