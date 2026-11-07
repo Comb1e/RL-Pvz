@@ -16,6 +16,7 @@ def render_context(values=None):
     from pvz_game.rendering import RenderContext
 
     values = values or {}
+    outcome = values.get("outcome")
     message = values.get("message", values.get("action", ""))
     if values.get("reward") is not None:
         message = " | ".join(
@@ -23,7 +24,8 @@ def render_context(values=None):
         )
     return RenderContext(
         policy_id=values.get("policy_id"),
-        outcome=values.get("outcome"),
+        # A scored prediction scene ends the exercise while its game is still running.
+        outcome=None if outcome == "scored" else outcome,
         termination_reason=values.get("termination_reason"),
         message=message,
     )
