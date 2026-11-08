@@ -522,7 +522,8 @@ def benchmark(
                             model.policy.species_head[-1].bias.zero_()
                             model.policy.tile_head[-1].weight.zero_()
                             model.policy.tile_head[-1].bias.zero_()
-                            model.policy.species_head[-1].bias[branch] = 1
+                            model.policy.species_bias.zero_()
+                            model.policy.species_bias[branch] = 1
                         reset(model, callback, raw, 101, live_count=count)
                         setup = perf_counter() - started
 

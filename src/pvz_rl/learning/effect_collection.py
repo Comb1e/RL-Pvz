@@ -49,7 +49,7 @@ def begin_effects(model, actions, details, issued, legal):
     legal = legal.cpu().numpy()
     placement = is_single_frame_skill(model.tile_skills.phase)
     maximum = effect_extra_actions(model.cfg, model.tile_skills.phase)
-    effective_wait = (proposed == 0) | ~legal[np.arange(env.num_envs), proposed]
+    effective_wait = proposed == 0
     sampled = issued.copy() if maximum else np.zeros_like(issued)
     if maximum:
         probability = model.cfg["training"]["forecasts"]["wait_effect_sample_probability"]
@@ -61,14 +61,12 @@ def begin_effects(model, actions, details, issued, legal):
         branch_legal = torch.as_tensor(
             legal[:, 1:].reshape(-1, 9, 45).any(-1), device=policy.device
         )
-        # Wait/unavailable decisions need a proposal branch for near-Q alternatives.
+        # An explicit Wait needs a proposal branch for near-Q alternatives.
         # Batch that decoder work over the already encoded memory; no second encoder.
         best_branch = (
             details["branch_q"][:, 1:].masked_fill(~branch_legal, -torch.inf).argmax(-1) + 1
         )
-        replacement = (branches == 0) | ~torch.as_tensor(
-            legal[np.arange(env.num_envs), proposed], device=policy.device
-        )
+        replacement = branches == 0
         at = torch.nonzero(
             replacement & branch_legal.any(-1) & torch.as_tensor(sampled, device=policy.device),
             as_tuple=False,
@@ -106,9 +104,7 @@ def begin_effects(model, actions, details, issued, legal):
     need = (
         enabled.tolist()
         if placement
-        else np.flatnonzero(
-            issued & (((proposed != 0) & ~effective_wait) | valid[:, 1:].any(-1))
-        ).tolist()
+        else np.flatnonzero(issued & ((proposed != 0) | valid[:, 1:].any(-1))).tolist()
     )
     request = dict(
         version=5,

@@ -110,7 +110,6 @@ _STAGE_PARAMETERS = {
             for key in (
                 "n_envs",
                 "validation_cases",
-                "validation_max_loss",
                 "plants",
                 "live_zombies",
                 "defeated_zombies",
@@ -475,7 +474,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
     if (cfg["encoding"]["version"], cfg["policy"]["kind"]) not in {
-        ("entity_public_v4", "shared_public_outcomes_q_v6"),
+        ("entity_public_v4", "shared_public_outcomes_q_v10"),
     }:
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
@@ -582,7 +581,7 @@ def validate_config(cfg: dict) -> None:
         cfg.get("encoding", {}).get("version"),
         cfg.get("policy", {}).get("kind"),
     ) in {
-        ("entity_public_v4", "shared_public_outcomes_q_v6"),
+        ("entity_public_v4", "shared_public_outcomes_q_v10"),
     }
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -721,6 +720,8 @@ def validate_config(cfg: dict) -> None:
         "encoder_blocks",
         "tile_decoder_blocks",
         "attention_heads",
+        "action_decoder_blocks",
+        "action_decoder_heads",
         "feedforward_width",
     }
     execution_settings = (
@@ -745,6 +746,8 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"policy.{key} must be a positive integer")
     if policy["shared_width"] % policy["attention_heads"]:
         raise ValueError("shared_width must be divisible by attention_heads")
+    if policy["shared_width"] % policy["action_decoder_heads"]:
+        raise ValueError("shared_width must be divisible by action_decoder_heads")
     optional = {"attacker": attacker_mix(cfg), "prediction": prediction_settings(cfg)}
     stages = tuple(
         stage for stage in _STAGE_PARAMETERS if stage not in optional or optional[stage] is not None
@@ -1011,7 +1014,7 @@ def validate_config(cfg: dict) -> None:
             or prediction["validation_cases"] != 200
         ):
             raise ValueError("Prediction validation requires exactly 200 cases")
-        for key, limit in (("ready_probability", 1), ("validation_max_loss", math.inf)):
+        for key, limit in (("ready_probability", 1),):
             value = prediction.get(key)
             if (
                 type(value) not in (int, float)

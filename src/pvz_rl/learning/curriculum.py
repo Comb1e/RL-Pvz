@@ -6,10 +6,10 @@ from pvz_rl.learning.budget import uses_games
 
 STAGES = ("easy", "standard", "shared")
 TILE_STAGES = (
+    "prediction",
     "cherry_bomb",
     "cherry_bomb_obstacle",
     "attacker_pre",
-    "prediction",
     "attacker",
     "peashooter",
 )

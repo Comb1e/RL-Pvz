@@ -107,7 +107,7 @@ class PeashooterObjective:
         label = self.teacher.labels.get(key)
         return label if label and label["tiles"] else None
 
-    def loss(self, policy, rows, observations, *, features=None, null=None):
+    def loss(self, policy, rows, observations, *, features=None, memory=None):
         selected, preferred = [], []
         for i, row in enumerate(rows):
             label = self.label(row)
@@ -120,11 +120,16 @@ class PeashooterObjective:
             at = torch.as_tensor(selected, device=policy.device)
             obs = collate_observations(observations, policy.device)
             branch = policy.cfg["environment"]["plants"].index("peashooter") + 1
-            values = (
-                policy.fitting_tiles(obs, torch.full_like(at, branch), rows=at)
-                if features is None
-                else policy.tile_values(features[at], null=None if null is None else null[at])
-            )
+            if features is None:
+                values = policy.fitting_tiles(obs, torch.full_like(at, branch), rows=at)
+            else:
+                vectors = policy._action_vectors(memory)
+                values = policy.tile_values(
+                    features[at],
+                    action=vectors[at, branch],
+                    wait_action=vectors[at, 0],
+                    memory=(memory[0][at], memory[1][at]),
+                )
             losses, correct = column_cross_entropy(
                 values,
                 preferred,

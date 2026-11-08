@@ -48,6 +48,7 @@ from pvz_rl.learning.bomb_objective import (
 from pvz_rl.learning.cohort import CohortPhase, atomic_transition, check_transition_interruption
 from pvz_rl.learning.collection_scheduler import CollectionScheduler, unissued_collection
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
+from pvz_rl.learning.curriculum import STAGES, selected_stage
 from pvz_rl.learning.exploration import (
     CommittedPlantExploration,
     configure_exploration,
@@ -72,6 +73,19 @@ from pvz_rl.policy.sequential_q import action_parts
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 
 
+def joint_fitting_stage(cfg, curriculum_state):
+    """Easy trains the action decoder. Standard and shared leave it fixed."""
+    explicit = selected_stage(cfg)
+    if explicit in STAGES:
+        name = explicit
+    elif isinstance(curriculum_state, dict):
+        index = curriculum_state.get("stage")
+        name = STAGES[index] if type(index) is int and 0 <= index < len(STAGES) else None
+    else:
+        name = None
+    return "easy_action" if name == "easy" else "action_heads"
+
+
 def flat_batches(buffer, decision_budget, spool=None):
     if spool is not None:
         for rows, packed in spool.iter_batches(decision_budget):
@@ -88,7 +102,7 @@ def flat_batches(buffer, decision_budget, spool=None):
 
 
 class CudaSequentialQ(CudaCohortLifecycle):
-    policy_protocol = "shared_public_outcomes_q_v6"
+    policy_protocol = "shared_public_outcomes_q_v10"
     optimizer_version = FIT_SCHEDULE_PROTOCOL
 
     @property
@@ -147,10 +161,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     @property
     def fitting_parameter_stage(self):
-        if self._fit_kind != "tile_only":
-            return None
         if self.tile_skills.phase == "prediction":
             return "prediction_only"
+        if self._fit_kind != "tile_only":
+            return joint_fitting_stage(self.cfg, getattr(self, "curriculum_state", None))
         if not self.outcome_training or self.outcome_weight <= 0:
             return "tile"
         return (
@@ -377,13 +391,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
     @torch.no_grad()
     def _update_teacher(self, stage=None):
         self._ensure_teacher()
-        decay = self.cfg["training"]["objective"]["ema_decay"]
-        teacher_parameters = self._teacher.runtime_parameters(stage)
-        online_parameters = self.policy.runtime_parameters(stage)
-        torch._foreach_lerp_(
-            list(teacher_parameters),
-            list(online_parameters),
-            1 - decay,
+        self.policy.update_teacher_runtime(
+            self._teacher, stage, self.cfg["training"]["objective"]["ema_decay"]
         )
         self._teacher_version += 1
 
@@ -510,6 +519,17 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["reset"] = self._scheduler.resets
             rows["env"] = np.arange(self.n_envs)
             source_decisions = self._scheduler.decisions.copy()
+            fresh = np.flatnonzero(self._scheduler.resets)
+            if is_single_frame_skill(self.tile_skills.phase):
+                fresh = np.arange(self.n_envs)
+            self._scheduler.clear_forecast(fresh)
+            seen_classes = self._scheduler.forecast_classes.copy()
+            seen_valid = self._scheduler.forecast_valid.copy()
+            self._scheduler.hold_forecast(seen_classes, seen_valid)
+            forecast_prior = (
+                torch.as_tensor(seen_classes, device=self.device, dtype=torch.long),
+                torch.as_tensor(seen_valid, device=self.device),
+            )
             masks = env.action_masks().clone()
             branch_available = env.branch_availability()
             legal = None
@@ -527,6 +547,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         plan=plan,
                         branch_usable=branch_available,
                         supplied_branches=supplied,
+                        prior=forecast_prior,
                     )
                 actions, values, tile_values, details = result
                 if self.tile_skills.active:
@@ -549,17 +570,23 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         plan=plan,
                     )
                 self._runner.valid &= details["valid"]
-                if self.outcome_training:
-                    if forecast_version(self.cfg) >= 2:
-                        legal = env.engine_action_masks_device()
+                from pvz_rl.learning.forecast_labels import effect_forecast
+                from pvz_rl.policy.forecast_input import effect_classes, played_logits
+
+                index, logits = played_logits(
+                    self.policy, actions, details["board_memory"], enabled
+                )
+                if len(index):
+                    self._scheduler.note_forecast(
+                        index.detach().cpu().numpy(),
+                        effect_classes(logits).to(dtype=torch.int8).cpu().numpy(),
+                    )
+                    if self.outcome_training and forecast_version(self.cfg) >= 2:
                         if not hasattr(self, "_collection_effect"):
                             self._collection_effect = torch.zeros(
                                 (self.n_envs, 2, 5, 10), device=self.device
                             )
-                        self._collection_effect[enabled] = self.policy.effect_action_display(
-                            env.effective_actions(actions, legal),
-                            details["board_memory"],
-                        )[enabled]
+                        self._collection_effect[index] = effect_forecast(logits)
                 self.policy._effect_decision_cache = None
             if not hasattr(self, "_collection_packed"):
                 self._collection_packed = torch.empty(
@@ -809,6 +836,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["executed_action"] = np.where(rows["accepted"], rows["action"], 0)
             rows[~active] = np.zeros((), dtype=rows.dtype)
             rows["env"] = np.arange(self.n_envs)
+            rows["prior_classes"][active] = self._scheduler.held_classes[active]
+            rows["prior_valid"][active] = self._scheduler.held_valid[active]
+            self._scheduler.clear_forecast(np.flatnonzero(rows["done"] & active))
             storage_started = perf_counter()
             receipt = self._buffer.append(
                 rows, observations, identities=(env._episode_serial, source_decisions)
@@ -845,7 +875,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     name: {
                         stage: dict(encoder.collection_metrics)
                         for stage, encoder in zip(
-                            ("species", "tile"), network.encoders, strict=True
+                            network.encoder_names, network.encoders, strict=True
                         )
                     }
                     for name, network in (("online", self.policy), ("ema", self._teacher))
@@ -1359,7 +1389,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
                     self._stats["forecast_gradient_ratios"] = gradient_norm_ratios(self.policy)
             loss.backward()
-            self.policy.accumulate_master_gradients()
+            self.policy.accumulate_master_gradients(self.fitting_parameter_stage)
             self.policy.clear_runtime_grad(set_to_none=True)
             self.policy._primary_graph = None
             self.policy._forecast_components = None
@@ -1386,10 +1416,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def _placement_outcome_loss(self, rows, observations):
         from pvz_rl.envs.encoding import collate_observations
         from pvz_rl.learning.forecast_objective import forecast_auxiliary
+        from pvz_rl.policy.forecast_input import prior_from_rows
 
         observations = collate_observations(observations, self.device)
         if self.tile_skills.phase == "prediction":
-            with self.policy.board_context(observations) as memory:
+            with self.policy.board_context(
+                observations, prior=prior_from_rows(rows, self.device)
+            ) as memory:
                 loss, metrics = forecast_auxiliary(
                     self.policy,
                     observations,
@@ -1409,7 +1442,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
         features = next(self.policy.parameters()).new_zeros(
             (len(rows), 45, self.cfg["policy"]["shared_width"])
         )
-        with self.policy.board_context(observations) as memory:
+        with self.policy.board_context(
+            observations, prior=prior_from_rows(rows, self.device)
+        ) as memory:
             if len(at):
                 features = features.index_copy(
                     0,
@@ -1417,13 +1452,14 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     self.policy.tile_features(observations, branches[at], rows=at, memory=memory),
                 )
             if self.peashooter_rule_training:
-                null = self.policy.null_features(memory)
                 loss, error, gap, detail = self._peashooter_objective.loss(
-                    self.policy, rows, observations, features=features, null=null
+                    self.policy, rows, observations, features=features, memory=memory
                 )
                 self._peashooter_pass_metrics += detail
             else:
-                loss, error, gap = self._bomb_loss(rows, observations, features=features)
+                loss, error, gap = self._bomb_loss(
+                    rows, observations, features=features, memory=memory
+                )
             self.policy._primary_graph = loss
             auxiliary, metrics = forecast_auxiliary(
                 self.policy,
@@ -1439,7 +1475,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self.policy._last_outcome_metrics = metrics
         return loss, error, gap
 
-    def _bomb_loss(self, rows, observations, *, features=None, null=None):
+    def _bomb_loss(self, rows, observations, *, features=None, memory=None):
         from pvz_rl.envs.encoding import collate_observations
         from pvz_rl.learning.placement_labels import set_ranking_loss
 
@@ -1451,15 +1487,21 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self.cfg["environment"]["plants"].index(skill_plant(source, label)) + 1
             for source, label in zip(sources, labels, strict=True)
         ]
-        values = (
-            self.policy.fitting_tiles(
+        branch_tensor = torch.tensor(branches, device=self.device, dtype=torch.long)
+        if features is None:
+            values = self.policy.fitting_tiles(
                 observations,
-                torch.tensor(branches, device=self.device, dtype=torch.long),
+                branch_tensor,
                 rows=torch.arange(len(rows), device=self.device),
             ).float()
-            if features is None
-            else self.policy.tile_values(features, null=null).float()
-        )
+        else:
+            vectors = self.policy._action_vectors(memory)
+            values = self.policy.tile_values(
+                features,
+                action=vectors[torch.arange(len(rows), device=self.device), branch_tensor],
+                wait_action=vectors[:, 0],
+                memory=memory,
+            ).float()
         settings = placement_settings(self.cfg, stage)
         positives = [label["feasible_tiles"] for label in labels]
         objective = settings.get("ranking_objective", "top1_hinge_v1")
@@ -1575,7 +1617,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._stats["collection_graphs"] = {
             name: {
                 stage: dict(encoder.collection_metrics)
-                for stage, encoder in zip(("species", "tile"), network.encoders, strict=True)
+                for stage, encoder in zip(network.encoder_names, network.encoders, strict=True)
             }
             for name, network in (("online", self.policy), ("ema", self._teacher))
         }
@@ -1742,7 +1784,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._teacher.load_state_dict(extra["teacher"])
             self._teacher_version = extra["teacher_version"]
             for name, network in (("policy", self.policy), ("teacher", self._teacher)):
-                for stage, encoder in zip(("species", "tile"), network.encoders, strict=True):
+                for stage, encoder in zip(network.encoder_names, network.encoders, strict=True):
                     compilation = extra["compilation"][name][stage]
                     if compilation.get("status") not in (
                         "disabled",
@@ -1891,7 +1933,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             compilation={
                 name: {
                     stage: dict(status=encoder.compilation_status, error=encoder.compilation_error)
-                    for stage, encoder in zip(("species", "tile"), network.encoders, strict=True)
+                    for stage, encoder in zip(network.encoder_names, network.encoders, strict=True)
                 }
                 for name, network in (("policy", self.policy), ("teacher", self._teacher))
             },

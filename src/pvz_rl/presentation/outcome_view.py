@@ -23,7 +23,7 @@ def _draw_grid(surface, values, rect, font=None):
             )
             pygame.draw.rect(surface, color, cell)
             if font is not None and cell.w >= 28 and cell.h >= 16 and np.isfinite(value):
-                label = font.render(f"{value:.0%}", True, (16, 26, 20))
+                label = font.render("1" if value >= 0.5 else "0", True, (16, 26, 20))
                 surface.blit(label, label.get_rect(center=cell.center))
     pygame.draw.line(
         surface,
@@ -96,6 +96,10 @@ def draw_live_outcomes(surface, frame, rect):
             font.render(message, True, (184, 205, 186)),
             (rect.x + 8, rect.bottom - 39),
         )
-    legend = "H = home danger | green 0% - red 100%" if rect.w >= 250 else "H = home | 0% - 100%"
+    legend = (
+        "H = home reached | 1 = depth reaches that cell"
+        if rect.w >= 250
+        else "H = home | 1 = reached"
+    )
     surface.blit(font.render(legend, True, (184, 205, 186)), (rect.x + 8, rect.bottom - 20))
     surface.set_clip(old_clip)

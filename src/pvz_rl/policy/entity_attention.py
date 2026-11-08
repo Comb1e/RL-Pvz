@@ -15,6 +15,33 @@ def feature_dtype(device):
     return torch.get_autocast_dtype(device.type) if torch.is_autocast_enabled(device.type) else None
 
 
+def attend(q, k, v, mask, *, query_chunk, force_fallback=False):
+    """Scaled dot-product attention. A bool mask keeps positions marked true."""
+    supported = True
+    # SDPAParams is a pybind11 object.  Constructing it during a Dynamo
+    # trace creates a graph break before the actual tensor attention runs.
+    # The compiled path delegates backend selection to SDPA directly; the
+    # capability probe remains available for the eager path.
+    compiling = bool(getattr(torch.compiler, "is_compiling", lambda: False)())
+    if q.is_cuda and not force_fallback and not compiling:
+        params = torch.backends.cuda.SDPAParams(q, k, v, mask, 0.0, False, False)
+        supported = torch.backends.cuda.can_use_efficient_attention(
+            params
+        ) or torch.backends.cuda.can_use_flash_attention(params)
+    if not force_fallback and supported:
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+    # Chunk queries, never keys: every query still sees every present entity.
+    outputs = []
+    for start in range(0, q.shape[-2], query_chunk):
+        query = q[..., start : start + query_chunk, :]
+        with torch.autocast(q.device.type, enabled=False):
+            dtype = torch.float32 if q.dtype == torch.bfloat16 else q.dtype
+            logits = (query.to(dtype) @ k.to(dtype).transpose(-2, -1)) * q.shape[-1] ** -0.5
+            output = (logits.masked_fill(~mask, -torch.inf).softmax(-1) @ v.to(dtype)).to(q.dtype)
+        outputs.append(output)
+    return torch.cat(outputs, dim=-2)
+
+
 def stable_norm(layer, value):
     # Preserve float64 mathematical controls; BF16 reductions use FP32.
     dtype = value.dtype
@@ -41,33 +68,9 @@ class AttentionBlock(nn.Module):
         self.force_fallback = False
 
     def attention(self, q, k, v, mask):
-        supported = True
-        # SDPAParams is a pybind11 object.  Constructing it during a Dynamo
-        # trace creates a graph break before the actual tensor attention runs.
-        # The compiled path delegates backend selection to SDPA directly; the
-        # capability probe remains available for the eager path.
-        compiling = bool(getattr(torch.compiler, "is_compiling", lambda: False)())
-        if q.is_cuda and not self.force_fallback and not compiling:
-            params = torch.backends.cuda.SDPAParams(q, k, v, mask, 0.0, False, False)
-            supported = torch.backends.cuda.can_use_efficient_attention(
-                params
-            ) or torch.backends.cuda.can_use_flash_attention(params)
-        if not self.force_fallback and supported:
-            # PyTorch selects the available efficient implementation on this device.
-            return F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
-        # Chunk queries, never keys: every query still sees every present entity.
-        outputs = []
-        for start in range(0, q.shape[-2], self.query_chunk):
-            query = q[..., start : start + self.query_chunk, :]
-
-            with torch.autocast(q.device.type, enabled=False):
-                dtype = torch.float32 if q.dtype == torch.bfloat16 else q.dtype
-                logits = (query.to(dtype) @ k.to(dtype).transpose(-2, -1)) * q.shape[-1] ** -0.5
-                output = (logits.masked_fill(~mask, -torch.inf).softmax(-1) @ v.to(dtype)).to(
-                    q.dtype
-                )
-            outputs.append(output)
-        return torch.cat(outputs, dim=-2)
+        return attend(
+            q, k, v, mask, query_chunk=self.query_chunk, force_fallback=self.force_fallback
+        )
 
     def forward(self, x, valid):
         batch, length, width = x.shape
@@ -80,7 +83,11 @@ class AttentionBlock(nn.Module):
 
 
 class SpatialTransformer(nn.Module):
-    """Public-board memory encoder with one global token and contextual entities."""
+    """Public-board memory encoder.
+
+    Token 0 is the global board summary. The next five tokens are the previous
+    decision's forecast, supplied by the caller. Entity tokens follow them.
+    """
 
     def __init__(self, layout, spec, stage):
         super().__init__()
@@ -88,7 +95,7 @@ class SpatialTransformer(nn.Module):
             raise ValueError("Unknown spatial Transformer stage")
         self.layout = layout
         self.stage = stage
-        self.token_overhead = 1
+        self.token_overhead = 6
         self.width = width = spec["shared_width"]
         self.microbatch = spec["encoder_microbatch"]
         self.token_budget = spec["encoder_token_budget"]
@@ -306,21 +313,30 @@ class SpatialTransformer(nn.Module):
         """Embed a public EntityBatch; retained for diagnostics and math tests."""
         return self._embed_tensors(batch.entities, batch.entity_mask)
 
-    def _encode(self, entities, mask, globals_, branches):
+    def _encode(self, entities, mask, globals_, branches, forecast_tokens, forecast_valid):
+        del branches
         embedded = self._embed_tensors(entities, mask)
         with torch.autocast(globals_.device.type, enabled=False):
             readouts = self.global_projection(globals_.to(self.global_projection.weight.dtype))[
                 :, None
             ]
-        x = torch.cat((readouts, embedded), 1)
+        forecast_tokens = forecast_tokens.to(dtype=embedded.dtype)
+        forecast_tokens = forecast_tokens.masked_fill(~forecast_valid[:, None, None], 0)
+        lane_valid = forecast_valid[:, None].expand(-1, 5)
+        x = torch.cat((readouts, forecast_tokens, embedded), 1)
         valid = torch.cat(
-            (torch.ones(readouts.shape[:2], dtype=torch.bool, device=x.device), mask), 1
+            (
+                torch.ones(readouts.shape[:2], dtype=torch.bool, device=x.device),
+                lane_valid,
+                mask,
+            ),
+            1,
         )
         for layer in self.layers:
             x = layer(x, valid)
         return stable_norm(self.norm, x)
 
-    def forward(self, observations, branches=None):
+    def forward(self, observations, branches=None, forecast=None):
         self.layout.validate(observations)
         if len(observations.shape) != 1:
             raise ValueError("Spatial inference requires flat board batches")
@@ -330,12 +346,28 @@ class SpatialTransformer(nn.Module):
             raise ValueError("Branches must be an int64 board vector")
         if not len(observations):
             return self.numeric.weight.new_empty(0, self.token_overhead, self.width)
+        if forecast is None:
+            tokens = self.numeric.weight.new_zeros(len(observations), 5, self.width)
+            forecast_valid = torch.zeros(
+                len(observations), dtype=torch.bool, device=observations.device
+            )
+        else:
+            tokens, forecast_valid = forecast
+            if tokens.shape != (len(observations), 5, self.width) or forecast_valid.shape != (
+                len(observations),
+            ):
+                raise ValueError("Forecast tokens must be [batch, 5, width] with one valid bit")
         length = observations.entities.shape[-2] + self.token_overhead
         size = max(1, min(self.microbatch, self.token_budget // length))
         results = []
         for start in range(0, len(observations), size):
             part = observations[start : start + size]
-            args = (*part.tensors(), branches[start : start + size])
+            args = (
+                *part.tensors(),
+                branches[start : start + size],
+                tokens[start : start + size],
+                forecast_valid[start : start + size],
+            )
             logical = len(part)
             compile_args = args
             if (

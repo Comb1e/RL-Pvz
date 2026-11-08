@@ -20,6 +20,7 @@ class PolicyRunner:
         plan=None,
         branch_usable=None,
         supplied_branches=None,
+        prior=None,
     ):
         self.policy.train(False)
         actions, details = self.policy.decide(
@@ -30,6 +31,7 @@ class PolicyRunner:
             active_plan=plan,
             branch_usable=branch_usable,
             supplied_branches=supplied_branches,
+            prior=prior,
         )
         self.valid &= details["valid"]
         if not defer_check:

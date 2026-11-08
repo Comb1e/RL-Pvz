@@ -3,6 +3,8 @@
 Follow the global `AGENTS.md` for shared workflow, Git, documentation and testing.
 This file owns project-specific invariants and the code map.
 
+If the user has not declared it in advance. Ignore the existing runs by default. New settings should need new runs to continue.
+
 ## Scope and invariants
 
 - Use `.venv\Scripts\python.exe`. Keep one training/model framework and the
@@ -13,26 +15,39 @@ This file owns project-specific invariants and the code map.
   `cherry_bomb_obstacle`, `attacker_pre`, `prediction`, `attacker`, `peashooter` and `normal`; resolve once
   into the runtime layout. Shared scenario sampling attempts live in `tile_scenarios`.
 - Fresh policy inputs are public board facts: entity records and 18 globals.
-  Simulated field/probe outcomes are private auxiliary targets, never observations.
+  The next decision also receives the previous decision's detached effect-head
+  class decisions as five encoder tokens, one per lane. A reset or a first
+  decision masks those tokens. Simulated field/probe outcomes are private
+  auxiliary targets, never observations.
   Future spawns are suppressed inside forks; IDs, schedules, seeds and snapshots stay private.
-- Encode once per decision/fitting call: shared encoder, ten-way action Q head,
-  action-conditioned 45-query decoder. Wait/unavailable branches skip collection
-  decoding. Exact pre-action legality routes every rejected forecast through the
-  same pooled Wait features as explicit Wait. Preserve the proposal for Q and
-  teacher fitting. Later stages retain valid Wait references. All tiles remain
-  candidates. Cache memory within one forward only; branch impossibility precedes tile invalidity.
+- Encode once per decision/fitting call: shared encoder, ten-query action decoder,
+  ten-way action head, and the action-conditioned 45-query tile decoder. The action
+  decoder reads the full board memory on every decision. Wait and an excluded
+  branch skip tile decoding. The effect head reads the played action vector, the
+  chosen tile-decoder cell, and the full board memory. An explicit Wait uses
+  action vector 0 and the learned empty tile vector. Illegal cards and cells are
+  excluded by setting that score to -inf on a selection copy. The choice is not
+  rewritten into Wait. Preserve the proposal for Q and teacher fitting. Later
+  stages retain valid Wait references. Every tile is still scored. A plant cell
+  is a candidate only when it is empty, the card has enough sun, and its cooldown
+  is finished. A dig cell is a candidate only when it holds a plant. Dig itself
+  is excluded when no cell has a plant, and every plant card is excluded when
+  the lawn is full. Cache memory within one forward only.
 - All models are outcome-only. Factual prediction heads, horizon/snapshot labels,
   losses, summaries, storage and legacy resumes are removed. Early stages use
   `placement_outcomes`: exactly one post-proposal field/probe job per exercise,
   including rejections; no null/Wait target or alternatives. Keep placement teachers
-  and stage weights. Train shared/tile/outcome parameters; freeze action-type/null
-  parameters and EMA. Early tile scores receive no outcome-summary injection.
+  and stage weights. Train the tile decoder, tile head, and outcome head; freeze
+  the shared encoder, action decoder, action-type head, and their EMA. Early tile scores
+  receive no outcome-summary injection.
   Reserve no Wait boundary buffers for placement exercises; charge only their
   occupied proposal packets and admitted workers to auxiliary VRAM.
   Peashooter/normal use `action_outcomes` with explicit valid Wait references.
   Predict absolute field depth (11), breach bin (6) and probe depth (11); preserve
   the 56-slot carrier, excluding reserved classes. Field class 10 is equivalent
-  to a recorded breach and supplies the viewer's home probability. Average known
+  to a recorded breach. Static field and probe forecasts are the hard 0/1 depth
+  step of the chosen class; home is 1 only for that class. Breach remains a class
+  distribution. Average known
   terms/lanes, valid tokens and roots equally; never invent unsimulated labels.
   Each stage owns separate `static_field_prediction_weight` and
   `probe_prediction_weight`: scale their terms before the unchanged known-term
@@ -108,9 +123,14 @@ This file owns project-specific invariants and the code map.
 - Main-game guarded CUDA field traces record per-tick depth before defeat and
   actual home entries after mower resolution. They contain no factual horizons or
   bite-contact targets. Resource failures preserve exact work without creating labels.
-- Preliminary stages retain automatic placement objectives. Peashooter additionally
-  trains null parameters. Update EMA only for each phase's trained groups; shared
-  updates may change action predictions. Demo initialization has no auxiliary loss.
+- Preliminary stages retain automatic placement objectives. Prediction keeps
+  every parameter eligible. Later stages freeze the shared encoder. Easy also
+  trains the action decoder. Standard and shared freeze it. Placement and
+  Peashooter train the tile decoder, tile head, and outcome head. Joint stages
+  also train the
+  action head. Forecast-input embeddings stay eligible on every stage, including
+  after the shared encoder is frozen. Update EMA only for each phase's trained
+  groups and copy frozen weights onto the teacher. Demo initialization has no auxiliary loss.
 - Bomb/attacker stages use successful-set cross-entropy over all 45 outputs,
   including occupied cells. Stage temperature follows completed-cohort accuracy,
   fixed across passes. Peashooter uses prioritized visible-lane engine labels and
@@ -120,7 +140,7 @@ This file owns project-specific invariants and the code map.
   Preserve existing user datasets/recordings. Retain human recording, replay
   verification and demo initialization with their demonstration objectives and
   no auxiliary supervision.
-- Only `shared_public_outcomes_q_v6` checkpoints are supported. Reject every older
+- Only `shared_public_outcomes_q_v10` checkpoints are supported. Reject every older
   checkpoint before environment/CUDA preparation for inference, resume and
   initialization; no conversions or legacy execution. New-version recovery retains
   optimizer/counters, owned roots/rows/choices, partial jobs, unpublished results
@@ -150,8 +170,8 @@ This file owns project-specific invariants and the code map.
 
 ## Stages and validation
 
-- Fresh progression: `cherry_bomb → cherry_bomb_obstacle → attacker_pre → prediction → attacker → peashooter
-  → easy → standard → shared`. Explicit normal stages start directly. Preserve
+- Fresh progression: `prediction → cherry_bomb → cherry_bomb_obstacle → attacker_pre → attacker → peashooter
+→ easy → standard → shared`. Explicit normal stages start directly. Preserve
   normal stage indices, independent budgets/counters and saved stage orders.
 - Both bomb stages have no exploration/search. Obstacle boards have exactly one
   engine-verified legal hit. Attacker exercises supply one of four attackers,
@@ -165,11 +185,15 @@ This file owns project-specific invariants and the code map.
   requires all 200 wins and reuses the saved panel on retry. Weights-only stage
   transfers use `--init-from`; recovery retains the saved stage order.
 - Prediction uses 640 seeded, engine-validated current frames per cohort and one
-  exact target for each greedy proposal's effective action. Average all 15 known
+  exact target for each greedy proposal. Average all 15 known
   outcome terms per scene and weight scenes equally. Train the forecast path
-  without warmup, Q, or teachers. Freeze both Q readouts and their EMA. Check a
+  without warmup, Q, or teachers. Every parameter stays eligible. Plant and dig
+  forecasts also train the tile decoder through the chosen cell. This is the
+  only stage that updates the shared encoder. Easy is the later stage that also
+  updates the action decoder. Check a
   saved 200-scene validation panel every 10,000 completed scenes after a full
-  fitted cohort. Each scene must meet the inclusive 0.05 loss threshold.
+  fitted cohort. Each scene passes only when every lane's field depth, breach
+  bin, and probe depth match. All 200 scenes must pass.
 - Only completed episodes or prediction scenes advance budgets and validation clocks. Check at
   configured intervals after fully fitted cohorts. Entire configured cohorts must
   strictly exceed the qualification threshold for game objectives. Prediction uses
@@ -186,28 +210,28 @@ This file owns project-specific invariants and the code map.
 
 Paths are relative to `src/pvz_rl/` unless stated otherwise.
 
-| Area | Ownership |
-| --- | --- |
-| Repository `tools/bootstrap.*`, `tools/stage_game.py` | Verified installation of the pinned engine. |
-| `config.py`, `data/train.toml`, `gpu.py` | Stage tuning, validation panels, model dimensions and device selection. |
-| `policy/` | Shared public encoder, conditional tile decoder, action/tile/outcome readouts, stateless runner and bounded graphs/batching. |
-| `envs/` | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `field_tracking.py` owns guarded per-tick depth and home-entry hooks. |
-| `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py`, `prediction_scenarios.py` | Validated automatic exercises, persistent preparation, bounded oracles, conservative attacker labels and seeded prediction frames. |
-| `learning/training.py`, `cuda_q.py`, `sequential_training.py` | Cohort orchestration, collection/fitting, reporting and atomic recovery. |
-| `envs/field_tracking.py`, `wait_capture.py`, `static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu` | Guarded field observations, exact real-tick capture, isolated field/probe phases, bounded refillable workers, verified suffix caching and queue recovery. |
-| `learning/forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py` | Absolute field/probe targets, shared-forward categorical losses and calibration. |
-| `learning/auxiliary_service.py`, `auxiliary_settings.py`, `async_teacher.py`, `envs/auxiliary_cpu.py`, `auxiliary_cuda.py`, `snapshot_packet.py`, `teacher_rules.py`, `outcome_math.py` | Shared execution with independent interval/teacher routing, immutable packed device roots, event-polled exact continuations, CPU workers and model-free simulation rules. |
-| `learning/effect_collection.py`, `wait_outcomes.py`, `placement_outcomes.py`, `td_targets.py` | Saved candidate tickets, deferred interval and single-placement targets, and frozen-cohort n-step TD. |
-| `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py` | Shared Q fitting/economics, legality attribution and automatic placement losses. |
-| `learning/peashooter_rules.py`, `peashooter_teacher.py`, `envs/lane_preparation.py`, `cuda_lane_oracle.py` | Prioritized lane targets and resumable bounded lane oracles. |
-| `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py` | Bounded trajectories/transport, decision tickets and committed species exploration. |
-| `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py` | Stage transitions, validation qualification, budgets and model/objective identities. |
-| `learning/checkpoints.py`, `training_artifacts.py`, `performance.py`, `demo_initialization.py` | Recovery/weights, artifact retention, execution settings and verified human demo fitting. |
-| `evaluation/`, `monitoring/`, repository diagnostic tools | Greedy evaluation, CPU verification, bounded profiling and benchmarks. |
-| Repository `tools/benchmark_peashooter.py`, `tools/draw_collection_process.py` | Seed-matched total-time/latency sweeps, optional real-collection host/CUDA event timing and two chronological CPU/GPU timelines. Collapse loops to start/end markers; identify waits and unavailable device timing explicitly. |
-| Repository `tools/profile_training_workflow.py` | Bounded actual-CLI startup, collection and recovery audits, or one fully fitted production cohort with CPU/CUDA trace capture. Preserve production cutoff, initialization and presentation; do not equate shortened frozen-policy benchmarks with full training. |
-| Repository `tools/profiling_metrics.py`, `tools/report_training_hotspots.py` | Per-thread exclusive host attribution, GC pauses, calibrated stage events, bounded CUPTI/cProfile windows, per-pass losses and costs per batch/board decision. Tracing must not retain released CUDA scratch; parameter sweeps release each model's graphs before creating the next model. |
-| `presentation/` | Demo recording/replay, live cohort subscriptions and retained reports. `outcome_view.py` displays proposed-action field/probe predictions; disabled effects and unknown targets are explicit. Viewers reuse timestamped episode-scoped journal predictions without model calls. |
+| Area                                                                                                                                                                                    | Ownership                                                                                                                                                                                                                                                                                  |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Repository `tools/bootstrap.*`, `tools/stage_game.py`                                                                                                                                   | Verified installation of the pinned engine.                                                                                                                                                                                                                                                |
+| `config.py`, `data/train.toml`, `gpu.py`                                                                                                                                                | Stage tuning, validation panels, model dimensions and device selection.                                                                                                                                                                                                                    |
+| `policy/`                                                                                                                                                                               | Shared public encoder, previous-forecast lane tokens, action decoder, conditional tile decoder, action/tile/outcome readouts, stateless runner and bounded graphs/batching.                                                                                                                 |
+| `envs/`                                                                                                                                                                                 | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `field_tracking.py` owns guarded per-tick depth and home-entry hooks.                                                                                                                                   |
+| `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py`, `prediction_scenarios.py`                                           | Validated automatic exercises, persistent preparation, bounded oracles, conservative attacker labels and seeded prediction frames.                                                                                                                                                         |
+| `learning/training.py`, `cuda_q.py`, `sequential_training.py`                                                                                                                           | Cohort orchestration, collection/fitting, reporting and atomic recovery.                                                                                                                                                                                                                   |
+| `envs/field_tracking.py`, `wait_capture.py`, `static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu`                                                        | Guarded field observations, exact real-tick capture, isolated field/probe phases, bounded refillable workers, verified suffix caching and queue recovery.                                                                                                                                  |
+| `learning/forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py`                                                                                                           | Absolute field/probe targets, shared-forward categorical losses, hard static/probe indicators, and calibration.                                                                                                            |
+| `learning/auxiliary_service.py`, `auxiliary_settings.py`, `async_teacher.py`, `envs/auxiliary_cpu.py`, `auxiliary_cuda.py`, `snapshot_packet.py`, `teacher_rules.py`, `outcome_math.py` | Shared execution with independent interval/teacher routing, immutable packed device roots, event-polled exact continuations, CPU workers and model-free simulation rules.                                                                                                                  |
+| `learning/effect_collection.py`, `wait_outcomes.py`, `placement_outcomes.py`, `td_targets.py`                                                                                           | Saved candidate tickets, deferred interval and single-placement targets, and frozen-cohort n-step TD.                                                                                                                                                                                      |
+| `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py`                                                                                   | Shared Q fitting/economics, legality attribution and automatic placement losses.                                                                                                                                                                                                           |
+| `learning/peashooter_rules.py`, `peashooter_teacher.py`, `envs/lane_preparation.py`, `cuda_lane_oracle.py`                                                                              | Prioritized lane targets and resumable bounded lane oracles.                                                                                                                                                                                                                               |
+| `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py`                                                                                            | Bounded trajectories/transport, decision tickets and committed species exploration.                                                                                                                                                                                                        |
+| `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py`                                                                                         | Stage transitions, validation qualification, budgets and model/objective identities.                                                                                                                                                                                                       |
+| `learning/checkpoints.py`, `training_artifacts.py`, `performance.py`, `demo_initialization.py`                                                                                          | Recovery/weights, artifact retention, execution settings and verified human demo fitting.                                                                                                                                                                                                  |
+| `evaluation/`, `monitoring/`, repository diagnostic tools                                                                                                                               | Greedy evaluation, CPU verification, bounded profiling and benchmarks.                                                                                                                                                                                                                     |
+| Repository `tools/benchmark_peashooter.py`, `tools/draw_collection_process.py`                                                                                                          | Seed-matched total-time/latency sweeps, optional real-collection host/CUDA event timing and two chronological CPU/GPU timelines. Collapse loops to start/end markers; identify waits and unavailable device timing explicitly.                                                             |
+| Repository `tools/profile_training_workflow.py`                                                                                                                                         | Bounded actual-CLI startup, collection and recovery audits, or one fully fitted production cohort with CPU/CUDA trace capture. Preserve production cutoff, initialization and presentation; do not equate shortened frozen-policy benchmarks with full training.                           |
+| Repository `tools/profiling_metrics.py`, `tools/report_training_hotspots.py`                                                                                                            | Per-thread exclusive host attribution, GC pauses, calibrated stage events, bounded CUPTI/cProfile windows, per-pass losses and costs per batch/board decision. Tracing must not retain released CUDA scratch; parameter sweeps release each model's graphs before creating the next model. |
+| `presentation/`                                                                                                                                                                         | Demo recording/replay, live cohort subscriptions and retained reports. `outcome_view.py` displays proposed-action field/probe predictions; disabled effects and unknown targets are explicit. Viewers reuse timestamped episode-scoped journal predictions without model calls.            |
 
 ## Test ownership
 

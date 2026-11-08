@@ -46,7 +46,7 @@ def current_model_config(cfg):
         identity
         in {
             (
-                "shared_public_outcomes_q_v6",
+                "shared_public_outcomes_q_v10",
                 "entity_public_v4",
                 CURRENT_OBJECTIVE,
                 CURRENT_OBJECTIVE,
@@ -212,6 +212,8 @@ def transfer_protocol(cfg, condition="masked"):
                 "encoder_blocks",
                 "tile_decoder_blocks",
                 "attention_heads",
+                "action_decoder_blocks",
+                "action_decoder_heads",
                 "feedforward_width",
             )
             if k in p

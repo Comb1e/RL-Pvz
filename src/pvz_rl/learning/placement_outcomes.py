@@ -50,12 +50,11 @@ class PlacementOutcomes:
             action = int(request["actions"][slot, 0])
             if request["valid"][slot].sum() != 1:
                 raise RuntimeError("A single-frame exercise must own exactly one proposal")
-            effective = action if request["legal_proposal"][slot] else 0
-            if int(rows["executed_action"][slot]) != effective:
+            if int(rows["executed_action"][slot]) != action:
                 raise RuntimeError("Saved proposal legality differs from execution")
             self.jobs[identity] = dict(
                 row=int(index),
-                action=effective,
+                action=action,
                 root=request["pre_states"][int(slot)],
                 submitted=False,
             )

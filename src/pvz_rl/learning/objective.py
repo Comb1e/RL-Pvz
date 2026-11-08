@@ -313,18 +313,18 @@ def finalize_episode_metrics(rows, cfg, *, median=None, wait_penalties=None, tim
 
 
 @torch.no_grad()
-def species_consistency_targets(online_tiles, ema_tiles, masks, branches):
+def species_consistency_targets(online_tiles, ema_tiles, occupied, branches):
     """Select with online geometry values and evaluate with the frozen EMA."""
     selected = (
         online_tiles.detach().argmax(-1)
-        if masks is None
-        else greedy_choice(online_tiles.detach(), tile_candidates(masks, branches))
+        if occupied is None
+        else greedy_choice(online_tiles.detach(), tile_candidates(occupied, branches))
     )
     targets = ema_tiles.detach().gather(1, selected[:, None]).flatten()
     maxima = (
         ema_tiles.detach().max(-1).values
-        if masks is None
-        else candidate_maxima(ema_tiles.detach(), masks, branches)
+        if occupied is None
+        else candidate_maxima(ema_tiles.detach(), occupied, branches)
     )
     gaps = maxima - targets
     return targets, selected, gaps

@@ -607,12 +607,8 @@ class CudaVecEnv(VecEnv):
         return self.features.mask_tensor
 
     def engine_action_masks_device(self):
-        """Exact pre-action legality, separate from unmasked policy proposals."""
+        """Exact pre-action legality for alternative sampling and baselines."""
         return torch.from_dlpack(self.batch.action_masks_device())
-
-    @staticmethod
-    def effective_actions(proposals, legal):
-        return torch.where(legal.gather(1, proposals[:, None]).squeeze(1), proposals, 0)
 
     def branch_availability(self, active=None):
         """Return pre-action card availability and empty-board Dig rejection.

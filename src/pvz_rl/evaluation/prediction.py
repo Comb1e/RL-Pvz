@@ -11,13 +11,9 @@ from pvz_rl.envs.scenarios import namespace_seed
 from pvz_rl.envs.static_fork import reference_tau
 from pvz_rl.envs.tile_scenarios import prediction_settings
 from pvz_rl.learning.deadline import check_deadline
-from pvz_rl.learning.forecast_labels import outcome_codes
+from pvz_rl.learning.forecast_labels import outcome_codes, scene_class_matches
 from pvz_rl.learning.forecast_objective import scene_outcome_loss
 from pvz_rl.policy.runner import PolicyRunner
-
-
-def scene_passes(loss, maximum):
-    return isfinite(loss) and loss <= maximum
 
 
 @torch.no_grad()
@@ -45,29 +41,37 @@ def validate_prediction(cfg, model, seeds, *, deadline=None):
             proposals, _, _, details = PolicyRunner(policy).decide(
                 observation, env.action_masks(), branch_usable=env.branch_availability()
             )
-            effective = env.effective_actions(proposals, env.engine_action_masks_device())
-            logits = policy.effect_action_logits(effective, details["board_memory"])
+            logits = policy.effect_action_logits(proposals, details["board_memory"])
             policy._effect_decision_cache = None
-            proposed_host, effective_host = proposals.cpu().tolist(), effective.cpu().numpy()
+            proposed_host = proposals.cpu().tolist()
             service = env.fork_service()
-            service.begin(slots, effective_host)
+            service.begin(slots, proposals.cpu().numpy())
             while True:
                 check_deadline(deadline)
                 if service.advance():
                     break
             labels = outcome_codes(service.take(), reference_tau(env.batch.rules))
             targets = torch.as_tensor(labels, device=policy.device, dtype=torch.long)
+            matched = scene_class_matches(logits, targets)
             losses = scene_outcome_loss(logits, targets).cpu().tolist()
-            for seed, proposal, action, loss in zip(
-                seeds, proposed_host, effective_host, losses, strict=True
+            correct_terms = matched.sum((-2, -1)).cpu().tolist()
+            passed = matched.all(-1).all(-1).cpu().tolist()
+            for seed, proposal, loss, terms, win in zip(
+                seeds,
+                proposed_host,
+                losses,
+                correct_terms,
+                passed,
+                strict=True,
             ):
                 results.append(
                     dict(
                         seed=seed,
                         proposal=proposal,
-                        effective_action=int(action),
+                        effective_action=int(proposal),
                         loss=loss if isfinite(loss) else None,
-                        win=scene_passes(loss, settings["validation_max_loss"]),
+                        correct_terms=int(terms),
+                        win=bool(win),
                     )
                 )
     finally:

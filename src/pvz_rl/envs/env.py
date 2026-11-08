@@ -234,9 +234,8 @@ class PvZEnv(gym.Env):
         if self.options["hybrid"]:
             return np.array([a is not None for a in self.candidates()], dtype=np.bool_)
         if self._direct_mask is None or not self.cache_legal_actions:
-            # The policy deliberately scores every tile. Card availability,
-            # cooldown, sunlight and occupancy are simulator outcomes; the
-            # resulting rejection executes as one ordinary wait tick.
+            # Open transport mask. The policy excludes illegal cards and cells
+            # before it chooses; this array is not that exclusion.
             mask = np.zeros(self.codec.size, dtype=np.bool_)
             mask[0] = True
             for plant_index in range(len(self.codec.plants)):

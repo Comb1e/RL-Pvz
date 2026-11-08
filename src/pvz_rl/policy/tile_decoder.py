@@ -35,6 +35,35 @@ class DecoderBlock(nn.Module):
         return queries + self.output(attended.transpose(1, 2).reshape(b, length, width))
 
 
+def run_queries(decoder, memory, valid, *extra):
+    """Run one decoder over row chunks. Query count is ``token_overhead``."""
+    queries = decoder.token_overhead
+    size = max(1, min(decoder.microbatch, decoder.token_budget // (memory.shape[1] + queries)))
+    results = []
+    for start in range(0, len(memory), size):
+        args = (
+            memory[start : start + size],
+            valid[start : start + size],
+            *(value[start : start + size] for value in extra),
+        )
+        logical = len(args[0])
+        if decoder.collection_bucket_rows and not decoder.fitting and not torch.is_grad_enabled():
+            padded = min(size, 1 << (logical - 1).bit_length())
+            if padded != logical:
+                args = tuple(
+                    torch.cat((value, value.new_zeros((padded - logical, *value.shape[1:]))))
+                    for value in args
+                )
+        if decoder.activation_checkpointing and decoder.training and torch.is_grad_enabled():
+            result = checkpoint(decoder._encode, *args, use_reentrant=False)
+        else:
+            result = decoder._encode_with_optional_compile(args)
+        results.append(result[:logical])
+    if not results:
+        return memory.new_empty((0, queries, decoder.width))
+    return torch.cat(results)
+
+
 class TileDecoder(nn.Module):
     # Share the bounded graph lifecycle with the board encoder. The graph takes
     # tensor memory explicitly; no cached board survives a decision or update.
@@ -110,25 +139,4 @@ class TileDecoder(nn.Module):
         return stable_norm(self.norm, queries)
 
     def forward(self, memory, valid, branches):
-        size = max(1, min(self.microbatch, self.token_budget // (memory.shape[1] + 45)))
-        results = []
-        for start in range(0, len(memory), size):
-            args = (
-                memory[start : start + size],
-                valid[start : start + size],
-                branches[start : start + size],
-            )
-            logical = len(args[0])
-            if self.collection_bucket_rows and not self.fitting and not torch.is_grad_enabled():
-                padded = min(size, 1 << (logical - 1).bit_length())
-                if padded != logical:
-                    args = tuple(
-                        torch.cat((value, value.new_zeros((padded - logical, *value.shape[1:]))))
-                        for value in args
-                    )
-            if self.activation_checkpointing and self.training and torch.is_grad_enabled():
-                result = checkpoint(self._encode, *args, use_reentrant=False)
-            else:
-                result = self._encode_with_optional_compile(args)
-            results.append(result[:logical])
-        return torch.cat(results) if results else memory.new_empty((0, 45, self.width))
+        return run_queries(self, memory, valid, branches)

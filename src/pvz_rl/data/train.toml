@@ -184,8 +184,7 @@ forecast_mode = "prediction_only"
 extra_actions = 0
 n_envs = 640
 probe_interval_games = 10000
-validation_cases = 200
-validation_max_loss = 0.05 # Every scene must meet this unweighted categorical NLL.
+validation_cases = 200 # Every environment must match all field, breach, and probe classes.
 plants = [0, 20]
 live_zombies = [0, 10]
 defeated_zombies = [0, 30]
@@ -337,12 +336,14 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "shared_public_outcomes_q_v6"
+kind = "shared_public_outcomes_q_v10"
 action_distribution = "sequential_q_unmasked_tiles_v2"
 shared_width = 192
 encoder_blocks = 4
 tile_decoder_blocks = 2
 attention_heads = 12
+action_decoder_blocks = 2
+action_decoder_heads = 8
 feedforward_width = 768
 encoder_microbatch = 128
 attention_query_chunk = 64

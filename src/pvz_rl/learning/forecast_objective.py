@@ -71,7 +71,13 @@ def scene_outcome_loss(logits, targets):
 
 
 def _effect_objective(policy, observations, rows, memory, features, feature_rows, root_count):
-    """Average known terms, lanes, valid tokens and decision roots equally."""
+    """Average known terms, lanes, valid tokens and decision roots equally.
+
+    Each labeled action reads its action-decoder vector and its chosen tile-decoder
+    cell, then cross-attends the full board memory. An explicit Wait uses the
+    learned empty tile vector.
+    """
+    del observations, features, feature_rows
     device = policy.device
     per_root = memory[0].new_zeros((len(rows), 2), dtype=torch.float32)
     has_null = rows["null_target_valid"]
@@ -82,72 +88,47 @@ def _effect_objective(policy, observations, rows, memory, features, feature_rows
     actions = np.where(
         token == 0, rows["executed_action"][root], rows["effect_actions"][root, token]
     )
-    wait = np.flatnonzero(actions == 0)
-    wait_rows = np.union1d(null_rows, root[wait])
-    if len(wait_rows):
-        at = torch.as_tensor(wait_rows, device=device)
-        wait_logits = policy.effect_values(policy.null_features((memory[0][at], memory[1][at])))
     tokens = torch.as_tensor(has_null.astype(np.float32), device=device)
     metric_tokens = []
-    if len(null_rows):
-        at = torch.as_tensor(null_rows, device=device)
-        null_logits = wait_logits[
-            torch.as_tensor(np.searchsorted(wait_rows, null_rows), device=device)
-        ]
-        target = torch.as_tensor(
-            outcome_codes(
-                np.array(rows["baseline_outcomes"][null_rows]), reference_tau(policy.layout.rules)
-            ),
-            device=device,
-            dtype=torch.long,
-        )
-        per_root = per_root.index_add(0, at, _token_loss_components(null_logits, target))
-        metric_tokens.append((null_logits, target))
-    if len(root):
-        actions = actions.astype(np.int64)
-        branches, tiles = (actions - 1) // 45 + 1, (actions - 1) % 45
-        lookup = np.full((len(rows), 10), -1, np.int64)
-        banks = []
-        if features is not None:
-            at = np.asarray(feature_rows)
-            lookup[at, (rows["action"][at].astype(np.int64) - 1) // 45 + 1] = np.arange(len(at))
-            banks.append(features)
-        legal = np.flatnonzero(actions != 0)
-        missing = np.unique(np.stack((root[legal], branches[legal]), -1), axis=0)
-        missing = missing[lookup[missing[:, 0], missing[:, 1]] < 0]
-        if len(missing):
-            offset = 0 if features is None else len(features)
-            lookup[missing[:, 0], missing[:, 1]] = offset + np.arange(len(missing))
-            banks.append(
-                policy.tile_features(
-                    observations,
-                    torch.as_tensor(missing[:, 1], device=device),
-                    rows=torch.as_tensor(missing[:, 0], device=device),
-                    memory=memory,
-                )
+    if len(null_rows) or len(root):
+        needed = np.unique(np.concatenate((null_rows, root)))
+        at = torch.as_tensor(needed, device=device, dtype=torch.long)
+        subset = (memory[0][at], memory[1][at])
+        vectors = policy.action_vectors(subset)
+        if len(null_rows):
+            pick = torch.as_tensor(np.searchsorted(needed, null_rows), device=device)
+            null_logits = policy.forecast_logits(
+                vectors[pick],
+                torch.zeros(len(null_rows), dtype=torch.long, device=device),
+                (subset[0][pick], subset[1][pick]),
             )
-        predictions = memory[0].new_zeros((len(root), 5, policy.effect_width))
-        if len(legal):
-            bank = banks[0] if len(banks) == 1 else torch.cat(banks)
-            selected = bank[
-                torch.as_tensor(lookup[root[legal], branches[legal]], device=device),
-                torch.as_tensor(tiles[legal], device=device),
-            ]
-            predictions = predictions.index_copy(
-                0, torch.as_tensor(legal, device=device), policy.effect_values(selected)
+            target = torch.as_tensor(
+                outcome_codes(
+                    np.array(rows["baseline_outcomes"][null_rows]),
+                    reference_tau(policy.layout.rules),
+                ),
+                device=device,
+                dtype=torch.long,
             )
-        if len(wait):
-            selected = torch.as_tensor(np.searchsorted(wait_rows, root[wait]), device=device)
-            predictions = predictions.index_copy(
-                0, torch.as_tensor(wait, device=device), wait_logits[selected]
+            per_root = per_root.index_add(
+                0,
+                torch.as_tensor(null_rows, device=device),
+                _token_loss_components(null_logits, target),
             )
-        targets = torch.as_tensor(
-            np.array(rows["effect_labels"][root, token]), device=device, dtype=torch.long
-        )
-        at = torch.as_tensor(root, device=device)
-        per_root = per_root.index_add(0, at, _token_loss_components(predictions, targets))
-        tokens = tokens.index_add(0, at, tokens.new_ones(len(root)))
-        metric_tokens.append((predictions, targets))
+            metric_tokens.append((null_logits, target))
+        if len(root):
+            labeled = torch.as_tensor(np.asarray(actions, dtype=np.int64), device=device)
+            pick = torch.as_tensor(np.searchsorted(needed, root), device=device)
+            predictions = policy.forecast_logits(
+                vectors[pick], labeled, (subset[0][pick], subset[1][pick])
+            )
+            targets = torch.as_tensor(
+                np.array(rows["effect_labels"][root, token]), device=device, dtype=torch.long
+            )
+            root_at = torch.as_tensor(root, device=device)
+            per_root = per_root.index_add(0, root_at, _token_loss_components(predictions, targets))
+            tokens = tokens.index_add(0, root_at, tokens.new_ones(len(root)))
+            metric_tokens.append((predictions, targets))
     loss = (per_root / tokens.clamp_min(1)[:, None]).sum(0) / max(1, int(root_count))
     return loss, metric_tokens, tokens
 

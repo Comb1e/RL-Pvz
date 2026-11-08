@@ -7,6 +7,7 @@ from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.envs.static_fork import reference_tau
 from pvz_rl.learning.action_routing import FitRoute
 from pvz_rl.learning.objective import selected_action_targets, training_rewards
+from pvz_rl.policy.forecast_input import prior_from_rows
 
 
 def nstep_returns(rewards, durations, bootstrap, terminal, *, n, gamma):
@@ -73,10 +74,11 @@ class TDTargetBuilder:
             last = min(buffer.size, self.cursor + model.cfg["training"]["batch_size"])
             rows = buffer.take(np.arange(self.cursor, last))
             obs = buffer.observations(rows, device=model.device)
+            prior = prior_from_rows(rows, model.device)
             with torch.no_grad():
-                online = model.policy.species_values(obs).float()
+                online = model.policy.species_values(obs, prior=prior).float()
                 selected = online.argmax(-1)
-                target = model._teacher.species_values(obs).float()
+                target = model._teacher.species_values(obs, prior=prior).float()
                 self.bootstrap[self.cursor : last] = (
                     target.gather(1, selected[:, None]).flatten().cpu().numpy()
                 )

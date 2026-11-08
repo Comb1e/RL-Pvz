@@ -56,18 +56,39 @@ def effect_loss(logits, labels):
     return effect_loss_components(logits, labels).sum(-1)
 
 
+def depth_indicators(classes):
+    """Home and columns 1–9 as a 0/1 step of an 11-way depth class.
+
+    The caller resolves ties. Home is 1 only for class 10. Column threshold
+    ``t`` in 9..1 is 1 when the class is at least ``t``.
+    """
+    classes = torch.as_tensor(classes)
+    home = (classes == 10).to(dtype=torch.float32)
+    thresholds = torch.arange(9, 0, -1, device=classes.device)
+    cells = (classes[..., None] >= thresholds).to(dtype=torch.float32)
+    return torch.cat((home[..., None], cells), -1)
+
+
 def effect_forecast(logits):
-    """Post-action field/probe CDFs, in home and left-to-right column order."""
+    """Post-action field/probe depth steps, in home and left-to-right column order."""
     field, _, probe = effect_blocks(logits)
-    result = []
-    support = torch.arange(11, device=logits.device)
-    thresholds = torch.arange(9, 0, -1, device=logits.device)
-    for block in (field, probe):
-        p = block.softmax(-1)
-        cells = (p[..., None, :] * (support >= thresholds[:, None])).sum(-1)
-        home = p[..., 10]
-        result.append(torch.cat((home[..., None], cells), -1))
-    return torch.stack(result, -3)
+    return torch.stack(
+        (
+            depth_indicators(field.argmax(-1)),
+            depth_indicators(probe.argmax(-1)),
+        ),
+        -3,
+    )
+
+
+def scene_class_matches(logits, targets):
+    """Known field, breach, and probe classes whose chosen id equals the label."""
+    targets = torch.as_tensor(targets, device=logits.device, dtype=torch.long)
+    matches = []
+    for index, block in enumerate(effect_blocks(logits)):
+        label = targets[..., index]
+        matches.append((block.argmax(-1) == label) & (label >= 0))
+    return torch.stack(matches, -1)
 
 
 def effect_summary(logits):

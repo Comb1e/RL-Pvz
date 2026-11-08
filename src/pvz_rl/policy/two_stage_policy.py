@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import torch
 
 from pvz_rl.envs.encoding import collate_observations
+from pvz_rl.policy.forecast_input import ForecastCarry
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 
 
@@ -42,6 +43,16 @@ class TwoStageQPolicy(TwoStageTransformerPolicy):
                 len(observations), -1
             )
         )
-        actions, _ = self.decide(observations, action_masks=masks, deterministic=deterministic)
+        carry = getattr(self, "_forecast_carry", None)
+        if carry is None or len(carry) != len(observations):
+            carry = ForecastCarry(len(observations), self.device)
+            self._forecast_carry = carry
+        if episode_start is not None:
+            carry.clear_mask(episode_start)
+        actions, details = self.decide(
+            observations, action_masks=masks, deterministic=deterministic, prior=carry.as_prior()
+        )
+        active = torch.ones(len(observations), dtype=torch.bool, device=self.device)
+        carry.record(self, actions, details["board_memory"], active)
         result = actions.cpu().numpy()
         return (result if vectorized else result[0]), None

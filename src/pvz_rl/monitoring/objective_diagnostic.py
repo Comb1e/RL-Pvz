@@ -166,7 +166,7 @@ def run(checkpoint, output):
                 compilation_status={
                     stage: encoder.compilation_status
                     for stage, encoder in zip(
-                        ("species", "tile"), model.policy.encoders, strict=True
+                        model.policy.encoder_names, model.policy.encoders, strict=True
                     )
                 },
             )

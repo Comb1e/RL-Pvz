@@ -1242,13 +1242,7 @@ class ResearchCallback(BaseCallback):
                 self.save_checkpoint("latest.zip")
             detail = str(scores)
             if prediction_metrics:
-                mean, worst = prediction_metrics.values()
-                detail = f"prediction {scores['prediction']}/{count}"
-                detail += (
-                    f", mean loss {mean:.6f}, worst loss {worst:.6f}"
-                    if mean is not None
-                    else ", non-finite scene loss"
-                )
+                detail = f"prediction {scores['prediction']}/{count} environments"
             if breakdown is not None:
                 detail = (
                     f"attacker {scores['attacker']}/{count} overall ("

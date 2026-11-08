@@ -2,9 +2,12 @@
 
 Train a sequential Q policy against a pinned Plants vs. Zombies simulator. A
 shared Transformer encodes the public board, an action readout chooses
-Wait/species/Dig, and a conditional decoder scores all 45 tiles. Exact simulated
+Wait/species/Dig, and a conditional decoder scores all 45 tiles. Illegal cards
+and cells are excluded before that choice: a plant needs sun, a finished
+cooldown, and an empty cell; Dig needs a cell that already has a plant. The next
+decision reads the previous effect-head classes as five encoder tokens. Exact simulated
 post-action outcomes serve as auxiliary training targets only; validation uses
-the greedy network on public inputs.
+the greedy network on the public board and those previous forecast tokens.
 
 ## Requirements
 
@@ -52,7 +55,7 @@ Start autonomous training when ready:
 ```
 
 Default progression is
-`cherry_bomb → cherry_bomb_obstacle → attacker_pre → prediction → attacker → peashooter → easy → standard → shared`.
+`prediction → cherry_bomb → cherry_bomb_obstacle → attacker_pre → attacker → peashooter → easy → standard → shared`.
 Use `--stage NAME --until-stage-complete` for one stage, or `--games N` for a
 completed-episode budget. Explicit normal stages skip preliminary stages. Omit
 `--init-from` to start with random weights.
@@ -61,20 +64,27 @@ Each stage can start from the previous stage's weights;
 [pre_train.ps1](tools/pre_train.ps1) chains them in order:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pvz_rl train --stage prediction --until-stage-complete `
-  --init-from runs\compact-stages\attacker_pre\final.zip --output runs\compact-stages\prediction `
+.\.venv\Scripts\python.exe -m pvz_rl train --stage cherry_bomb --until-stage-complete `
+  --init-from runs\compact-stages\prediction\final.zip --output runs\compact-stages\cherry_bomb `
   --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
 `prediction` fits the selected action's field and probe forecasts on randomized
-current frames. The live viewer labels completed scenes `scored`. All 200
-validation scenes must have a categorical loss of 0.05 or less. Use its
-`final.zip` to initialize `attacker`.
+current frames. The live viewer labels completed scenes `scored`. An environment
+passes only when every lane's field depth, breach bin, and probe depth match.
+All 200 validation environments must pass. Prediction keeps every parameter
+eligible. Later stages freeze the shared board encoder. Easy also trains the
+action decoder. Standard and shared keep it fixed. Placement and Peashooter
+train the tile decoder with the tile and outcome heads. Joint stages also
+train the action head. The forecast reads the executed action vector, the
+chosen cell, and the full board memory. Use the prediction `final.zip` to
+initialize `cherry_bomb`.
 
 Across stages, a probe starts once the field clears, queued shots fire and their
 projectiles clear, moving mowers finish, and surviving Chompers are ready. The
-static-field **H** cell shows the chance of reaching the house. Start fresh with
-this model version and use its checkpoints for `--resume` and `--init-from`.
+static-field **H** cell is 1 when the predicted field class is home. Start fresh
+with `shared_public_outcomes_q_v10` and use its checkpoints for `--resume` and
+`--init-from`.
 
 `attacker` mixes the three placement exercises in shuffled 640-board cohorts
 (64 Cherry Bomb, 256 Obstacle, 320 Attacker Pre) and requires 200/200 on a fresh
