@@ -380,6 +380,7 @@ def _verify_action_order(archive_rows: list[dict], replay_path: Path, cfg: dict)
         final = observation_json(encoder.encode(game.observe()))
         if not observations_equal(final_rows[-1]["observation"], final):
             raise ValueError("final observation reconstruction mismatch")
+
     return {
         "replay_sha256": file_hash(replay_path),
         "decisions": len(transitions),
@@ -415,9 +416,7 @@ def _load_verified_demo(
     if not manifest_path.exists():
         raise ValueError("Demonstration archive manifest is missing")
     if manifest.get("protocol") != "pvz-rl/transition-archive-v2":
-        raise ValueError(
-            "Unsupported demonstration archive protocol; record a fresh entity_v1 demonstration"
-        )
+        raise ValueError("Unsupported demonstration archive protocol; record a fresh demonstration")
     # Learning settings are not recording inputs. Validate the pinned engine,
     # schema and native replay facts instead of the complete configuration hash.
     if manifest.get("engine") != {
@@ -647,6 +646,7 @@ def _initialize_demo(
                 consistency_counts=consistency_counts,
                 coefficients=coefficients,
                 return_forward=True,
+                demonstration=True,
             )
             selected = torch.as_tensor(np.flatnonzero(rows["accepted"][start:stop]), device=device)
             if len(selected):

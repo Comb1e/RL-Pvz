@@ -13,9 +13,9 @@ from pvz_rl.envs.cuda_accounting import ACCOUNTING_WIDTH
 from pvz_rl.envs.encoding import (
     ENTITY_FIELDS,
     ENTITY_WIDTH,
-    GLOBAL_WIDTH,
     EntityBatch,
     ObservationEncoder,
+    global_width,
     width_bucket,
 )
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
@@ -52,7 +52,7 @@ class CudaFeatures:
             "ACCOUNTING_WIDTH": ACCOUNTING_WIDTH,
             "ENTITY_LIMIT": self.limit,
             "RECORD_CAPACITY": 50 + batch.zcap,
-            "GLOBAL_WIDTH": GLOBAL_WIDTH,
+            "GLOBAL_WIDTH": global_width(cfg),
             "ACTION_DIG_START": ActionSchema.dig_start,
             "ACTION_COUNT": ActionSchema.size,
             "ACTION_TILES": ActionSchema.tiles,
@@ -122,10 +122,13 @@ class CudaFeatures:
         rows = 0 if accounting_only else (batch.n if store_rows is None else store_rows)
         self.entities = cp.zeros((rows, self.limit, ENTITY_WIDTH), cp.int32)
         self.entity_mask = cp.zeros((rows, self.limit), cp.bool_)
-        self.globals = cp.zeros((rows, GLOBAL_WIDTH), cp.float32)
+        self.globals = cp.zeros((rows, global_width(cfg)), cp.float32)
         # Kept count, then plants/zombies/projectiles omitted by the entity cap.
         self.summary = cp.zeros((rows, 4), cp.int64)
-        self.records = cp.zeros((0 if accounting_only else batch.n, 50 + batch.zcap, ENTITY_WIDTH), cp.int32)
+        self.lane_zombies = cp.zeros((rows, 5), cp.int16)
+        self.records = cp.zeros(
+            (0 if accounting_only else batch.n, 50 + batch.zcap, ENTITY_WIDTH), cp.int32
+        )
         self.truncation_counts = self.summary[: batch.n, 1:]
         self.entity_tensor = torch.from_dlpack(self.entities)
         self.entity_mask_tensor = torch.from_dlpack(self.entity_mask)
@@ -217,6 +220,7 @@ class CudaFeatures:
                 self.globals[rows],
                 self.assets,
                 self.summary[rows],
+                self.lane_zombies[rows],
                 b.n,
             ),
         )
@@ -258,20 +262,25 @@ class CudaFeatures:
         publish=True,
         phase="simulation",
         observation_active=None,
+        action_only=False,
     ):
         b, cp = self.batch, self.batch.cp
         with self._track(phase):
             cp.copyto(self.before_assets, self.assets)
             cp.copyto(self.before_header, b.header)
             cp.copyto(self.before_cooldowns, b.cooldowns)
-            b.step_device(actions, ticks=ticks, per_tick=per_tick)
+            if action_only:
+                b.apply_actions_device(actions)
+            else:
+                b.step_device(actions, ticks=ticks, per_tick=per_tick)
         with self._track("encoding"):
             cp.copyto(self.enabled, b.header[:, 17], casting="unsafe")
             if observation_active is not None:
                 b.header[:, 17] = observation_active
             if self.accounting_only:
-                self.asset_kernel(((b.n + 63) // 64,), (64,),
-                                  (b.header, b.plants, self.assets, b.n))
+                self.asset_kernel(
+                    ((b.n + 63) // 64,), (64,), (b.header, b.plants, self.assets, b.n)
+                )
                 observation = None
             else:
                 observation = self.encode(offset=offset, publish=publish)

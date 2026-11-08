@@ -42,6 +42,9 @@ class EpisodeState(StrEnum):
 class PvZEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"], "render_fps": 2}
 
+    def _encoded_public(self):
+        return self.encoder.encode(self.public)
+
     def __init__(
         self,
         cfg: dict | None = None,
@@ -192,7 +195,7 @@ class PvZEnv(gym.Env):
         self.first_attacker_tick = None
         self.episode_reward = 0.0
         self.cutoff_ticks = self.cfg["environment"]["cutoff_seconds"] * self.public.tick_rate
-        encoded = self.encoder.encode(self.public)
+        encoded = self._encoded_public()
         return encoded, {
             "status": self.state.value,
             "entity_truncation": self.encoder.last_truncation,
@@ -231,9 +234,8 @@ class PvZEnv(gym.Env):
         if self.options["hybrid"]:
             return np.array([a is not None for a in self.candidates()], dtype=np.bool_)
         if self._direct_mask is None or not self.cache_legal_actions:
-            # The policy deliberately scores every tile. Card availability,
-            # cooldown, sunlight and occupancy are simulator outcomes; the
-            # resulting rejection executes as one ordinary wait tick.
+            # Open transport mask. The policy excludes illegal cards and cells
+            # before it chooses; this array is not that exclusion.
             mask = np.zeros(self.codec.size, dtype=np.bool_)
             mask[0] = True
             for plant_index in range(len(self.codec.plants)):
@@ -451,7 +453,7 @@ class PvZEnv(gym.Env):
                     }
                 )
             info["episode_metrics"] = self.episode_metrics()
-        encoded = self.encoder.encode(self.public)
+        encoded = self._encoded_public()
         info["entity_truncation"] = self.encoder.last_truncation
         return encoded, parts["total"], terminated, truncated, info
 

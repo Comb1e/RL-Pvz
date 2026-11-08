@@ -21,7 +21,10 @@ def attacker_settings(cfg):
 
 
 def warmup_ticks(rules, settings):
-    return max(rules.plants[k].get("initial_recharge_ticks", -1) for k in settings["provided_plants"]) + 2
+    return (
+        max(rules.plants[k].get("initial_recharge_ticks", -1) for k in settings["provided_plants"])
+        + 2
+    )
 
 
 def _integral(deltas, start, length):
@@ -54,8 +57,10 @@ def motion_bound(ticks, units, minimum_speed, maximum_speed, lower=False):
     values = []
     for deltas in GAITS[:2]:
         frames = len(deltas) + 1
-        rates = [s * frames * SPEC["animation_factor"] * SCALE // (100 * sum(deltas))
-                 for s in (minimum_speed, maximum_speed)]
+        rates = [
+            s * frames * SPEC["animation_factor"] * SCALE // (100 * sum(deltas))
+            for s in (minimum_speed, maximum_speed)
+        ]
         phase_step = rates[1] / (100 * frames)
         advance = ticks * rates[0 if lower else 1] / (100 * frames)
         cycles, rest = divmod(advance, SCALE)
@@ -64,8 +69,9 @@ def motion_bound(ticks, units, minimum_speed, maximum_speed, lower=False):
         starts += [(x - rest) % SCALE for x in starts]
         partial = (min if lower else max)(_integral(deltas, x, rest) for x in starts)
         integral = cycles * width * sum(deltas) + partial
-        variation = sum(max(0, (b - a) if lower else (a - b))
-                        for a, b in zip(deltas, (*deltas[1:], deltas[0])))
+        variation = sum(
+            max(0, (b - a) if lower else (a - b)) for a, b in zip(deltas, (*deltas[1:], deltas[0]))
+        )
         crossings = math.ceil(ticks * phase_step / SCALE) + 2
         error = crossings * variation * (math.ceil(phase_step) + 1)
         factor = 100 * frames * units / MOVE_DENOMINATOR
@@ -76,7 +82,9 @@ def motion_bound(ticks, units, minimum_speed, maximum_speed, lower=False):
 
 def _motion(rules, ticks, *, lower=False):
     basic = rules.zombies["basic"]
-    return motion_bound(ticks, rules.game["units_per_tile"], basic["speed"], basic["max_speed"], lower)
+    return motion_bound(
+        ticks, rules.game["units_per_tile"], basic["speed"], basic["max_speed"], lower
+    )
 
 
 @lru_cache(maxsize=8)
@@ -85,8 +93,16 @@ def attacker_bounds(rules):
     g, basic = rules.game, rules.zombies["basic"]
     units = g["units_per_tile"]
     # Maximum x relative to the plant at which an ordinary bite can begin.
-    contact = (SPEC["plant_inset_pixels"] + SPEC["plant_width_pixels"]
-               - SPEC["contact_overlap_pixels"] - SPEC["attack_offset_pixels"]) * units / SPEC["source_tile_pixels"]
+    contact = (
+        (
+            SPEC["plant_inset_pixels"]
+            + SPEC["plant_width_pixels"]
+            - SPEC["contact_overlap_pixels"]
+            - SPEC["attack_offset_pixels"]
+        )
+        * units
+        / SPEC["source_tile_pixels"]
+    )
     flight = math.ceil(g["cols"] * units * g["tick_rate"] / g["projectile_speed"]) + 1
     table = {}
     for kind in ATTACKERS:
@@ -99,7 +115,9 @@ def attacker_bounds(rules):
             table[kind] = {str(n): dict(cells=cells, horizon=horizon) for n in (1, 2)}
             continue
         full = math.ceil((basic["health"] + basic["armor"]) / spec["damage"])
-        defeat = math.ceil((basic["armor"] + basic["health"] - basic["health"] // 3 + 1) / spec["damage"])
+        defeat = math.ceil(
+            (basic["armor"] + basic["health"] - basic["health"] // 3 + 1) / spec["damage"]
+        )
         table[kind] = {}
         for n in (1, 2):
             shots = (n - 1) * full + defeat
@@ -143,7 +161,7 @@ def attacker_initials(cfg, seed, *, start=0, rules=None, deadline=None, case=Non
     rows, cols, units = (rules.game[k] for k in ("rows", "cols", "units_per_tile"))
     tick = warmup_ticks(rules, settings)
     kinds = [k for k in cfg["environment"]["plants"] if k != "cherry_bomb"]
-    for attempt in range(cfg["training"]["annotation"]["sampling_max_attempts"]):
+    for attempt in range(cfg["training"]["tile_scenarios"]["sampling_max_attempts"]):
         check_deadline(deadline)
         supplied = rng.choice(settings["provided_plants"])
         count = rng.randint(*settings["zombie_count"])
@@ -153,33 +171,58 @@ def attacker_initials(cfg, seed, *, start=0, rules=None, deadline=None, case=Non
         background = [r for r in range(rows) if r != row]
         tiles = [r * cols + rng.randrange(cols) for r in background]
         count_plants = rng.randint(*settings["plants"])
-        tiles += rng.sample([t for t in range(rows * cols) if t // cols != row and t not in tiles],
-                            count_plants - len(tiles))
+        tiles += rng.sample(
+            [t for t in range(rows * cols) if t // cols != row and t not in tiles],
+            count_plants - len(tiles),
+        )
         plants = tuple(InitialPlant(rng.choice(kinds), *divmod(t, cols)) for t in tiles)
         positions = sorted(rng.sample(range(cols * units), count))
-        level = LevelSpec("tile-attacker-pre", tuple(Spawn(tick, "basic", row, x=x) for x in positions),
-                          initial_sun=settings["initial_sun"], plants=plants, mowers=False)
+        level = LevelSpec(
+            "tile-attacker-pre",
+            tuple(Spawn(tick, "basic", row, x=x) for x in positions),
+            initial_sun=settings["initial_sun"],
+            plants=plants,
+            mowers=False,
+        )
         if attempt < start:
             continue
         game.reset(level, seed)
         mower_rng = random.Random(namespace_seed(f"tile-attacker-mowers/{attempt}", seed))
-        set_initial_mowers(game, [r for r in range(rows) if mower_rng.random() < settings["mower_ready_probability"]])
-        yield game, attempt, dict(supplied_plant=supplied, zombie_count=count, target_row=row,
-                                 bounds=attacker_bounds(rules), scenario="attacker_pre")
+        set_initial_mowers(
+            game,
+            [r for r in range(rows) if mower_rng.random() < settings["mower_ready_probability"]],
+        )
+        yield (
+            game,
+            attempt,
+            dict(
+                supplied_plant=supplied,
+                zombie_count=count,
+                target_row=row,
+                bounds=attacker_bounds(rules),
+                scenario="attacker_pre",
+            ),
+        )
 
 
 def label_attacker(board, rules):
     """Return labels after natural cooldown warmup; never simulate placements."""
     snap, kind = board["snapshot"], board["supplied_plant"]
-    targets = sorted((z for z in snap["zombies"] if z["health"] > 0 and not z["headless"]),
-                     key=lambda z: (z["x"], z["id"]))
+    targets = sorted(
+        (z for z in snap["zombies"] if z["health"] > 0 and not z["headless"]),
+        key=lambda z: (z["x"], z["id"]),
+    )
     row, n = board["target_row"], board["zombie_count"]
     occupied = {p["row"] * 9 + p["col"] for p in snap["plants"]}
-    if (snap["status"] != "running" or len(targets) != n
-            or any(z["row"] != row or z["kind"] != "basic" for z in targets)
-            or any(t // 9 == row for t in occupied)
-            or snap["sun"] < rules.plants[kind]["cost"] or snap["cooldowns"][kind] != 0
-            or board["bounds"] != attacker_bounds(rules)):
+    if (
+        snap["status"] != "running"
+        or len(targets) != n
+        or any(z["row"] != row or z["kind"] != "basic" for z in targets)
+        or any(t // 9 == row for t in occupied)
+        or snap["sun"] < rules.plants[kind]["cost"]
+        or snap["cooldowns"][kind] != 0
+        or board["bounds"] != attacker_bounds(rules)
+    ):
         return None
     units = rules.game["units_per_tile"]
     bound = board["bounds"]["table"][kind][str(n)]
@@ -196,20 +239,28 @@ def label_attacker(board, rules):
             if _arrival(rules, front, latest=True) + 2 >= _arrival(rules, rear, latest=False):
                 continue
         positive.append(row * 9 + col)
-    return dict(board, target_ids=[z["id"] for z in targets],
-                feasible_tiles=positive or [row * 9], absolute_infeasible_tiles=sorted(occupied),
-                fallback=not positive, required_cells=bound["cells"])
+    return dict(
+        board,
+        target_ids=[z["id"] for z in targets],
+        feasible_tiles=positive or [row * 9],
+        absolute_infeasible_tiles=sorted(occupied),
+        fallback=not positive,
+        required_cells=bound["cells"],
+    )
 
 
 def sample_attacker(cfg, seed, *, start=0, rules=None, deadline=None, case=None):
-    for game, attempt, metadata in attacker_initials(cfg, seed, start=start, rules=rules,
-                                                    deadline=deadline, case=case):
+    for game, attempt, metadata in attacker_initials(
+        cfg, seed, start=start, rules=rules, deadline=deadline, case=case
+    ):
         ticks = warmup_ticks(game.rules, attacker_settings(cfg))
         for offset in range(0, ticks, 256):
             check_deadline(deadline)
             game.step(Wait(), ticks=min(256, ticks - offset))
-        board = label_attacker(dict(metadata, snapshot=EngineSnapshot.capture(game),
-                                    generation_failures=attempt), game.rules)
+        board = label_attacker(
+            dict(metadata, snapshot=EngineSnapshot.capture(game), generation_failures=attempt),
+            game.rules,
+        )
         if board is not None:
             return board
     from pvz_rl.envs.tile_scenarios import generation_failure
@@ -239,7 +290,9 @@ def attacker_result(cfg, board, tile, *, rules=None, deadline=None):
     accepted = game.validate_action(action).accepted
     source, projectiles, defeated = game._next_id, set(), set()
     cutoff = int(cfg["environment"]["cutoff_seconds"] * game.rules.game["tick_rate"])
-    wanted = set(board["target_ids"][:1] if board["supplied_plant"] == "potato_mine" else board["target_ids"])
+    wanted = set(
+        board["target_ids"][:1] if board["supplied_plant"] == "potato_mine" else board["target_ids"]
+    )
     pending = action
     while accepted and game.observe().status == Status.RUNNING and game._tick < cutoff:
         check_deadline(deadline)
@@ -250,7 +303,13 @@ def attacker_result(cfg, board, tile, *, rules=None, deadline=None):
             break
     killed = wanted <= defeated
     correct = accepted and tile in board["feasible_tiles"]
-    return dict(win=bool(correct and (board["fallback"] or killed)), target_correct=bool(correct),
-                actual_kill=bool(killed), attributed_kills=len(set(board["target_ids"]) & defeated),
-                fallback=board["fallback"], supplied_plant=board["supplied_plant"],
-                zombie_count=board["zombie_count"], engine_status=game.observe().status.value)
+    return dict(
+        win=bool(correct and (board["fallback"] or killed)),
+        target_correct=bool(correct),
+        actual_kill=bool(killed),
+        attributed_kills=len(set(board["target_ids"]) & defeated),
+        fallback=board["fallback"],
+        supplied_plant=board["supplied_plant"],
+        zombie_count=board["zombie_count"],
+        engine_status=game.observe().status.value,
+    )

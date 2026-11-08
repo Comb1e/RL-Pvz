@@ -583,9 +583,9 @@ class FitDiagnostics:
 
         def diagnostic_train(cfg, *args, **kwargs):
             cfg = deepcopy(cfg)
+            cfg["training"]["random_cohort_seeds"] = False
             cfg["training"].pop("peashooter_rules", None)
-            for stage in ("normal", "peashooter"):
-                cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
+            cfg["training"]["forecasts"]["enabled"] = False
             return ordinary_train(cfg, *args, **kwargs)
 
         self.patches.enter_context(patch.object(training, "train", diagnostic_train))

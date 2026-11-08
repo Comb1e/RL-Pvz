@@ -419,8 +419,7 @@ def benchmark(
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg = load_config()
     cfg["training"].pop("peashooter_rules", None)
-    for stage in ("normal", "peashooter"):
-        cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
+    cfg["training"]["forecasts"]["enabled"] = False
     from pvz_rl.config import validate_config
 
     validate_config(cfg)
@@ -523,7 +522,8 @@ def benchmark(
                             model.policy.species_head[-1].bias.zero_()
                             model.policy.tile_head[-1].weight.zero_()
                             model.policy.tile_head[-1].bias.zero_()
-                            model.policy.species_head[-1].bias[branch] = 1
+                            model.policy.species_bias.zero_()
+                            model.policy.species_bias[branch] = 1
                         reset(model, callback, raw, 101, live_count=count)
                         setup = perf_counter() - started
 

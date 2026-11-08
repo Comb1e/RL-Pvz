@@ -96,30 +96,20 @@ def residual_sun_wait_penalties(rows, amount):
         & (ordered["route"] == int(FitRoute.WAIT_RETURN))
         & (ordered["exploration_mode"] == 0)
     )
-    starts, stops = [], []
-    start = None
-    for index, is_eligible in enumerate(eligible):
-        continues = bool(is_eligible and start is not None)
-        if continues:
-            previous = index - 1
-            continues = bool(
-                eligible[previous]
-                and int(ordered["decision"][index])
-                == int(ordered["decision"][previous]) + 1
-                and not (
-                    ("reset" in names and ordered["reset"][index])
-                    or ("run_break" in names and ordered["run_break"][index])
-                    or ("done" in names and ordered["done"][previous])
-                )
-            )
-        if not continues:
-            if start is not None:
-                stops.append(index)
-            start = index if is_eligible else None
-            if start is not None:
-                starts.append(start)
-    if start is not None:
-        stops.append(len(ordered))
+    # A row continues the run when it and its predecessor are eligible
+    # consecutive decisions with no reset, run break or terminal between them.
+    decision = ordered["decision"]
+    continues = np.zeros(len(ordered), dtype=bool)
+    linked = (decision[1:] > decision[:-1]) & (decision[1:] - decision[:-1] == 1)
+    for name, at in (("reset", slice(1, None)), ("run_break", slice(1, None)), ("done", slice(-1))):
+        if name in names:
+            linked &= ~ordered[name][at].astype(bool)
+    continues[1:] = eligible[1:] & eligible[:-1] & linked
+    starts = np.flatnonzero(eligible & ~continues)
+    breaks = np.flatnonzero(~continues)
+    following = np.searchsorted(breaks, starts, side="right")
+    stops = np.append(breaks, len(ordered))[following]
+    starts, stops = starts.tolist(), stops.tolist()
 
     lengths = [stop - begin for begin, stop in zip(starts, stops, strict=True)]
     minimum = min(lengths, default=0)
@@ -154,7 +144,7 @@ def residual_sun_wait_penalties(rows, amount):
     }
 
 
-OBJECTIVE_PROTOCOL = "complete_return_action_global_v7"
+OBJECTIVE_PROTOCOL = "nstep_fork_forecast_v3"
 # These are the only reward components that train the policy.  The simulator
 # still publishes the older diagnostic fields (combat_value, home_proximity,
 # victory_time, and so on) for reports and replay verification. Cohort-ranked
@@ -173,7 +163,7 @@ def selected_action_targets(returns, routes, minimum_q, invalid_offset):
     """Fit invalid proposals below their responsible head's detached minimum.
 
     Shared by autonomous/demo regression and NumPy prefit diagnostics. Ordinary
-    waits and accepted actions keep their original complete-return targets.
+    waits and accepted actions keep their supplied value targets.
     """
     invalid = (routes == FitRoute.SPECIES_INVALID) | (routes == FitRoute.TILE_INVALID)
     if isinstance(returns, torch.Tensor):
@@ -323,18 +313,18 @@ def finalize_episode_metrics(rows, cfg, *, median=None, wait_penalties=None, tim
 
 
 @torch.no_grad()
-def species_consistency_targets(online_tiles, ema_tiles, masks, branches):
+def species_consistency_targets(online_tiles, ema_tiles, occupied, branches):
     """Select with online geometry values and evaluate with the frozen EMA."""
     selected = (
         online_tiles.detach().argmax(-1)
-        if masks is None
-        else greedy_choice(online_tiles.detach(), tile_candidates(masks, branches))
+        if occupied is None
+        else greedy_choice(online_tiles.detach(), tile_candidates(occupied, branches))
     )
     targets = ema_tiles.detach().gather(1, selected[:, None]).flatten()
     maxima = (
         ema_tiles.detach().max(-1).values
-        if masks is None
-        else candidate_maxima(ema_tiles.detach(), masks, branches)
+        if occupied is None
+        else candidate_maxima(ema_tiles.detach(), occupied, branches)
     )
     gaps = maxima - targets
     return targets, selected, gaps

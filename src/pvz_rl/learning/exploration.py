@@ -106,9 +106,7 @@ def configure_exploration(model, cfg):
 
 
 def set_exploration_rate(model, rate, *, plant_rate=None):
-    from pvz_rl.learning.counterfactual_settings import counterfactual_enabled
-    phase = getattr(model, "tile_skill_state", {}).get("phase")
-    if counterfactual_enabled(model.cfg, phase) or model.cfg["training"]["exploration"]["objective"] == "committed_species_epsilon_v1":
+    if model.cfg["training"]["exploration"]["objective"] == "committed_species_epsilon_v1":
         rate = 0.0
     model.exploration_rate = float(rate)
     model.policy.exploration_epsilon = 0.0
@@ -159,14 +157,15 @@ class CommittedPlantExploration:
         branch_usable=None,
         plan=None,
     ):
+        if masks.shape[0] != len(actions):
+            raise ValueError("Action masks must match the action batch")
         pending = self.pending.clone()
         committed = pending.ne(0) & active
         rows = torch.arange(len(actions), device=actions.device)
         species = (pending - 1).clamp_min(0)
-        # Tile occupancy is validated after the all-45 tile choice. A committed
-        # branch therefore becomes ready based only on card availability; an
-        # occupied selection is retained as a tile-invalid proposal.
+        occupied = details["occupied"]
         ready = committed & (sun >= costs[species]) & (cooldowns[rows, species] == 0)
+        ready = ready & (~occupied).any(-1)
         if branch_usable is not None:
             branch_usable = torch.as_tensor(branch_usable, device=actions.device, dtype=torch.bool)
             if branch_usable.shape != (len(actions), A.plant_types + 2):
@@ -175,16 +174,20 @@ class CommittedPlantExploration:
         policy_branches, _ = action_parts(actions)
         reuse = ready & (policy_branches == pending)
         requests = torch.where(ready & ~reuse, pending, 0)
-        conditional = policy.conditional_tiles(details["observations"], requests, plan=plan)
+        conditional = policy.conditional_tiles(
+            details["observations"],
+            requests,
+            plan=plan,
+            memory=details["board_memory"],
+        )
         conditional = torch.where(reuse[:, None], details["tile_q"], conditional)
         tiles, _, fired, tile_q = select_q_tiles(
             conditional,
-            masks,
+            occupied,
             pending.clamp_min(1),
             self.tile_epsilon,
         )
-        proposed = torch.where(ready, assemble(pending, tiles), 0)
-        chosen = torch.where(committed, proposed, actions)
+        chosen = torch.where(ready, assemble(pending, tiles), actions)
         branches, locations = action_parts(chosen)
         mode = torch.where(committed, int(PlantExplorationMode.WAITING), 0)
         mode = torch.where(ready, int(PlantExplorationMode.PLANTING), mode)
@@ -195,17 +198,15 @@ class CommittedPlantExploration:
         details["coins"][:, 1] = torch.where(committed, fired & ready, details["coins"][:, 1])
         details["branch_value"] = details["branch_q"].gather(1, branches[:, None]).flatten()
         selected_tile = tile_q.gather(1, locations[:, None]).flatten()
-        details["tile_value"] = torch.where(
-            committed, torch.where(ready, selected_tile, 0), details["tile_value"]
-        )
-        details["tile_q"] = torch.where(committed[:, None], conditional, details["tile_q"])
+        details["tile_value"] = torch.where(ready, selected_tile, details["tile_value"])
+        details["tile_q"] = torch.where(ready[:, None], tile_q, details["tile_q"])
         details["valid"] &= (torch.isfinite(tile_q) | ~ready[:, None]).all()
         details["selected_value"] = torch.where(
             branches > 0, details["tile_value"], details["branch_q"][:, 0]
         )
         details["placement_gap"] = torch.where(
             branches > 0,
-            candidate_maxima(details["tile_q"], masks, branches) - details["tile_value"],
+            candidate_maxima(details["tile_q"], occupied, branches) - details["tile_value"],
             0,
         )
         return chosen, details["branch_value"], details["tile_value"], details

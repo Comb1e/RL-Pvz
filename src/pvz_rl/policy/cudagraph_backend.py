@@ -61,8 +61,17 @@ class GraphCapture:
                             self.graph_module(*self.static_inputs)
                     current.wait_stream(self.stream)
                     self.graph = torch.cuda.CUDAGraph()
-                    with torch.cuda.graph(self.graph, stream=self.stream):
-                        self.outputs = self.graph_module(*self.static_inputs)
+                    # torch.cuda.graph() also runs gc.collect() per capture, a full
+                    # pass over every training object. Auxiliary simulation threads
+                    # poll CUDA events meanwhile; global mode lets them invalidate it.
+                    torch.cuda.synchronize(self.device)
+                    torch.cuda.empty_cache()
+                    with torch.cuda.stream(self.stream):
+                        self.graph.capture_begin(capture_error_mode="thread_local")
+                        try:
+                            self.outputs = self.graph_module(*self.static_inputs)
+                        finally:
+                            self.graph.capture_end()
                     current.wait_stream(self.stream)
             for destination, source in zip(self.static_inputs, inputs, strict=True):
                 _copy(destination, source)

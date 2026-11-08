@@ -12,6 +12,7 @@ class CohortPhase(StrEnum):
     COLLECT = "collect"
     FINALIZE_REWARDS = "finalize_rewards"
     RETURNS = "returns"
+    TD_TARGETS = "td_targets"
     FIT = "fit"
     SYNCHRONIZE = "synchronize"
 

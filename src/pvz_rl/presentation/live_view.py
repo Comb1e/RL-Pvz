@@ -18,6 +18,8 @@ from time import monotonic
 
 from pvz_game.config import PLANT_TYPES
 
+from pvz_rl.config import outcome_prediction_weights
+
 PANELS = 4
 RESULT_SECONDS = 1.0
 UI_FPS = 30
@@ -221,12 +223,27 @@ def learning_settings(cfg):
                     "learning_rate",
                     "max_grad_norm",
                     "batch_size",
-                    "tile_only_cohorts",
                     "n_epochs",
                     "gamma",
                 )
             )
             + (f"fit_batch_groups={training['performance']['fit_batch_groups']}",),
+        ),
+        (
+            "Outcome weights",
+            tuple(
+                f"{stage}: static_field={field}, probe={probe}"
+                for stage in (
+                    "cherry_bomb",
+                    "cherry_bomb_obstacle",
+                    "attacker_pre",
+                    "prediction",
+                    "attacker",
+                    "peashooter",
+                    "normal",
+                )
+                for field, probe in (outcome_prediction_weights(cfg, stage),)
+            ),
         ),
         (
             "Rewards",

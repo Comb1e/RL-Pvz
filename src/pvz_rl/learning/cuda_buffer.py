@@ -9,12 +9,13 @@ import torch
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import (
     ENTITY_WIDTH,
-    GLOBAL_WIDTH,
     EntityBatch,
     PackedEntityBatch,
     collate_observations,
+    global_width,
     validate_entity_records,
 )
+from pvz_rl.envs.outcome_math import ABSOLUTE_SIZES, OUTCOME_SHAPE
 from pvz_rl.learning.action_routing import FitRoute, validate_routes
 from pvz_rl.learning.objective import (
     COMPONENTS,
@@ -29,50 +30,67 @@ from pvz_rl.learning.objective import (
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-global-trajectory-v7"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-outcome-trajectory-v8"
 
 
 def trajectory_dtype(cfg=None):
-    return np.dtype(
+    ticks = (cfg or {}).get("environment", {}).get("decision_ticks", 10)
+    fields = [
+        ("entity_offset", "<u8"),
+        ("entity_count", "<u4"),
+        ("entity_omitted", "<u4", 3),
+        ("globals", "<f4", global_width(cfg) if cfg else 18),
+        ("action", "<u2"),
+        ("tick", "<u4"),
+        ("reset", "?"),
+        ("active", "?"),
+        ("env", "<u2"),
+        ("episode", "<u8"),
+        ("decision", "<u8"),
+        ("run_break", "?"),
+        ("duration", "<u2"),
+        ("reward", "<f8"),
+        ("components", "<f8", len(COMPONENTS)),
+        ("components_valid", "?"),
+        ("won", "?"),
+        ("home_entries", "<u4", 2),
+        ("branch_value", "<f4"),
+        ("tile_value", "<f4"),
+        ("minimum_q", "<f4"),
+        ("placement_gap", "<f4"),
+        ("greedy_action", "<u2"),
+        ("policy_action", "<u2"),
+        ("exploration_mode", "u1"),
+        ("pending_species", "u1"),
+        ("next_species", "u1"),
+        ("species_coin", "?"),
+        ("tile_coin", "?"),
+        ("field_trace", "u1", (ticks + 1, 5)),
+        ("field_breach", "<i8", 5),
+        ("null_target_valid", "?"),
+        ("effect_actions", "<u2", 5),
+        ("effect_valid", "?", 5),
+        ("effect_labels", "i1", (5, *OUTCOME_SHAPE)),
+        ("baseline_outcomes", "<i8", OUTCOME_SHAPE),
+        ("target", "<f4"),
+        ("accepted", "?"),
+        ("route", "u1"),
+        ("branch_usable", "?"),
+        ("rejection_reason", "u1"),
+        ("done", "?"),
+        ("executed_action", "<u2"),
+    ]
+    fields.extend(
         [
-            ("entity_offset", "<u8"),
-            ("entity_count", "<u4"),
-            ("entity_omitted", "<u4", 3),
-            ("globals", "<f4", GLOBAL_WIDTH),
-            ("action", "<u2"),
-            ("tick", "<u4"),
-            ("reset", "?"),
-            ("active", "?"),
-            ("env", "<u2"),
-            ("episode", "<u8"),
-            ("decision", "<u8"),
-            ("run_break", "?"),
-            ("duration", "<u2"),
-            ("reward", "<f8"),
-            ("components", "<f8", len(COMPONENTS)),
-            ("components_valid", "?"),
-            ("won", "?"),
-            ("home_entries", "<u4", 2),
-            ("branch_value", "<f4"),
-            ("tile_value", "<f4"),
-            ("minimum_q", "<f4"),
-            ("placement_gap", "<f4"),
-            ("greedy_action", "<u2"),
-            ("policy_action", "<u2"),
-            ("exploration_mode", "u1"),
-            ("pending_species", "u1"),
-            ("next_species", "u1"),
-            ("species_coin", "?"),
-            ("tile_coin", "?"),
-            ("target", "<f4"),
-            ("accepted", "?"),
-            ("route", "u1"),
-            ("branch_usable", "?"),
-            ("rejection_reason", "u1"),
-            ("done", "?"),
-            ("executed_action", "<u2"),
+            ("effect_prediction", "<f2", (2, 5, 10)),
+            ("effect_prediction_valid", "?"),
+            ("prior_classes", "i1", (5, 3)),
+            ("prior_valid", "?"),
+            ("outcome_ready", "?"),
+            ("outcome_interval", "<i8"),
         ]
     )
+    return np.dtype(fields)
 
 
 class CompleteGameBuffer:
@@ -342,6 +360,17 @@ class CompleteGameBuffer:
             result[selected] = self.blocks[b][offsets[selected]]
         return result
 
+    def put(self, indices, field, values):
+        """Write one field of collected rows; the inverse of ``take``."""
+        indices = np.asarray(indices, dtype=np.int64)
+        if np.any(indices < 0) or np.any(indices >= self.size):
+            raise IndexError("Trajectory index outside collected history")
+        values = np.asarray(values)
+        blocks, offsets = np.divmod(indices, self.block_rows)
+        for b in np.unique(blocks):
+            selected = blocks == b
+            self.blocks[b][field][offsets[selected]] = values[selected]
+
     def observations(self, rows, device=None, *, destination=None):
         flat = rows.reshape(-1)
         starts, counts = flat["entity_offset"], flat["entity_count"]
@@ -352,7 +381,7 @@ class CompleteGameBuffer:
             result = EntityBatch(
                 torch.empty(len(flat), width, ENTITY_WIDTH, dtype=torch.int32),
                 torch.empty(len(flat), width, dtype=torch.bool),
-                torch.empty(len(flat), GLOBAL_WIDTH),
+                torch.empty(len(flat), self.dtype["globals"].shape[0]),
                 validated=True,
             )
         else:
@@ -409,7 +438,7 @@ class CompleteGameBuffer:
             result = EntityBatch(
                 torch.empty(len(counts), width, ENTITY_WIDTH, dtype=torch.int32),
                 torch.empty(len(counts), width, dtype=torch.bool),
-                torch.empty(len(counts), GLOBAL_WIDTH),
+                torch.empty(len(counts), packed.globals.shape[-1]),
                 validated=True,
             )
         else:
@@ -560,18 +589,44 @@ class CompleteGameBuffer:
         if not by_episode or settings is None:
             return summary
 
-        terminal_rows = {}
-        episode_rows = {}
+        if not self.blocks:
+            return summary
+        # Group eligible rows by episode with array sorts; a Python pass per row
+        # took seconds for normal cohorts of ~200k decisions.
+        located = []
         for block_index, block in enumerate(self.blocks):
             rows = block[: min(self.block_rows, self.size - block_index * self.block_rows)]
-            for index in np.flatnonzero(rows["active"] & rows["components_valid"]):
-                row = rows[index]
-                key = int(row["env"]), int(row["episode"])
-                if key not in by_episode:
-                    continue
-                episode_rows.setdefault(key, []).append((block, int(index)))
-                if row["done"]:
-                    terminal_rows[key] = (block, int(index))
+            index = np.flatnonzero(rows["active"] & rows["components_valid"])
+            located.append(
+                (
+                    rows["env"][index].astype(np.int64),
+                    rows["episode"][index].astype(np.uint64),
+                    np.full(len(index), block_index, np.int64),
+                    index,
+                    rows["done"][index],
+                )
+            )
+        envs, episodes, block_ids, offsets, done = (
+            np.concatenate(parts) for parts in zip(*located, strict=True)
+        )
+        order = np.lexsort((offsets, block_ids, episodes, envs))  # collection order per episode
+        envs, episodes, block_ids, offsets, done = (
+            value[order] for value in (envs, episodes, block_ids, offsets, done)
+        )
+        boundaries = np.flatnonzero((np.diff(envs) != 0) | (np.diff(episodes) != 0)) + 1
+        starts = np.r_[0, boundaries] if len(envs) else np.empty(0, np.int64)
+        stops = np.r_[boundaries, len(envs)] if len(envs) else np.empty(0, np.int64)
+        terminal_rows = {}
+        episode_rows = {}
+        for start, stop in zip(starts, stops, strict=True):
+            key = int(envs[start]), int(episodes[start])
+            if key not in by_episode:
+                continue
+            episode_rows[key] = (block_ids[start:stop], offsets[start:stop])
+            finished = np.flatnonzero(done[start:stop])
+            if len(finished):
+                last = start + int(finished[-1])
+                terminal_rows[key] = (self.blocks[block_ids[last]], int(offsets[last]))
 
         for key, metrics in by_episode.items():
             terminal = terminal_rows.get(key)
@@ -601,30 +656,27 @@ class CompleteGameBuffer:
                 block[index]["reward"] = raw_rewards(block[index]["components"], self.cfg)
                 summary["win_final_rewards"] += magnitude
             else:
-                references = episode_rows.get(key, [])
-                references.sort(key=lambda item: int(item[0][item[1]]["decision"]))
-                raw = np.asarray([candidate_block[candidate_index] for candidate_block, candidate_index in references])
+                block_ids, offsets = episode_rows.get(
+                    key, (np.empty(0, np.int64), np.empty(0, np.int64))
+                )
+                raw = np.empty(len(offsets), dtype=self.dtype)
+                for b in np.unique(block_ids):
+                    selected = block_ids == b
+                    raw[selected] = self.blocks[b][offsets[selected]]
+                order = np.argsort(raw["decision"], kind="stable")
+                block_ids, offsets, raw = block_ids[order], offsets[order], raw[order]
                 penalties, details = residual_sun_wait_penalties(raw, magnitude)
-                for (candidate_block, candidate_index), penalty in zip(
-                    references, penalties, strict=True
-                ):
-                    if penalty == 0:
-                        continue
-                    candidate_block[candidate_index]["components"][0] += penalty
-                    candidate_block[candidate_index]["reward"] = raw_rewards(
-                        candidate_block[candidate_index]["components"], self.cfg
-                    )
+                for b in np.unique(block_ids[penalties != 0]):
+                    selected = (block_ids == b) & (penalties != 0)
+                    rows = self.blocks[b]
+                    at = offsets[selected]
+                    components = rows["components"][at]
+                    components[:, 0] += penalties[selected]
+                    rows["components"][at] = components
+                    rows["reward"][at] = raw_rewards(components, self.cfg)
                 episode_summary.update(
                     wait_rows=details["wait_rows"],
-                    wait_duration=int(
-                        sum(
-                            int(candidate_block[candidate_index]["duration"])
-                            for (candidate_block, candidate_index), penalty in zip(
-                                references, penalties, strict=True
-                            )
-                            if penalty < 0
-                        )
-                    ),
+                    wait_duration=int(raw["duration"][penalties < 0].astype(np.int64).sum()),
                     run_count=details["run_count"],
                     shortest_run=details["shortest_run"],
                     longest_run=details["longest_run"],
@@ -666,7 +718,9 @@ class CompleteGameBuffer:
                 wins,
                 win_reward=self.cfg["reward"]["win_reward"],
                 loss_penalty=self.cfg["reward"]["loss_penalty"],
-                weight=self.cfg["reward"].get("win_time_weight", 0.3) if time_weight is None else time_weight,
+                weight=self.cfg["reward"].get("win_time_weight", 0.3)
+                if time_weight is None
+                else time_weight,
             )
             for (block, index, _, _won), value in zip(terminal, terminal_rewards, strict=True):
                 row = block[index]
@@ -688,8 +742,13 @@ class CompleteGameBuffer:
             endgame_terminal_rewards=terminal_rewards.tolist(),
             endgame_time_adjustments=adjustments.tolist(),
             endgame_time_weight=(
-                (self.cfg["reward"].get("win_time_weight", 0.3) if time_weight is None else time_weight)
-                if self.cfg else 0.0
+                (
+                    self.cfg["reward"].get("win_time_weight", 0.3)
+                    if time_weight is None
+                    else time_weight
+                )
+                if self.cfg
+                else 0.0
             ),
             # Compatibility alias for existing viewers and reports.
             victory_time_adjustments=adjustments.tolist(),
@@ -711,6 +770,14 @@ class CompleteGameBuffer:
 
     def finalize(self, *, cohort=None, diagnostics=True):
         """Actual per-game returns and errors measured before fitting either head."""
+        if "outcome_ready" in self.dtype.names:
+            for index, block in enumerate(self.blocks):
+                rows = block[: min(self.block_rows, self.size - index * self.block_rows)]
+                if np.any(
+                    (rows["null_target_valid"] | rows["effect_valid"].any(-1))
+                    & ~rows["outcome_ready"]
+                ):
+                    raise RuntimeError("Cannot fit unresolved absolute outcome targets")
         self.finalize_rewards()
         running = np.zeros(self.n_envs, np.float64)
         running_episode = [None] * self.n_envs
@@ -848,10 +915,8 @@ class CompleteGameBuffer:
                 online_tile_rows=int(
                     routed_counts[FitRoute.ACCEPTED] + routed_counts[FitRoute.TILE_INVALID]
                 ),
-                ema_tile_rows=int(routed_counts[FitRoute.ACCEPTED]),
-                skipped_ema_rows=int(
-                    routed_counts[FitRoute.SPECIES_INVALID] + routed_counts[FitRoute.TILE_INVALID]
-                ),
+                ema_tile_rows=0,
+                skipped_ema_rows=int(routed_counts.sum() - routed_counts[FitRoute.WAIT_RETURN]),
             ),
         )
         live = episode_count > 0
@@ -979,7 +1044,8 @@ class CompleteGameBuffer:
 
     @staticmethod
     def validate_metadata(state):
-        if state.get("protocol") != TRAJECTORY_PROTOCOL:
+        expected = TRAJECTORY_PROTOCOL
+        if state.get("protocol") != expected:
             raise ValueError("Retired trajectory schema; fresh initialization is required")
         if any(
             key in state for key in ("probes", "probe_pending", "pending_probes", "probe_endpoints")
@@ -1062,6 +1128,14 @@ class CompleteGameBuffer:
             width = max(1, obj.block_rows // obj.n_envs) * obj.n_envs
             for at in range(0, obj.size, width):
                 rows = obj.take(np.arange(at, min(obj.size, at + width)))
+                if (
+                    np.any(rows["field_trace"] > 10)
+                    or np.any(rows["effect_actions"] >= A.size)
+                    or np.any(rows["effect_labels"] < 0)
+                    or np.any(rows["effect_labels"] >= ABSOLUTE_SIZES)
+                    or not np.isfinite(rows["effect_prediction"]).all()
+                ):
+                    raise ValueError("Invalid action outcome targets or predictions")
                 if np.any(rows["action"] >= A.size) or np.any(rows["executed_action"] >= A.size):
                     raise ValueError("Corrupt trajectory action")
                 if not all(

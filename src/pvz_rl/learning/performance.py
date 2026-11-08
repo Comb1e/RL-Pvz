@@ -4,11 +4,24 @@ import copy
 
 ENCODER_SETTINGS = ("encoder_microbatch", "encoder_token_budget", "attention_query_chunk")
 PERFORMANCE_SETTINGS = (
+    "interval_backend",
+    "auxiliary_hybrid",
+    "auxiliary_cpu_workers",
+    "auxiliary_worker_ram_mib",
+    "auxiliary_cuda_target_ms",
+    "auxiliary_vram_mib",
+    "auxiliary_spill_gib",
+    "auxiliary_interval_lanes",
+    "auxiliary_teacher_lanes",
+    "fork_packed",
+    "fork_threads",
+    "fork_suffix_cache",
+    "fork_cache_steps",
+    "fork_cache_zombies",
+    "fork_cache_projectiles",
+    "fork_cache_vram_mib",
     "fit_precision",
     "prefetch",
-    "annotation_input_cache",
-    "annotation_cache_mib",
-    "annotation_use_fit_limits",
     "attacker_prepare_workers",
     "attacker_worker_ram_mib",
     "attacker_prefetch",
@@ -28,6 +41,10 @@ PERFORMANCE_SETTINGS = (
     "telemetry_span_limit",
     "fit_batch_groups",
     "collection_graph_cache_entries",
+    "collection_tile_buckets",
+    "teacher_batched_transfers",
+    "teacher_pipeline",
+    "vectorized_effect_gather",
     "collection_vram_headroom_mib",
     "fit_encoder_microbatch",
     "fit_token_budget",
@@ -37,30 +54,14 @@ PERFORMANCE_SETTINGS = (
 )
 
 
-def annotation_execution_limits(model, cfg):
-    """Resolve execution-only annotation limits without enabling compilation."""
-    performance = cfg["training"]["performance"]
-    use_fit = performance.get("annotation_use_fit_limits", False)
-    limits = {}
-    for encoder in model.encoders:
-        if use_fit:
-            encoder.microbatch = performance.get(
-                f"fit_{encoder.stage}_microbatch", performance["fit_encoder_microbatch"]
-            )
-            encoder.token_budget = performance["fit_token_budget"]
-        encoder.compile_collection = encoder.compile_fitting = False
-        limits[encoder.stage] = dict(
-            microbatch=encoder.microbatch, token_budget=encoder.token_budget
-        )
-    return dict(use_fit_limits=use_fit, compilation="disabled", encoders=limits)
-
-
 def refresh_performance(cfg, current):
     result = copy.deepcopy(cfg)
     for key in ENCODER_SETTINGS:
         result["policy"][key] = current["policy"][key]
     target = result["training"].setdefault("performance", {})
     for key in PERFORMANCE_SETTINGS:
+        if key == "interval_backend" and key not in target:
+            continue  # Saved runs without routing metadata retain legacy execution.
         if key in current["training"]["performance"]:
             target[key] = current["training"]["performance"][key]
         else:

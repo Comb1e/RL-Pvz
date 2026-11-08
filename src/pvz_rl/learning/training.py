@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import secrets
 import shutil
 from collections import Counter, deque
 from pathlib import Path
@@ -27,7 +28,14 @@ from pvz_rl.config import (
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights
 from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
-from pvz_rl.envs.tile_scenarios import is_placement_skill, placement_settings
+from pvz_rl.envs.tile_scenarios import (
+    attacker_exercise_scores,
+    attacker_mix,
+    is_placement_skill,
+    is_single_frame_skill,
+    placement_settings,
+    prediction_settings,
+)
 from pvz_rl.evaluation.runner import evaluate, summarize
 from pvz_rl.learning.budget import (
     budget_target,
@@ -38,7 +46,6 @@ from pvz_rl.learning.budget import (
     uses_games,
 )
 from pvz_rl.learning.cohort import atomic_transition
-from pvz_rl.learning.counterfactual_settings import OBJECTIVE as COUNTERFACTUAL_OBJECTIVE
 from pvz_rl.learning.curriculum import (
     CurriculumState,
     initial_state,
@@ -58,7 +65,11 @@ from pvz_rl.learning.exploration import (
 from pvz_rl.learning.objective import components, training_rewards
 from pvz_rl.learning.peashooter_rules import RULE_OBJECTIVE
 from pvz_rl.learning.performance import compilation_requested
-from pvz_rl.learning.tile_curriculum import initial_tile_state, required_validation_wins
+from pvz_rl.learning.tile_curriculum import (
+    initial_tile_state,
+    required_validation_wins,
+    tile_validation_count,
+)
 from pvz_rl.learning.training_requirements import (
     FIT_SCHEDULE_PROTOCOL,
     parameter_changes,
@@ -218,12 +229,14 @@ class ResearchCallback(BaseCallback):
             viewer.set_activity(
                 {
                     "training": Activity.UPDATING,
+                    "idle": Activity.UPDATING,
                     "validation": Activity.VALIDATING,
                     "reporting": Activity.REPORTING,
                     "collect": Activity.COLLECTING,
                     "finalize_rewards": Activity.UPDATING,
                     "fit": Activity.UPDATING,
                     "returns": Activity.UPDATING,
+                    "td_targets": Activity.UPDATING,
                     "synchronize": Activity.UPDATING,
                 }[self.hardware_activity]
             )
@@ -331,14 +344,41 @@ class ResearchCallback(BaseCallback):
             "training_steps": self.model.num_timesteps,
             "training_games": games,
             "tile_scenarios": self.model.tile_skills.to_dict(),
-            "counterfactual": dict(getattr(getattr(self.model, "_counterfactual", None), "metrics",
-                                            self.model.cohort_metrics.get("counterfactual", {}))),
-            "peashooter_teacher": dict(getattr(getattr(self.model, "_peashooter_teacher", None), "metrics",
-                                            self.model.cohort_metrics.get("peashooter_teacher", {}))),
+            "peashooter_teacher": dict(
+                getattr(
+                    getattr(self.model, "_peashooter_teacher", None),
+                    "metrics",
+                    self.model.cohort_metrics.get("peashooter_teacher", {}),
+                )
+            ),
+            "static_forks": dict(
+                getattr(
+                    getattr(self.model.env, "static_forks", None),
+                    "metrics",
+                    self.model.cohort_metrics.get("static_forks", {}),
+                )
+            ),
+            "wait_outcomes": dict(
+                getattr(
+                    getattr(self.model, "_wait_outcomes", None),
+                    "metrics",
+                    self.model.cohort_metrics.get("wait_outcomes", {}),
+                )
+            ),
+            "auxiliary_simulation": dict(
+                getattr(
+                    getattr(self.model.env, "auxiliary", None),
+                    "metrics",
+                    self.model.cohort_metrics.get("auxiliary_simulation", {}),
+                )
+            ),
             "collection_policy": "network",
             "fitting_objective": (
-                RULE_OBJECTIVE if self.model.peashooter_rule_training else
-                COUNTERFACTUAL_OBJECTIVE if self.model.counterfactual_training else None
+                RULE_OBJECTIVE
+                if self.model.peashooter_rule_training
+                else "nstep_fork_forecast_v3"
+                if not self.model.tile_skills.active
+                else None
             ),
             "validation_trigger": self.validation_trigger.snapshot(
                 self.model.tile_skills.validation_domain
@@ -459,8 +499,7 @@ class ResearchCallback(BaseCallback):
                 else None
             ),
             "time_budget": self.wall_budget.state() if self.wall_budget else None,
-            "validation_pending": self.validation_pending
-            or self.pending_validation is not None,
+            "validation_pending": self.validation_pending or self.pending_validation is not None,
             "validation_schedule": "stage_success" if self.stage_validation else "periodic",
             "pending_stage_validation": self.pending_stage_validation,
             "validation_deferred": self.stage_validation and not self.pending_stage_validation,
@@ -491,9 +530,8 @@ class ResearchCallback(BaseCallback):
 
     def cohort_text(self):
         summary = self.cohort_summary()
-        if (
-            is_placement_skill(self.model.tile_skills.phase)
-            or is_placement_skill(getattr(self.model.env, "tile_scenario", None))
+        if is_placement_skill(self.model.tile_skills.phase) or is_placement_skill(
+            getattr(self.model.env, "tile_scenario", None)
         ):
             return (
                 f"done {summary['completed']}/{summary['games']} "
@@ -626,10 +664,19 @@ class ResearchCallback(BaseCallback):
         keys = (
             "peashooter_cross_entropy_loss",
             "peashooter_preferred_column_accuracy",
-            "comparison_loss",
-            "feasibility_loss",
-            "comparison_accuracy",
-            "feasibility_accuracy",
+            "total_loss",
+            "primary_loss",
+            "effect_loss",
+            "effect_brier",
+            "effect_accuracy",
+            "changed_effect_accuracy",
+            "unchanged_effect_accuracy",
+            "effect_change_precision",
+            "effect_change_recall",
+            "effect_change_brier",
+            "effect_conditional_accuracy",
+            "effect_labeled_terms",
+            "effect_eligible_decisions",
             "q_loss",
             "tile_ranking_loss",
             "bomb_cross_entropy_loss",
@@ -675,7 +722,10 @@ class ResearchCallback(BaseCallback):
             )
         row.update(optimization=metrics, completed_updates=self.model._n_updates)
         if is_placement_skill(row.get("active_skill")):
-            if metrics["bomb_cross_entropy_loss"] is None and metrics["attacker_cross_entropy_loss"] is None:
+            if (
+                metrics["bomb_cross_entropy_loss"] is None
+                and metrics["attacker_cross_entropy_loss"] is None
+            ):
                 metrics["tile_ranking_loss"] = metrics["q_loss"]
             metrics["q_loss"] = None
         append_jsonl(self.metrics_stream, row)
@@ -845,7 +895,7 @@ class ResearchCallback(BaseCallback):
             skills = self.model.tile_skills
             state = exploration_state(self.cfg, skills.episodes[skills.phase])
             apply_exploration_state(self.model, state)
-            if is_placement_skill(skills.phase) and skills.stage_order is not None:
+            if is_single_frame_skill(skills.phase) and skills.stage_order is not None:
                 from pvz_rl.learning.exploration import set_exploration_rate
 
                 set_exploration_rate(self.model, 0.0, plant_rate=0.0)
@@ -937,11 +987,12 @@ class ResearchCallback(BaseCallback):
             if self.validation_panels and kind not in self.validation_panels:
                 raise ValueError("Another validation panel remains pending")
             if kind not in self.validation_panels:
-                self.validation_panels[kind] = (
-                    curriculum_probe_seeds(self.cfg)
-                    if kind in ("tile", "curriculum")
-                    else random_validation_seeds(self.cfg, limit=self.validation_limit)
-                )
+                if kind in ("tile", "curriculum"):
+                    count = tile_validation_count(self.cfg, domain) if kind == "tile" else None
+                    panel = curriculum_probe_seeds(self.cfg, count=count)
+                else:
+                    panel = random_validation_seeds(self.cfg, limit=self.validation_limit)
+                self.validation_panels[kind] = panel
             self.validation_pending = True
         if checked:
             decision = self.validation_trigger.state["decision"]
@@ -955,9 +1006,13 @@ class ResearchCallback(BaseCallback):
                         optimizer_step=optimizer_step(self.model),
                     ),
                 )
+            evidence = (
+                f"{cohort.get('games', 0)} completed scenes"
+                if domain == "prediction"
+                else f"{cohort.get('wins', 0)}/{cohort.get('games', 0)} cohort successes"
+            )
             self.progress.emit(
-                f"Validation check: {cohort.get('wins', 0)}/{cohort.get('games', 0)} "
-                f"cohort successes; {'launch' if allowed else 'skip'}; "
+                f"Validation check: {evidence}; {'launch' if allowed else 'skip'}; "
                 f"next check after {progress + self.validation_trigger.interval_for(domain):,} "
                 f"{domain} episodes",
                 force=True,
@@ -1120,24 +1175,47 @@ class ResearchCallback(BaseCallback):
             names = ", ".join(skills.validation_skills)
             self.progress.phase(Phase.VALIDATING, f"Tile stage validation: {names}")
             try:
-                results = validate_tile_skills(
-                    self.cfg,
-                    self.model,
-                    self.validation_panels["tile"],
-                    deadline=self.operation_deadline(final),
-                    progress=self.progress,
-                    skills=skills.validation_skills,
-                )
+                if skills.phase == "prediction":
+                    from pvz_rl.evaluation.prediction import validate_prediction
+
+                    results = {
+                        "prediction": validate_prediction(
+                            self.cfg,
+                            self.model,
+                            self.validation_panels["tile"],
+                            deadline=self.operation_deadline(final),
+                        )
+                    }
+                else:
+                    results = validate_tile_skills(
+                        self.cfg,
+                        self.model,
+                        self.validation_panels["tile"],
+                        deadline=self.operation_deadline(final),
+                        progress=self.progress,
+                        skills=skills.validation_skills,
+                    )
             except BudgetExpired:
                 self.progress.emit(
                     "Tile validation incomplete; mastery remains pending", force=True
                 )
                 return
-            count = self.cfg["curriculum"]["probe_cases"]
+            count = tile_validation_count(self.cfg, skills.validation_domain)
             if any(len(rows) != count for rows in results.values()):
                 raise ValueError("Incomplete tile-stage validation cannot certify mastery")
             scores = {skill: sum(row["win"] for row in rows) for skill, rows in results.items()}
             previous = skills.phase
+            breakdown = (
+                attacker_exercise_scores(results["attacker"]) if previous == "attacker" else None
+            )
+            prediction_metrics = {}
+            if previous == "prediction":
+                losses = [row["loss"] for row in results["prediction"]]
+                finite = all(loss is not None for loss in losses)
+                prediction_metrics = dict(
+                    mean_loss=sum(losses) / count if finite else None,
+                    worst_loss=max(losses) if finite else None,
+                )
             with atomic_transition():
                 skills.observe(scores, self.cfg)
                 self.complete_validation("tile")
@@ -1155,15 +1233,26 @@ class ResearchCallback(BaseCallback):
                             stage=previous if skills.stage_order is not None else "pre",
                             stage_episodes=skills.episodes[previous],
                             cases=results,
+                            **({"exercise_scores": breakdown} if breakdown is not None else {}),
+                            **prediction_metrics,
                             optimizer_step=optimizer_step(self.model),
                             training_steps=self.model.num_timesteps,
                         ),
                     )
                 self.save_checkpoint("latest.zip")
-            self.progress.emit(
-                f"Tile validation: {scores}; next phase {skills.phase}",
-                force=True,
-            )
+            detail = str(scores)
+            if prediction_metrics:
+                detail = f"prediction {scores['prediction']}/{count} environments"
+            if breakdown is not None:
+                detail = (
+                    f"attacker {scores['attacker']}/{count} overall ("
+                    + ", ".join(
+                        f"{skill} {score['wins']}/{score['games']}"
+                        for skill, score in breakdown.items()
+                    )
+                    + ")"
+                )
+            self.progress.emit(f"Tile validation: {detail}; next phase {skills.phase}", force=True)
             if not skills.active:
                 self.recent.clear()
                 self.recent_by_task.clear()
@@ -1420,7 +1509,7 @@ def initial_weights(checkpoint, cfg):
         weights_only=True,
     )
     verify_engine(cfg)
-    if saved["initialization_type"] in ("demonstration", "annotation"):
+    if saved["initialization_type"] == "demonstration":
         weights = saved["payload"]["model"]
     else:
         import io
@@ -1446,7 +1535,6 @@ def initial_weights(checkpoint, cfg):
         "checkpoint": str(Path(checkpoint).resolve()),
         "checkpoint_sha256": saved.get("snapshot_sha256") or file_hash(checkpoint),
         "source_learner_seed": saved["learner_seed"],
-        **saved.get("source_annotation", {}),
         **saved.get("source_counters", {"steps": 0, "games": 0, "updates": 0}),
         "source_structural_signature": transfer_protocol(source_cfg),
         "parameter_changes": parameter_changes(source_cfg, cfg),
@@ -1472,7 +1560,7 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
     require_supported_policy(cfg, data["condition"])
     torch.set_num_threads(cfg["training"]["torch_threads"])
     if (
-        data["initialization_type"] in ("demonstration", "annotation", "weights")
+        data["initialization_type"] in ("demonstration", "weights")
         or not current_model_config(data["config"])
         or not current_engine_config(data["config"])
         or (not for_resume and data.get("fit_schedule_protocol") != FIT_SCHEDULE_PROTOCOL)
@@ -1487,7 +1575,7 @@ def load_policy(checkpoint, device="cpu", *, for_resume=False):
         model.action_space = spaces.Discrete(ActionSchema.size)
         model.n_envs = cfg["training"]["n_envs"]
         model._setup_model()
-        if data["initialization_type"] in ("demonstration", "annotation"):
+        if data["initialization_type"] == "demonstration":
             weights = data.pop("payload")["model"]
         else:
             weights, _ = initial_weights(checkpoint, cfg)
@@ -1533,8 +1621,6 @@ def train(
     cfg = copy.deepcopy(cfg)
     if family == "diagnostic":
         cfg["training"].pop("peashooter_rules", None)
-        for stage in ("peashooter", "normal"):
-            cfg["training"].get("counterfactual", {}).get(stage, {})["enabled"] = False
     validate_config(cfg)
     output = Path(output)
     require_cuda_training(cfg, condition, runtime=False)
@@ -1554,6 +1640,8 @@ def train(
         from pvz_rl.learning.cuda_q import checkpoint_optimizer_protocol
 
         saved = inspect_checkpoint(resume)
+        if learner_seed is None:
+            learner_seed = saved["learner_seed"]
         if saved["initialization_type"] != "autonomous":
             raise ValueError(
                 "Demonstration weights require --init-from; --resume needs an autonomous ZIP"
@@ -1576,6 +1664,8 @@ def train(
             )
         if saved["learner_seed"] != learner_seed or saved["validation_limit"] != validation_limit:
             raise ValueError("Resume learner seed or validation limit differs")
+    elif learner_seed is None:
+        learner_seed = secrets.randbits(32)
     require_cuda_training(cfg, condition)
     resumed_model = (
         load_policy(resume, cfg["training"]["device"], for_resume=True)[0] if resume else None
@@ -1634,9 +1724,9 @@ def train(
             "learning_rate": cfg["training"]["learning_rate"],
             "adam_epsilon": 1e-8,
             "batch_size": cfg["training"]["batch_size"],
-            "tile_only_cohorts": cfg["training"]["tile_only_cohorts"],
+            "normal_fitting": "joint",
             "passes_per_cohort": cfg["training"]["n_epochs"],
-            "independent_encoders": True,
+            "shared_encoder": True,
             "runtime_dtype": "bf16",
             "master_dtype": "fp32",
         },
@@ -1658,7 +1748,9 @@ def train(
         f"Shared {condition} {cfg['policy']['kind']} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
         f"{cohort_envs(cfg, 'peashooter')} Peashooter lanes, {cohort_envs(cfg)} normal lanes, "
         f"{cohort_envs(cfg, 'cherry_bomb')} Cherry Bomb lanes, "
-        f"{cfg['training'].get('tile_scenarios', {}).get('attacker', {}).get('n_envs', 0)} attacker-pre lanes; simulator {simulator(cfg)}; "
+        f"{cfg['training'].get('tile_scenarios', {}).get('attacker', {}).get('n_envs', 0)} attacker-pre lanes, "
+        f"{(prediction_settings(cfg) or {}).get('n_envs', 0)} prediction lanes, "
+        f"{(attacker_mix(cfg) or {}).get('n_envs', 0)} mixed attacker lanes; simulator {simulator(cfg)}; "
         "one complete game per environment per cohort; "
         f"{budget_label}; "
         f"family {family}; output {output.resolve()}",
@@ -1674,29 +1766,26 @@ def train(
         force=True,
     )
     target_kind = (
-        "successful-set placement supervision"
-        if is_placement_skill(selected_stage(cfg)) else
-        "factual tile preferences and species returns"
-        if cfg["training"].get("counterfactual")
-        else "actual returns"
+        "unweighted categorical fitting of post-action forecasts"
+        if selected_stage(cfg) == "prediction"
+        else "successful-set placement supervision with absolute action outcomes"
+        if is_placement_skill(selected_stage(cfg))
+        else "n-step Q targets with absolute action outcomes"
     )
     progress.emit(
         f"Policy: {cfg.get('policy', {'kind': 'flat'})}; {target_kind}; "
-        f"repeat {cfg['training']['tile_only_cohorts']} tile-only cohorts then one joint cohort; "
+        "joint normal cohorts; supervised preliminary cohorts; "
         f"{cfg['training']['n_epochs']} passes per cohort; "
         f"minibatch {cfg['training']['batch_size']}",
         force=True,
     )
     progress.emit(f"Reward settings: {cfg['reward']}", force=True)
-    if cfg["training"].get("counterfactual"):
+    if cfg["training"].get("peashooter_rules"):
         progress.emit(
-            "Factual tile replay: up to two alternatives per legal planting; "
-            "main actions stay greedy; only real episodes count; validation is branch-free",
+            "Peashooter: prioritized visible-lane oracle targets; column-decaying cross-entropy; "
+            "greedy main actions",
             force=True,
         )
-    if cfg["training"].get("peashooter_rules"):
-        progress.emit("Peashooter: prioritized visible-lane oracle targets; column-decaying cross-entropy; "
-                      "greedy main actions, no factual followers", force=True)
     progress.emit(
         f"Committed plant/tile exploration {cfg['training']['exploration']}; "
         "normal branches greedy; accepted planting can commit to another species; "
@@ -1721,7 +1810,8 @@ def train(
     progress.emit(
         f"Agent cadence: {cfg['environment'].get('action_frequency_hz', 'derived')} Hz; "
         f"{cfg['environment']['decision_ticks']} simulator ticks per decision; "
-        f"discount {cfg['training']['gamma']} per simulation tick",
+        f"accounting discount {cfg['training']['gamma']} per simulation tick; "
+        "TD uses the saved forecast half-life schedule",
         force=True,
     )
     training_complete = False
@@ -1774,12 +1864,15 @@ def train(
                     " at 0% success to "
                     f"{bomb_softmax_temperature(bomb, 1.0, skill=model.tile_skills.phase):g}"
                     " at 100% (linear in this cohort's target accuracy)"
-                    if objective == BOMB_OBJECTIVE else (
+                    if objective == BOMB_OBJECTIVE
+                    else (
                         f"ranking margin {bomb_ranking_margin(bomb)}, "
                         f"distance weight {bomb.get('distance_weight', 0)}, "
                         f"temperature {bomb.get('distance_temperature', 1)}"
                     )
                 )
+                if model.tile_skills.phase == "attacker":
+                    fitting = "set cross-entropy with separate temperatures from each exercise's cohort accuracy"
                 progress.emit(
                     f"Placement fitting: {objective}; {fitting}; no search or exploration",
                     force=True,
@@ -1799,7 +1892,7 @@ def train(
                 "stage episodes at a fitted "
                 "cohort boundary; require "
                 + ", ".join(
-                    f"{skill} {wins}/{cfg['curriculum']['probe_cases']}"
+                    f"{skill} {wins}/{tile_validation_count(cfg, skill)}"
                     for skill, wins in requirements.items()
                 )
                 + "; "
@@ -1856,7 +1949,7 @@ def train(
                     tb_log_name=condition,
                 )
             except TrainingGamesComplete:
-                progress.emit("Game target reached; final Q update completed", force=True)
+                progress.emit("Training budget reached; final fitting pass completed", force=True)
                 callback._on_training_end()
             except TrainingStageComplete:
                 progress.emit("Mastery reached; finalizing its checkpoint", force=True)
@@ -1992,10 +2085,11 @@ def train(
     finally:
         if callback:
             callback.close()
-        if model is not None and getattr(model, "_counterfactual", None) is not None:
-            model._counterfactual.close()
         if model is not None and getattr(model, "_peashooter_teacher", None) is not None:
             model._peashooter_teacher.close()
+        if model is not None and getattr(model, "_wait_outcomes", None) is not None:
+            model._wait_outcomes.close()
+            model._wait_outcomes = None
         if model is not None and getattr(model, "_buffer", None) is not None:
             model._buffer.close()
         if model is not None and getattr(model, "_fitting_spool", None) is not None:

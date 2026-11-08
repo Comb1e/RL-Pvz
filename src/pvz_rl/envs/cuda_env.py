@@ -4,6 +4,7 @@ from collections import Counter
 from contextlib import contextmanager
 from copy import deepcopy
 from functools import partial
+from secrets import randbits
 from time import perf_counter
 
 import numpy as np
@@ -15,7 +16,10 @@ from pvz_game.cuda.backend import projectile_bound
 from pvz_game.cuda.schema import HEADER
 from stable_baselines3.common.vec_env import VecEnv
 
-from pvz_rl.config import bomb_max_illegal_distance, training_env_capacity
+from pvz_rl.config import (
+    bomb_max_illegal_distance,
+    training_env_capacity,
+)
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
@@ -28,8 +32,12 @@ from pvz_rl.envs.tile_scenarios import (
     BombGenerationFailure,
     bomb_tile_distances,
     is_placement_skill,
+    is_single_frame_skill,
     peashooter_level,
+    placement_source,
+    prediction_settings,
     preparation_settings,
+    shuffled_attacker_exercises,
     skill_plant,
 )
 from pvz_rl.learning.budget import budget_target
@@ -57,9 +65,16 @@ class ScenarioQueue:
     stale curriculum weights and never places a seed or schedule in policy input.
     """
 
-    def __init__(self, cfg, condition, seed, family, n):
+    def __init__(self, cfg, condition, seed, family, n, *, training=True):
         self.cfg, self.condition, self.family = cfg, condition, family
+        seed = randbits(32) if seed is None else seed
         self.rngs = [np.random.default_rng(seed * 1000 + i) for i in range(n)]
+        self.random_cohorts = (
+            training
+            and family != "diagnostic"
+            and cfg["training"].get("random_cohort_seeds", False)
+        )
+        self.cohort_seed = self.pending_cohort_seed = None
         self.progress, self.stage = 0, 0
         self.rules = Rules()
         self.tile_scenario = "complete"
@@ -70,6 +85,46 @@ class ScenarioQueue:
         self._prefetched = None
         self.preparation_metrics = {}
         self.validation_cases = None
+
+    def _staging_rngs(self):
+        if not self.random_cohorts:
+            return deepcopy(self.rngs)
+        if self.pending_cohort_seed is None:
+            self.pending_cohort_seed = randbits(63)
+        return [
+            np.random.default_rng(np.random.SeedSequence([self.pending_cohort_seed, index]))
+            for index in range(len(self.rngs))
+        ]
+
+    def seed_state(self):
+        return dict(
+            version=1,
+            random=self.random_cohorts,
+            current=self.cohort_seed,
+            pending=self.pending_cohort_seed,
+        )
+
+    def restore_seeds(self, state):
+        if state is None:
+            # Missing metadata belongs to the saved sequential-RNG workflow.
+            self.random_cohorts = False
+            self.cohort_seed = self.pending_cohort_seed = None
+            return
+        if (
+            state.get("version") != 1
+            or type(state.get("random")) is not bool
+            or state["random"] != self.random_cohorts
+            or any(
+                value is not None and (type(value) is not int or not 0 <= value < 2**63)
+                for value in (state.get("current"), state.get("pending"))
+            )
+            or (
+                not state["random"]
+                and any(state.get(k) is not None for k in ("current", "pending"))
+            )
+        ):
+            raise ValueError("Invalid or incompatible cohort seed recovery")
+        self.cohort_seed, self.pending_cohort_seed = state["current"], state["pending"]
 
     def _draft(self, indices, rngs, seeds=None):
         cfg = self.cfg
@@ -94,16 +149,30 @@ class ScenarioQueue:
             if self.tile_scenario == "peashooter":
                 level, family = "easy", "tile_peashooter"
                 spec = peashooter_level(self.rules, seed)
-            elif is_placement_skill(self.tile_scenario):
+            elif is_single_frame_skill(self.tile_scenario):
                 level, family = "easy", "tile_" + self.tile_scenario
             else:
                 spec = scenario(level, family, seed, self.rules, cfg)
             staged.append((index, level, family, seed, spec))
+        if self.tile_scenario == "attacker":
+            exercises = shuffled_attacker_exercises(cfg, [s[3] for s in staged])
+            staged = [
+                (index, level, f"tile_{source}", seed, spec)
+                for (index, level, _, seed, spec), source in zip(staged, exercises, strict=True)
+            ]
         return staged
+
+    def _preparation_exercises(self, staged):
+        return (
+            [s[2].removeprefix("tile_") for s in staged]
+            if self.tile_scenario == "attacker"
+            else None
+        )
 
     def _bomb_preparation(self):
         if self._preparation is not None and (
-            (self._preparation.skill == "attacker_pre") != (self.tile_scenario == "attacker_pre")
+            (self._preparation.skill in ("attacker_pre", "attacker"))
+            != (self.tile_scenario in ("attacker_pre", "attacker"))
         ):
             self.discard_prefetch()
             self._preparation.close()
@@ -122,10 +191,13 @@ class ScenarioQueue:
             return
         if self.deadline is not None and perf_counter() >= self.deadline:
             return
-        rngs = deepcopy(self.rngs)
+        rngs = self._staging_rngs()
         staged = self._draft(list(range(count)), rngs)
         tasks = self._bomb_preparation().submit(
-            [s[3] for s in staged], self.deadline, skill=self.tile_scenario
+            [s[3] for s in staged],
+            self.deadline,
+            skill=self.tile_scenario,
+            exercises=self._preparation_exercises(staged),
         )
         self._prefetched = (staged, rngs, tasks, self.tile_scenario)
 
@@ -133,6 +205,7 @@ class ScenarioQueue:
         if self._prefetched is not None:
             self._preparation.cancel(self._prefetched[2])
             self._prefetched = None
+            self.pending_cohort_seed = None
 
     def prepare(self, indices, seeds=None):
         from pvz_rl.learning.deadline import check_deadline
@@ -149,6 +222,7 @@ class ScenarioQueue:
                 and self.tile_scenario == saved_skill
                 and seeds is None
                 and indices == [s[0] for s in staged[: len(indices)]]
+                and (self.tile_scenario != "attacker" or len(indices) == len(staged))
             ):
                 staged, tasks = staged[: len(indices)], saved_tasks[: len(indices)]
                 self._preparation.cancel(saved_tasks[len(indices) :])
@@ -157,22 +231,40 @@ class ScenarioQueue:
                 self._prefetched = None
                 prefetched = True
             else:
+                pending = self.pending_cohort_seed
                 self.discard_prefetch()
+                if self.tile_scenario == saved_skill == "attacker" and seeds is None:
+                    self.pending_cohort_seed = pending
         if tasks is None:
+            rngs = self._staging_rngs() if seeds is None and indices else deepcopy(self.rngs)
             staged = self._draft(indices, rngs, seeds)
         if is_placement_skill(self.tile_scenario):
             prep = self._bomb_preparation()
             selected_seeds = [s[3] for s in staged]
+            exercises = self._preparation_exercises(staged)
             if tasks is None:
-                tasks = prep.submit(selected_seeds, self.deadline, skill=self.tile_scenario,
-                                    cases=self.validation_cases)
-            try:
-                boards = prep.collect(
-                    tasks, selected_seeds, deadline=self.deadline, skill=self.tile_scenario,
+                tasks = prep.submit(
+                    selected_seeds,
+                    self.deadline,
+                    skill=self.tile_scenario,
                     cases=self.validation_cases,
+                    exercises=exercises,
                 )
+            try:
+                if exercises is None:
+                    boards = prep.collect(
+                        tasks,
+                        selected_seeds,
+                        deadline=self.deadline,
+                        skill=self.tile_scenario,
+                        cases=self.validation_cases,
+                    )
+                else:
+                    boards = prep.collect_mixed(
+                        tasks, selected_seeds, exercises, deadline=self.deadline
+                    )
             except BombGenerationFailure:
-                self.generation_failures += self.cfg["training"]["annotation"][
+                self.generation_failures += self.cfg["training"]["tile_scenarios"][
                     "sampling_max_attempts"
                 ]
                 raise
@@ -183,24 +275,40 @@ class ScenarioQueue:
             check_deadline(self.deadline)
             self.tile_boards.update(zip(indices, boards, strict=True))
             self.generation_failures += sum(b["generation_failures"] for b in boards)
+            warmup_backends = set()
+            for source in set(exercises or [self.tile_scenario]):
+                settings = preparation_settings(self.cfg, source)
+                uses_cuda = settings.get("oracle") in ("cuda", "distance") and settings.get(
+                    "cuda_warmup", False
+                )
+                warmup_backends.add("cuda" if uses_cuda else "cpu")
             self.preparation_metrics = dict(
                 workers=prep.workers,
-                oracle=prep.oracle,
-                warmup_backend=(
-                    "cuda"
-                    if prep.oracle in ("cuda", "distance")
-                    and preparation_settings(self.cfg, self.tile_scenario).get("cuda_warmup", False)
-                    else "cpu"
-                ),
+                oracle=prep.oracle if exercises is None else "mixed",
+                warmup_backend="mixed" if len(warmup_backends) > 1 else warmup_backends.pop(),
                 prefetched=prefetched,
                 scratch_lanes=prep.cuda.batch.n if prep.cuda is not None else 0,
                 host_reserved_bytes=self.reserved_bytes,
             )
+        elif self.tile_scenario == "prediction":
+            from pvz_rl.envs.prediction_scenarios import prediction_snapshot
+
+            boards = {}
+            for index, _, _, seed, _ in staged:
+                check_deadline(self.deadline)
+                boards[index] = dict(snapshot=prediction_snapshot(self.cfg, seed, self.rules))
+            self.tile_boards.update(boards)
+            staged = [
+                (*s[:4], LevelSpec.from_dict(boards[s[0]]["snapshot"]["level"])) for s in staged
+            ]
+            self.preparation_metrics = dict(warmup_backend="snapshot")
         else:
             self.preparation_metrics = {}
         # Atomic consumption: unfinished preparation can be regenerated on resume.
         for i in indices:
             self.rngs[i].bit_generator.state = rngs[i].bit_generator.state
+        if self.random_cohorts and seeds is None and indices:
+            self.cohort_seed, self.pending_cohort_seed = self.pending_cohort_seed, None
         return staged
 
     def release_scratch(self):
@@ -239,7 +347,7 @@ class CudaVecEnv(VecEnv):
         self._per_tick = cfg["environment"].get("action_timing") == "per_tick"
         self._decision_ticks = int(cfg["environment"]["decision_ticks"])
         count = training_env_capacity(cfg, family) if training else cfg["training"]["n_envs"]
-        self.queue = ScenarioQueue(cfg, condition, learner_seed, family, count)
+        self.queue = ScenarioQueue(cfg, condition, learner_seed, family, count, training=training)
         self.stream = torch.cuda.current_stream()
         self.handoff = HostHandoff(self.stream)
         self.cases = cases
@@ -265,6 +373,7 @@ class CudaVecEnv(VecEnv):
         )
         self.active_tasks, self._tasks = Counter(), {}
         self.enabled_envs = np.ones(count, dtype=bool)
+        self.static_forks = None
         self._pending_spawns = np.zeros(count, dtype=np.int64)
         self.tile_scenario = "complete"
         self.tile_boards = {}
@@ -280,6 +389,14 @@ class CudaVecEnv(VecEnv):
             for level, fam, seed in cases:
                 game.reset(scenario(level, fam, seed, self.queue.rules, cfg), seed)
                 counts.append(game.observe().counts.initial_total)
+        prediction = prediction_settings(cfg)
+        if prediction is not None:
+            counts.append(
+                sum(
+                    prediction[k][1]
+                    for k in ("live_zombies", "defeated_zombies", "pending_zombies")
+                )
+            )
         self.batch = AccountingCudaBatch(
             count,
             zombie_capacity=max(1, *counts),
@@ -288,7 +405,7 @@ class CudaVecEnv(VecEnv):
             # future simulation.  Allocate both portions up front so resume does
             # not fail merely because the checkpoint was saved after firing.
             projectile_capacity=2 * projectile_bound(self.queue.rules),
-            max_step_ticks=self._decision_ticks,
+            max_step_ticks=max(256, self._decision_ticks),
             diagnostic=False,
         )
         self.cp = self.batch.cp
@@ -330,6 +447,8 @@ class CudaVecEnv(VecEnv):
             yield
 
     def reset_indices(self, indices, cases=None, *, tile_seeds=None):
+        if self.static_forks is not None:
+            self.static_forks.invalidate(indices)
         started = perf_counter()
         if self.live_view is not None:
             try:
@@ -365,18 +484,27 @@ class CudaVecEnv(VecEnv):
         self.batch.set_sky_sun_rate(
             peashooter_sky_sun_rate(self.cfg) if self.tile_scenario == "peashooter" else 1.0
         )
-        if is_placement_skill(self.tile_scenario):
-            self.tile_boards = deepcopy(self.queue.tile_boards)
+        if is_single_frame_skill(self.tile_scenario):
             from pvz_rl.envs.cuda_snapshots import upload_snapshots
 
+            boards = self.queue.tile_boards
             upload_snapshots(
                 self.batch,
-                [self.tile_boards[i]["snapshot"] for i in indices],
+                [boards[i]["snapshot"] for i in indices],
                 indices=indices,
             )
+            if self.tile_scenario == "prediction":
+                boards.clear()  # Physical roots and scene seeds already have owners.
+            else:
+                self.tile_boards = deepcopy(boards)
         else:
             from pvz_rl.envs.cuda_snapshots import reset_owned
-            reset = partial(reset_owned, self.batch) if self.tile_scenario == "peashooter" else self.batch.reset
+
+            reset = (
+                partial(reset_owned, self.batch)
+                if self.tile_scenario == "peashooter"
+                else self.batch.reset
+            )
             reset(
                 [s[4] for s in staged],
                 [s[3] for s in staged],
@@ -396,18 +524,58 @@ class CudaVecEnv(VecEnv):
 
     def supplied_branches(self, skill, availability):
         """Public exercise instruction, independently supplied for each board."""
-        if skill == "attacker_pre":
-            branches = torch.tensor([
-                self.cfg["environment"]["plants"].index(board["supplied_plant"]) + 1
-                if (board := self.tile_boards.get(i)) is not None else 0
-                for i in range(self.num_envs)
-            ], device=availability.device, dtype=torch.long)
+        if skill in ("attacker_pre", "attacker"):
+            branches = torch.tensor(
+                [
+                    self.cfg["environment"]["plants"].index(
+                        skill_plant(placement_source(skill, board), board)
+                    )
+                    + 1
+                    if (board := self.tile_boards.get(i)) is not None
+                    else 0
+                    for i in range(self.num_envs)
+                ],
+                device=availability.device,
+                dtype=torch.long,
+            )
         else:
-            branches = torch.full((self.num_envs,),
+            branches = torch.full(
+                (self.num_envs,),
                 self.cfg["environment"]["plants"].index(skill_plant(skill)) + 1,
-                device=availability.device, dtype=torch.long)
+                device=availability.device,
+                dtype=torch.long,
+            )
         usable = availability.gather(1, branches[:, None]).squeeze(1)
         return torch.where(usable, branches, 0)
+
+    def fork_service(self):
+        if self.static_forks is None:
+            from pvz_rl.envs.fork_service import ForkService
+
+            # Board preparation is finished. Its idle GPU oracle must not compete
+            # with collection forks; retain CPU workers and speculative seeds.
+            self.queue.release_scratch()
+            settings = dict(self.cfg["training"]["forecasts"])
+            settings.update(
+                {
+                    k: v
+                    for k, v in self.cfg["training"]["performance"].items()
+                    if k.startswith("fork_")
+                }
+            )
+            settings["fork_wait_ticks"] = self._decision_ticks
+            settings["fork_max_jobs"] = max(1, int(self.enabled_envs.sum())) * (
+                5 if self.training else 1
+            )
+            if is_single_frame_skill(self.tile_scenario):
+                settings["fork_suffix_cache"] = False  # Only one query per board.
+            settings["headroom_mib"] = self.cfg["training"]["performance"].get(
+                "collection_vram_headroom_mib", 0
+            )
+            self.static_forks = ForkService(
+                self.batch, settings, sky_sun_rate=self.batch.sky_sun_rate
+            )
+        return self.static_forks
 
     def reset(self):
         for index, seed in enumerate(self._seeds):
@@ -437,6 +605,10 @@ class CudaVecEnv(VecEnv):
 
     def action_masks(self):
         return self.features.mask_tensor
+
+    def engine_action_masks_device(self):
+        """Exact pre-action legality for alternative sampling and baselines."""
+        return torch.from_dlpack(self.batch.action_masks_device())
 
     def branch_availability(self, active=None):
         """Return pre-action card availability and empty-board Dig rejection.
@@ -473,6 +645,8 @@ class CudaVecEnv(VecEnv):
     def _refresh_growth_bounds(self, indices):
         header = self.batch.header.get()
         self._update_public_counts(header, indices)
+        self._physical_header = header.copy()
+        self._physical_cooldowns = self.batch.cooldowns.get()
 
     def _update_public_counts(self, header, indices):
         self._pending_spawns[indices] = (
@@ -502,13 +676,20 @@ class CudaVecEnv(VecEnv):
             torch.as_tensor(self.enabled_envs, device=actions.device) if active is None else active
         )
         self.header_tensor[:, 17].copy_(self._device_active.long())
+        before_spawns = self.header_tensor[:, HEADER.index("spawn_index")].clone()
         _, reward = self.features.step(
             self.cp.from_dlpack(actions.detach().contiguous()),
             ticks=self._decision_ticks,
             per_tick=self._per_tick,
             publish=False,
             observation_active=self.cp.asarray(self.enabled_envs),
+            action_only=self.tile_scenario == "prediction",
         )
+        if self.static_forks is not None:
+            self.static_forks.invalidate(
+                actions=self.cp.from_dlpack(actions.detach().contiguous()),
+                active=self.cp.from_dlpack(self._device_active),
+            )
         self._device_active = torch.from_dlpack(self.features.enabled)
         h = self.header_tensor
         self.proposed_actions.copy_(actions)
@@ -543,16 +724,30 @@ class CudaVecEnv(VecEnv):
             self._step_state_host = self.handoff.enqueue_fields(
                 "step_state",
                 dict(
+                    **(
+                        dict(
+                            physical_header=h,
+                            physical_cooldowns=torch.from_dlpack(self.batch.cooldowns),
+                        )
+                        if getattr(self, "auxiliary", None) is not None
+                        else {}
+                    ),
                     executing=self._device_active,
+                    spawned=h[:, HEADER.index("spawn_index")] != before_spawns,
                     pending_spawns=h[:, HEADER.index("total_spawns")]
                     - h[:, HEADER.index("spawn_index")],
                 ),
             )
+        if getattr(self, "auxiliary", None) is not None and self.batch.wait_capture is not None:
+            self.batch.wait_capture.enqueue(self.handoff)
         self._step_device_result = reward, done, timed_out
 
     def step_host(self, *, autoreset=True, active=None, packed=False):
         """Interpret the completed step record after the handoff wait."""
         host = self._record.numpy()
+        if "physical_header" in self._step_state_host:
+            self._physical_header = self._step_state_host["physical_header"].numpy().copy()
+            self._physical_cooldowns = self._step_state_host["physical_cooldowns"].numpy().copy()
         executed = self._step_state_host["executing"].numpy()
         self._step_active = executed.copy()
         if active is not None and not np.array_equal(np.asarray(active, dtype=bool), executed):
@@ -561,14 +756,14 @@ class CudaVecEnv(VecEnv):
             self.task_transitions.update(self._tasks[i] for i in np.flatnonzero(self._step_active))
         self._pending_spawns[:] = self._step_state_host["pending_spawns"].numpy()
         compact = host[:, RECORD_OUTCOME]
-        if is_placement_skill(self.tile_scenario):
-            # A supervised exercise ends after its one proposal. Its success
-            # is its private target label, not a whole-game outcome.
+        if is_single_frame_skill(self.tile_scenario):
+            # A one-frame exercise ends after its proposal, even when time did not advance.
             compact[self._step_active, 0] = 1
             compact[self._step_active, 1] = 0
         self.last_transition_host = compact
         self.last_action_result_host = host[:, RECORD_RESULT]
         actions = host[:, RECORD_ACTIONS]
+        self._last_spawned = self._step_state_host["spawned"].numpy().copy()
         self.last_reward_parts_host = host[:, RECORD_PARTS]
         if not np.isfinite(self.last_reward_parts_host).all():
             raise RuntimeError("Invalid CUDA reward accounting or exhausted proximity ledger")
@@ -581,7 +776,7 @@ class CudaVecEnv(VecEnv):
             compact, actions, self.last_action_result_host, truncation, self._step_active, completed
         )
         reward, done, timed_out = self._step_device_result
-        if is_placement_skill(self.tile_scenario):
+        if is_single_frame_skill(self.tile_scenario):
             done = self._device_active.clone()
             timed_out = torch.zeros_like(done)
         reward = reward.clone()
@@ -606,11 +801,18 @@ class CudaVecEnv(VecEnv):
                     episode_metrics=self.episode_metrics(index, header, total),
                     **{"TimeLimit.truncated": bool(compact[index, 1])},
                 )
+                if self.tile_scenario == "prediction":
+                    completed[index]["episode_metrics"].update(
+                        status="scored", tile_scenario="prediction"
+                    )
                 if is_placement_skill(self.tile_scenario):
                     action = int(actions[index, 0])
                     branch = 1 + (action - 1) // 45 if action else 0
                     board = self.tile_boards[index]
-                    expected = self.cfg["environment"]["plants"].index(skill_plant(self.tile_scenario, board)) + 1
+                    source = placement_source(self.tile_scenario, board)
+                    expected = (
+                        self.cfg["environment"]["plants"].index(skill_plant(source, board)) + 1
+                    )
                     settings = self.cfg["training"]["tile_scenarios"]
                     success = bool(
                         self.last_action_result_host[index, 0]
@@ -626,15 +828,22 @@ class CudaVecEnv(VecEnv):
                         selected_tile_distance=bomb_tile_distances(
                             board["feasible_tiles"],
                             board["absolute_infeasible_tiles"]
-                            if self.tile_scenario == "attacker_pre" or bomb_max_illegal_distance(settings) else [],
+                            if source == "attacker_pre" or bomb_max_illegal_distance(settings)
+                            else [],
                             rows=self.cfg["environment"]["rows"],
                             cols=self.cfg["environment"]["cols"],
-                        )[(action - 1) % 45] if action > 0 and branch == expected else None,
+                        )[(action - 1) % 45]
+                        if action > 0 and branch == expected
+                        else None,
                     )
-                    if self.tile_scenario == "attacker_pre":
+                    if self.tile_scenario == "attacker":
+                        metrics["exercise"] = source
+                    if source == "attacker_pre":
                         metrics.update(
-                            target_correct=success, fallback=board["fallback"],
-                            supplied_plant=board["supplied_plant"], zombie_count=board["zombie_count"],
+                            target_correct=success,
+                            fallback=board["fallback"],
+                            supplied_plant=board["supplied_plant"],
+                            zombie_count=board["zombie_count"],
                             actual_kill=None,
                         )
                 self.finished_outcomes[index] = completed[index]["episode_metrics"]["status"]
@@ -644,7 +853,9 @@ class CudaVecEnv(VecEnv):
         if viewer is not None and viewer.enabled:
             presentation_started = perf_counter()
             try:
-                viewer.after_step(compact)
+                viewer.after_step(
+                    compact, completed_headers=(indices, headers) if indices else None
+                )
             except Exception as exc:
                 viewer.fail(exc)
             self.profiler.host("presentation", perf_counter() - presentation_started)
@@ -681,10 +892,12 @@ class CudaVecEnv(VecEnv):
             "totals": self.features.totals.get(),
             "home_ledger": self.features.home_ledger.get(),
             "queue_rng": [deepcopy(r.bit_generator.state) for r in self.queue.rngs],
+            "queue_seed_state": self.queue.seed_state(),
             "queue_progress": self.queue.progress,
             "queue_stage": self.queue.stage,
             "tile_scenario": self.tile_scenario,
             "sky_sun_rate": self.batch.sky_sun_rate,
+            "static_forks": self.static_forks.snapshot() if self.static_forks else None,
             "tile_boards": deepcopy(
                 {
                     i: dict(board, snapshot=dict(board["snapshot"]))
@@ -712,11 +925,22 @@ class CudaVecEnv(VecEnv):
         }
 
     def restore_training(self, state):
-        if state.get("tile_scenario") == "attacker_pre":
+        skill = state.get("tile_scenario", "complete")
+        if skill in ("attacker_pre", "attacker"):
             from pvz_rl.envs.attacker_scenarios import label_attacker
 
-            for board in state.get("tile_boards", {}).values():
-                if label_attacker(board, self.queue.rules) != board:
+            boards = state.get("tile_boards", {})
+            if skill == "attacker":
+                episodes = state["attributes"]["_episode"]
+                seeds = [episodes[index][2] for index in sorted(boards)]
+                expected = shuffled_attacker_exercises(self.cfg, seeds)
+                if [boards[i].get("exercise") for i in sorted(boards)] != expected:
+                    raise ValueError("Saved mixed attacker exercises differ from the cohort seeds")
+            for board in boards.values():
+                if (
+                    placement_source(skill, board) == "attacker_pre"
+                    and label_attacker(board, self.queue.rules) != board
+                ):
                     raise ValueError("Saved attacker labels or conservative bounds changed")
         ledger = state.get("home_ledger")
         if ledger is not None:
@@ -753,6 +977,7 @@ class CudaVecEnv(VecEnv):
             self.features.encode()
             for rng, saved in zip(self.queue.rngs, state["queue_rng"], strict=True):
                 rng.bit_generator.state = deepcopy(saved)
+            self.queue.restore_seeds(state.get("queue_seed_state"))
             self.queue.progress, self.queue.stage = state["queue_progress"], state["queue_stage"]
             self.tile_scenario = self.queue.tile_scenario = state.get("tile_scenario", "complete")
             self.tile_boards = deepcopy(state.get("tile_boards", {}))
@@ -762,6 +987,8 @@ class CudaVecEnv(VecEnv):
             for key, value in state["attributes"].items():
                 setattr(self, key, deepcopy(value))
             self._reset_seeds()  # Saved per-worker RNG replaces constructor seed requests.
+        if state.get("static_forks") is not None:
+            self.fork_service().restore(state["static_forks"])
         return self.features.obs_tensor
 
     def task_counts(self):
@@ -860,7 +1087,15 @@ class CudaVecEnv(VecEnv):
         return [False] * len(list(self._get_indices(indices)))
 
     def close(self):
+        if getattr(self, "auxiliary", None) is not None:
+            self.auxiliary.close()
+        from pvz_rl.learning.auxiliary_service import close_cpu_workers
+
+        close_cpu_workers(self)
         self.queue.close()
+        if self.static_forks is not None:
+            self.static_forks.close()
+            self.static_forks = None
         if getattr(self, "lane_preparation", None) is not None:
             self.lane_preparation.close()
             self.lane_preparation = None

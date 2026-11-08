@@ -15,7 +15,16 @@ from random import SystemRandom
 from pvz_game.config import PLANT_TYPES, ZOMBIE_TYPES
 from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
 
-from pvz_rl.envs.tile_scenarios import BOMB_SKILLS, is_bomb_skill, is_placement_skill
+from pvz_rl.envs.outcome_math import OUTCOME_SHAPE
+from pvz_rl.envs.tile_scenarios import (
+    ATTACKER_EXERCISES,
+    BOMB_SKILLS,
+    attacker_mix,
+    is_bomb_skill,
+    is_placement_skill,
+    is_single_frame_skill,
+    prediction_settings,
+)
 from pvz_rl.learning.budget import uses_games
 
 _CONFIG_RESOURCE = "data/train.toml"
@@ -23,12 +32,15 @@ _CONFIG_RESOURCE = "data/train.toml"
 # User-facing stage tables resolve once into the checkpoint-compatible runtime layout.
 _STAGE_PARAMETERS = {
     "normal": {
-        **{key: f"training.{key}" for key in (
-            "n_envs", "tile_only_cohorts", "exploration", "validation_schedule",
-            "eval_interval_games",
-        )},
-        "counterfactual_enabled": "training.counterfactual.normal.enabled",
-        "comparison_temperature": "training.counterfactual.normal.temperature",
+        **{
+            key: f"training.{key}"
+            for key in (
+                "n_envs",
+                "exploration",
+                "validation_schedule",
+                "eval_interval_games",
+            )
+        },
         "curriculum": "curriculum",
     },
     "cherry_bomb": {
@@ -37,14 +49,28 @@ _STAGE_PARAMETERS = {
         "plants": "training.tile_scenarios.bomb_plants",
         "obstacle_plants": "training.tile_scenarios.bomb_obstacle_plants",
         "mower_ready_probability": "training.tile_scenarios.bomb_mower_ready_probability",
-        **{key: f"training.tile_scenarios.{key}" for key in (
-            "ranking_objective", "softmax_temperature", "ranking_margin",
-            "distance_weight", "distance_temperature",
-        )},
-        **{key: f"training.performance.cherry_{key}" for key in (
-            "prepare_workers", "worker_ram_mib", "prefetch", "oracle", "cuda_warmup",
-            "oracle_lanes", "oracle_vram_mib",
-        )},
+        **{
+            key: f"training.tile_scenarios.{key}"
+            for key in (
+                "ranking_objective",
+                "softmax_temperature",
+                "ranking_margin",
+                "distance_weight",
+                "distance_temperature",
+            )
+        },
+        **{
+            key: f"training.performance.cherry_{key}"
+            for key in (
+                "prepare_workers",
+                "worker_ram_mib",
+                "prefetch",
+                "oracle",
+                "cuda_warmup",
+                "oracle_lanes",
+                "oracle_vram_mib",
+            )
+        },
         "probe_interval_games": "curriculum.cherry_bomb_probe_interval_games",
         "validation_success_threshold": "curriculum.cherry_bomb_validation_success_threshold",
     },
@@ -52,29 +78,135 @@ _STAGE_PARAMETERS = {
         "softmax_temperature": "training.tile_scenarios.obstacle_softmax_temperature",
     },
     "attacker_pre": {
-        **{key: f"training.tile_scenarios.attacker.{key}" for key in (
-            "n_envs", "plants", "zombie_count", "provided_plants", "initial_sun",
-            "mower_ready_probability", "softmax_temperature", "ranking_objective",
-        )},
-        **{key: f"training.performance.attacker_{key}" for key in (
-            "prepare_workers", "worker_ram_mib", "prefetch", "cuda_warmup",
-            "oracle_lanes", "oracle_vram_mib",
-        )},
+        **{
+            key: f"training.tile_scenarios.attacker.{key}"
+            for key in (
+                "n_envs",
+                "plants",
+                "zombie_count",
+                "provided_plants",
+                "initial_sun",
+                "mower_ready_probability",
+                "softmax_temperature",
+                "ranking_objective",
+            )
+        },
+        **{
+            key: f"training.performance.attacker_{key}"
+            for key in (
+                "prepare_workers",
+                "worker_ram_mib",
+                "prefetch",
+                "cuda_warmup",
+                "oracle_lanes",
+                "oracle_vram_mib",
+            )
+        },
         "probe_interval_games": "curriculum.attacker_pre_probe_interval_games",
+    },
+    "prediction": {
+        **{
+            key: f"training.tile_scenarios.prediction.{key}"
+            for key in (
+                "n_envs",
+                "validation_cases",
+                "plants",
+                "live_zombies",
+                "defeated_zombies",
+                "pending_zombies",
+                "sun",
+                "ready_probability",
+            )
+        },
+        "probe_interval_games": "curriculum.prediction_probe_interval_games",
+    },
+    "attacker": {
+        **{
+            key: f"training.tile_scenarios.attacker_mix.{key}"
+            for key in ("n_envs", "validation_cases", "ratios")
+        },
+        "probe_interval_games": "curriculum.attacker_probe_interval_games",
     },
     "peashooter": {
         "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
-        **{key: f"training.peashooter_rules.{key}" for key in (
-            "fitting_objective", "column_decay", "softmax_temperature",
-            "oracle_lanes", "oracle_vram_mib", "oracle_chunk_ticks", "prepare_workers", "n_envs",
-            "snapshot_cache_mib",
-        )},
-        "counterfactual_enabled": "training.counterfactual.peashooter.enabled",
-        "comparison_temperature": "training.counterfactual.peashooter.temperature",
+        **{
+            key: f"training.peashooter_rules.{key}"
+            for key in (
+                "fitting_objective",
+                "column_decay",
+                "softmax_temperature",
+                "oracle_lanes",
+                "oracle_vram_mib",
+                "oracle_chunk_ticks",
+                "prepare_workers",
+                "n_envs",
+                "snapshot_cache_mib",
+            )
+        },
         "probe_interval_games": "curriculum.peashooter_probe_interval_games",
         "validation_success_threshold": "curriculum.peashooter_validation_success_threshold",
     },
 }
+
+for _stage, _fields in _STAGE_PARAMETERS.items():
+    _fields["forecast_mode"] = f"training.stage_forecast_modes.{_stage}"
+    _fields["extra_actions"] = f"training.stage_extra_actions.{_stage}"
+    for _outcome in ("static_field", "probe"):
+        _fields[f"{_outcome}_prediction_weight"] = (
+            f"training.stage_outcome_weights.{_stage}.{_outcome}"
+        )
+
+
+def absolute_outcomes(cfg):
+    """The supported model uses public inputs and absolute action outcomes."""
+    return cfg["encoding"]["version"] == "entity_public_v4"
+
+
+def forecast_version(cfg):
+    """Persisted outcome supervision identity; older versions are rejected."""
+    return cfg["training"].get("forecasts", {}).get("supervision_version", 1)
+
+
+def forecast_mode(cfg, stage=None):
+    stage = stage or cfg.get("curriculum", {}).get("run_stage") or "normal"
+    if stage not in _STAGE_PARAMETERS:
+        stage = "normal"
+    return cfg["training"]["stage_forecast_modes"][stage]
+
+
+def forecast_forks_enabled(cfg, stage=None):
+    stage = stage or cfg.get("curriculum", {}).get("run_stage")
+    if stage == "prediction":
+        return forecast_mode(cfg, stage) == "prediction_only"
+    return cfg["training"].get("forecasts", {}).get("enabled", False) and forecast_mode(
+        cfg, stage
+    ) in ("placement_outcomes", "action_outcomes")
+
+
+def outcome_prediction_weights(cfg, stage="normal"):
+    """Static-field/probe coefficients; saved single-weight runs retain their loss."""
+    training = cfg["training"]
+    stage = stage if stage in _STAGE_PARAMETERS else "normal"
+    if stage == "prediction":
+        return 1.0, 1.0
+    weights = training.get("stage_outcome_weights", {}).get(stage)
+    if weights is not None:
+        return weights["static_field"], weights["probe"]
+    weight = (
+        training.get("effect_prediction_weight", 0.1)
+        if stage == "normal"
+        else training.get("stage_effect_weights", {}).get(stage, 0.0)
+    )
+    return weight, weight
+
+
+def effect_extra_actions(cfg, stage="normal"):
+    """Stage overrides are collection-only; absent saved overrides retain sampling."""
+    training = cfg["training"]
+    stage = stage if stage in _STAGE_PARAMETERS else "normal"
+    return training.get("stage_extra_actions", {}).get(
+        stage, training["forecasts"]["extra_actions"]
+    )
 
 
 def _resolve_training_sections(cfg):
@@ -131,6 +263,10 @@ def runtime_settings(cfg: dict) -> dict:
 
 def cohort_envs(cfg, skill=None):
     """Configured real-episode cohort size; missing stage settings retain legacy size."""
+    if skill == "prediction":
+        return prediction_settings(cfg)["n_envs"]
+    if skill == "attacker":
+        return attacker_mix(cfg)["n_envs"]
     if skill == "attacker_pre":
         return cfg["training"]["tile_scenarios"]["attacker"]["n_envs"]
     if skill == "peashooter":
@@ -154,7 +290,8 @@ def bomb_ranking_margin(settings):
 def bomb_max_illegal_distance(settings):
     """Use maximum illegal distance for current diagnostics and saved v3 fitting."""
     return settings.get("ranking_objective") in (
-        "margin_distance_illegal_v3", "set_cross_entropy_v1",
+        "margin_distance_illegal_v3",
+        "set_cross_entropy_v1",
     )
 
 
@@ -169,13 +306,11 @@ def bomb_softmax_temperature(settings, success_rate, *, skill="cherry_bomb"):
         start, end = value["zero_success"], value["full_success"]
     else:
         start = end = value
-    if any(
-        type(t) not in (int, float) or not math.isfinite(t) or t <= 0
-        for t in (start, end)
-    ):
+    if any(type(t) not in (int, float) or not math.isfinite(t) or t <= 0 for t in (start, end)):
         raise ValueError("Bomb softmax_temperature must be finite and positive")
     if (
-        type(success_rate) not in (int, float) or not math.isfinite(success_rate)
+        type(success_rate) not in (int, float)
+        or not math.isfinite(success_rate)
         or not 0 <= success_rate <= 1
     ):
         raise ValueError("Bomb cohort success rate must be finite and in [0, 1]")
@@ -190,13 +325,17 @@ def training_env_capacity(cfg, family="preset"):
         family == "preset"
         and tile.get("enabled", False)
         and cfg["curriculum"].get("mode") == "teaching"
-        and (stage in (None, "pre") or is_placement_skill(stage))
+        and (stage in (None, "pre") or is_single_frame_skill(stage))
     ):
         cherry = cohort_envs(cfg, "cherry_bomb")
-        if is_placement_skill(stage):
+        if is_single_frame_skill(stage):
             return cohort_envs(cfg, stage)
         attacker = tile.get("attacker", {}).get("n_envs", 0)
-        return max(cherry, attacker, cohort_envs(cfg, "peashooter"), cohort_envs(cfg))
+        mixed = (attacker_mix(cfg) or {}).get("n_envs", 0)
+        prediction = (prediction_settings(cfg) or {}).get("n_envs", 0)
+        return max(
+            cherry, attacker, mixed, prediction, cohort_envs(cfg, "peashooter"), cohort_envs(cfg)
+        )
     if stage == "peashooter":
         return cohort_envs(cfg, "peashooter")
     return cohort_envs(cfg)
@@ -334,18 +473,19 @@ def load_config(path: str | Path | None = None, *, profile: str = "train") -> di
 def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -> dict:
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
-    if (
-        cfg["encoding"]["version"] != "entity_v1"
-        or cfg["policy"]["kind"] != "two_stage_transformer_q_v1"
-    ):
+    if (cfg["encoding"]["version"], cfg["policy"]["kind"]) not in {
+        ("entity_public_v4", "shared_public_outcomes_q_v10"),
+    }:
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
 
 
 def validate_config(cfg: dict) -> None:
-    from pvz_rl.learning.counterfactual_settings import validate_counterfactual
-
-    validate_counterfactual(cfg)
+    removed = {"annotation", "counterfactual", "tile_only_cohorts"} & cfg["training"].keys()
+    if removed:
+        raise ValueError(
+            f"Removed training settings: {sorted(removed)}; start from the shared-encoder train.toml"
+        )
     from pvz_rl.learning.peashooter_rules import validate_rule_settings
 
     validate_rule_settings(cfg)
@@ -376,7 +516,7 @@ def validate_config(cfg: dict) -> None:
                 "training.objective contains retired or missing settings, including "
                 "species_consistency_huber_delta"
             )
-        if objective.get("protocol") != "complete_return_action_global_v7":
+        if objective.get("protocol") != "nstep_action_outcomes_v5":
             raise ValueError(
                 "Unsupported training objective protocol; fresh initialization is required"
             )
@@ -438,9 +578,11 @@ def validate_config(cfg: dict) -> None:
     if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
         raise ValueError("win_time_weight must be finite and nonnegative")
     current_policy = (
-        cfg.get("encoding", {}).get("version") == "entity_v1"
-        and cfg.get("policy", {}).get("kind") == "two_stage_transformer_q_v1"
-    )
+        cfg.get("encoding", {}).get("version"),
+        cfg.get("policy", {}).get("kind"),
+    ) in {
+        ("entity_public_v4", "shared_public_outcomes_q_v10"),
+    }
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
         "stage_success",
@@ -449,9 +591,7 @@ def validate_config(cfg: dict) -> None:
     if simulator(cfg) not in ("cpu", "cuda"):
         raise ValueError("simulation.backend must be cpu or cuda")
     if not current_policy:
-        raise ValueError(
-            "Retired observation/policy format; entity_v1 requires fresh initialization"
-        )
+        raise ValueError("Retired observation/policy format; use the bundled public model profile")
     if cfg["reward"].get("version") != "action_global_value_v5":
         raise ValueError(
             "Retired reward format; ranked endgame action/global rewards require fresh training with the bundled train profile"
@@ -538,7 +678,10 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("reward.asset_loss_multiplier must be finite and nonnegative")
     if "actor_objective" in cfg["training"] or "ent_coef" in cfg["training"]:
         raise ValueError("Retired PPO objective; use sequential Q fitting")
-    if cfg["training"]["exploration"].get("objective") not in ("committed_plant_tile_epsilon_v1", "committed_species_epsilon_v1"):
+    if cfg["training"]["exploration"].get("objective") not in (
+        "committed_plant_tile_epsilon_v1",
+        "committed_species_epsilon_v1",
+    ):
         raise ValueError("Only committed plant and conditional tile exploration is supported")
     for key in (
         "win_reward",
@@ -573,14 +716,13 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("encoding.max_entities must be an integer of at least 5")
     policy = cfg["policy"]
     model_settings = {
-        "species_width": 128,
-        "species_layers": 4,
-        "species_heads": 8,
-        "species_feedforward": 512,
-        "tile_width": 192,
-        "tile_layers": 6,
-        "tile_heads": 12,
-        "tile_feedforward": 768,
+        "shared_width",
+        "encoder_blocks",
+        "tile_decoder_blocks",
+        "attention_heads",
+        "action_decoder_blocks",
+        "action_decoder_heads",
+        "feedforward_width",
     }
     execution_settings = (
         "encoder_microbatch",
@@ -602,11 +744,48 @@ def validate_config(cfg: dict) -> None:
     ):
         if type(policy.get(key)) is not int or policy[key] < 1:
             raise ValueError(f"policy.{key} must be a positive integer")
-    for key, expected in model_settings.items():
-        if policy[key] != expected:
+    if policy["shared_width"] % policy["attention_heads"]:
+        raise ValueError("shared_width must be divisible by attention_heads")
+    if policy["shared_width"] % policy["action_decoder_heads"]:
+        raise ValueError("shared_width must be divisible by action_decoder_heads")
+    optional = {"attacker": attacker_mix(cfg), "prediction": prediction_settings(cfg)}
+    stages = tuple(
+        stage for stage in _STAGE_PARAMETERS if stage not in optional or optional[stage] is not None
+    )
+    if set(cfg["training"].get("stage_effect_weights", {})) - set(stages[1:]):
+        raise ValueError("Unknown preliminary outcome stage")
+    split_weights = cfg["training"].get("stage_outcome_weights", {})
+    if not isinstance(split_weights, dict) or set(split_weights) - set(stages):
+        raise ValueError("Unknown outcome weight stage")
+    for stage in stages:
+        weights = split_weights.get(stage)
+        if stage == "prediction" and weights is not None:
+            raise ValueError("Prediction-only fitting uses unweighted outcome loss")
+        if stage in split_weights and (
+            not isinstance(weights, dict) or set(weights) != {"static_field", "probe"}
+        ):
             raise ValueError(
-                f"policy.{key} must be {expected} for the two-stage Transformer contract"
+                f"training.{stage} requires both static_field_prediction_weight and "
+                "probe_prediction_weight"
             )
+        legacy = (
+            cfg["training"].get("effect_prediction_weight")
+            if stage == "normal"
+            else cfg["training"].get("stage_effect_weights", {}).get(stage)
+        )
+        if weights is not None and legacy is not None:
+            raise ValueError(f"Duplicate combined and separate outcome weights for {stage}")
+        for name, weight in zip(
+            ("static_field", "probe"), outcome_prediction_weights(cfg, stage), strict=True
+        ):
+            if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
+                raise ValueError(
+                    f"training.{stage}.{name}_prediction_weight must be finite and nonnegative"
+                )
+
+    attempts = cfg["training"]["tile_scenarios"].get("sampling_max_attempts")
+    if type(attempts) is not int or attempts < 1:
+        raise ValueError("training.tile_scenarios.sampling_max_attempts must be positive")
     sample_seconds = output_settings(cfg)["logging"]["hardware_sample_seconds"]
     if (
         type(sample_seconds) not in (int, float)
@@ -628,7 +807,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("exploration floor exceeds start")
     if exploration["plant_epsilon_floor"] > exploration["plant_epsilon_start"]:
         raise ValueError("plant exploration floor exceeds start")
-    for key in (("decay_games", "plant_decay_games") if legacy_tiles else ("plant_decay_games",)):
+    for key in ("decay_games", "plant_decay_games") if legacy_tiles else ("plant_decay_games",):
         if type(exploration.get(key)) is not int or exploration[key] < 1:
             raise ValueError(f"exploration.{key} must be a positive integer")
     minutes = cfg["training"].get("max_minutes")
@@ -640,13 +819,21 @@ def validate_config(cfg: dict) -> None:
     if type(reserve) not in (int, float) or not math.isfinite(reserve) or reserve < 0:
         raise ValueError("finalization_minutes must be finite and nonnegative")
     c = cfg["curriculum"]
-    for key in ("cherry_bomb_probe_interval_games", "peashooter_probe_interval_games", "attacker_pre_probe_interval_games"):
+    for key in (
+        "cherry_bomb_probe_interval_games",
+        "peashooter_probe_interval_games",
+        "attacker_pre_probe_interval_games",
+        "prediction_probe_interval_games",
+        "attacker_probe_interval_games",
+    ):
         if key in c and (type(c[key]) is not int or c[key] < 1):
             raise ValueError(f"{key} must be a positive integer")
-    for key in ("cherry_bomb_validation_success_threshold", "peashooter_validation_success_threshold"):
+    for key in (
+        "cherry_bomb_validation_success_threshold",
+        "peashooter_validation_success_threshold",
+    ):
         if key in c and (
-            type(c[key]) not in (int, float) or not math.isfinite(c[key])
-            or not 0 <= c[key] < 1
+            type(c[key]) not in (int, float) or not math.isfinite(c[key]) or not 0 <= c[key] < 1
         ):
             raise ValueError(f"{key} must be finite and in [0, 1)")
     trigger = cfg["training"].get("validation_trigger")
@@ -688,8 +875,11 @@ def validate_config(cfg: dict) -> None:
             raise ValueError("tile scenario bomb_plants must be an inclusive range in [1, 44]")
         objective = tile.get("ranking_objective", "top1_hinge_v1")
         if objective not in (
-            "top1_hinge_v1", "zero_margin_distance_v1", "margin_distance_v2",
-            "margin_distance_illegal_v3", "set_cross_entropy_v1",
+            "top1_hinge_v1",
+            "zero_margin_distance_v1",
+            "margin_distance_v2",
+            "margin_distance_illegal_v3",
+            "set_cross_entropy_v1",
         ):
             raise ValueError("Unsupported tile scenario ranking_objective")
         if objective == "set_cross_entropy_v1":
@@ -704,18 +894,26 @@ def validate_config(cfg: dict) -> None:
             if type(margin) not in (float, int) or not math.isfinite(margin) or margin < 0:
                 raise ValueError("tile ranking_margin must be finite and nonnegative")
         if objective in (
-            "zero_margin_distance_v1", "margin_distance_v2", "margin_distance_illegal_v3",
+            "zero_margin_distance_v1",
+            "margin_distance_v2",
+            "margin_distance_illegal_v3",
         ):
             weight, temperature = tile.get("distance_weight"), tile.get("distance_temperature")
             if (
-                type(weight) not in (int, float) or not math.isfinite(weight)
-                or type(temperature) not in (int, float) or not math.isfinite(temperature)
-                or temperature <= 0 or not 0 <= weight < 4 * temperature
+                type(weight) not in (int, float)
+                or not math.isfinite(weight)
+                or type(temperature) not in (int, float)
+                or not math.isfinite(temperature)
+                or temperature <= 0
+                or not 0 <= weight < 4 * temperature
             ):
-                raise ValueError("Bomb distance settings require finite tau > 0 and 0 <= weight < 4*tau")
+                raise ValueError(
+                    "Bomb distance settings require finite tau > 0 and 0 <= weight < 4*tau"
+                )
         obstacle = tile.get("bomb_obstacle_plants", [1, 15])
         if (
-            not isinstance(obstacle, list) or len(obstacle) != 2
+            not isinstance(obstacle, list)
+            or len(obstacle) != 2
             or any(type(n) is not int for n in obstacle)
             or not 1 <= obstacle[0] <= obstacle[1] <= 44
         ):
@@ -736,16 +934,30 @@ def validate_config(cfg: dict) -> None:
                     raise ValueError(f"attacker_pre.{key} must be a positive integer")
             for key, lo, hi in (("plants", 4, 8), ("zombie_count", 1, 2)):
                 value = attacker.get(key)
-                if (not isinstance(value, list) or len(value) != 2
-                        or any(type(n) is not int for n in value)
-                        or not lo <= value[0] <= value[1] <= hi):
+                if (
+                    not isinstance(value, list)
+                    or len(value) != 2
+                    or any(type(n) is not int for n in value)
+                    or not lo <= value[0] <= value[1] <= hi
+                ):
                     raise ValueError(f"attacker_pre.{key} must be a range in [{lo}, {hi}]")
             kinds = attacker.get("provided_plants")
-            if (not isinstance(kinds, list) or not kinds or any(type(k) is not str for k in kinds)
-                    or len(set(kinds)) != len(kinds)
-                    or set(kinds) - set(ATTACKERS) or set(kinds) - set(cfg["environment"]["plants"])):
-                raise ValueError("attacker_pre.provided_plants must be distinct configured attackers")
-            if not max(rules.plants[k]["cost"] for k in kinds) <= attacker["initial_sun"] <= rules.game["sun_cap"]:
+            if (
+                not isinstance(kinds, list)
+                or not kinds
+                or any(type(k) is not str for k in kinds)
+                or len(set(kinds)) != len(kinds)
+                or set(kinds) - set(ATTACKERS)
+                or set(kinds) - set(cfg["environment"]["plants"])
+            ):
+                raise ValueError(
+                    "attacker_pre.provided_plants must be distinct configured attackers"
+                )
+            if (
+                not max(rules.plants[k]["cost"] for k in kinds)
+                <= attacker["initial_sun"]
+                <= rules.game["sun_cap"]
+            ):
                 raise ValueError("attacker_pre.initial_sun must afford every supplied plant")
             ready = attacker.get("mower_ready_probability")
             if type(ready) not in (int, float) or not math.isfinite(ready) or not 0 <= ready <= 1:
@@ -753,16 +965,33 @@ def validate_config(cfg: dict) -> None:
             if attacker.get("ranking_objective") != "set_cross_entropy_v1":
                 raise ValueError("attacker_pre requires successful-set cross-entropy")
             bomb_softmax_temperature(attacker, 0.0)
-            horizon = max(v["horizon"] for k, table in attacker_bounds(rules)["table"].items()
-                          if k in kinds for v in table.values())
+            horizon = max(
+                v["horizon"]
+                for k, table in attacker_bounds(rules)["table"].items()
+                if k in kinds
+                for v in table.values()
+            )
             # Slowest Basic must also reach a left-column mine within the cutoff.
             from pvz_rl.envs.attacker_scenarios import _arrival
 
-            horizon = max(horizon, _arrival(rules, rules.game["cols"] * rules.game["units_per_tile"], latest=True))
-            if (tile["enabled"] and c.get("run_stage") in (None, "attacker_pre")
-                    and warmup_ticks(rules, attacker) + horizon >= cfg["environment"]["cutoff_seconds"] * rules.game["tick_rate"]):
-                raise ValueError("attacker_pre cutoff is too short for cooldown and conservative completion")
-            if tile["enabled"] and c.get("run_stage") in (None, "attacker_pre") and "basic" not in cfg["environment"]["zombies"]:
+            horizon = max(
+                horizon,
+                _arrival(rules, rules.game["cols"] * rules.game["units_per_tile"], latest=True),
+            )
+            if (
+                tile["enabled"]
+                and c.get("run_stage") in (None, "attacker_pre", "attacker")
+                and warmup_ticks(rules, attacker) + horizon
+                >= cfg["environment"]["cutoff_seconds"] * rules.game["tick_rate"]
+            ):
+                raise ValueError(
+                    "attacker_pre cutoff is too short for cooldown and conservative completion"
+                )
+            if (
+                tile["enabled"]
+                and c.get("run_stage") in (None, "attacker_pre", "attacker")
+                and "basic" not in cfg["environment"]["zombies"]
+            ):
                 raise ValueError("attacker_pre requires Basic zombies in the configured roster")
         validate_sky_sun_rate(
             tile.get("peashooter_sky_sun_rate", 1.0),
@@ -776,6 +1005,72 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Tile stages require training.tile_scenarios.enabled")
     if c.get("run_stage") == "attacker_pre" and "attacker" not in tile:
         raise ValueError("attacker_pre requires its training configuration section")
+    prediction = prediction_settings(cfg)
+    if prediction is not None:
+        if type(prediction.get("n_envs")) is not int or prediction["n_envs"] < 1:
+            raise ValueError("prediction.n_envs must be a positive integer")
+        if (
+            type(prediction.get("validation_cases")) is not int
+            or prediction["validation_cases"] != 200
+        ):
+            raise ValueError("Prediction validation requires exactly 200 cases")
+        for key, limit in (("ready_probability", 1),):
+            value = prediction.get(key)
+            if (
+                type(value) not in (int, float)
+                or not math.isfinite(value)
+                or not 0 <= value <= limit
+            ):
+                raise ValueError(f"Invalid prediction.{key}")
+        for key, limit in (
+            ("plants", 45),
+            ("live_zombies", math.inf),
+            ("defeated_zombies", math.inf),
+            ("pending_zombies", math.inf),
+            ("sun", rules.game["sun_cap"]),
+        ):
+            values = prediction.get(key)
+            if (
+                not isinstance(values, list)
+                or len(values) != 2
+                or any(type(n) is not int for n in values)
+                or not 0 <= values[0] <= values[1] <= limit
+            ):
+                raise ValueError(f"Invalid prediction.{key} range")
+        if not prediction["live_zombies"][1] and not prediction["pending_zombies"][1]:
+            raise ValueError("Prediction scenes need live or pending zombies")
+        if "prediction_probe_interval_games" not in c:
+            raise ValueError("Prediction requires its own validation interval")
+    elif c.get("run_stage") == "prediction":
+        raise ValueError("prediction requires its training configuration section")
+    mix = attacker_mix(cfg)
+    if mix is not None:
+        from fractions import Fraction
+
+        if not isinstance(mix, dict) or "attacker" not in tile:
+            raise ValueError("attacker requires its mix and the attacker_pre settings")
+        if tile.get("ranking_objective") != "set_cross_entropy_v1":
+            raise ValueError(
+                "attacker requires successful-set cross-entropy for its bomb exercises"
+            )
+        ratios = mix.get("ratios")
+        if (
+            not isinstance(ratios, list)
+            or len(ratios) != len(ATTACKER_EXERCISES)
+            or any(type(r) not in (int, float) or not math.isfinite(r) or r <= 0 for r in ratios)
+            or sum(Fraction(str(r)) for r in ratios) != 1
+        ):
+            raise ValueError("attacker.ratios must contain three positive shares summing to one")
+        for key in ("n_envs", "validation_cases"):
+            size = mix.get(key)
+            if (
+                type(size) is not int
+                or size < 1
+                or any((size * Fraction(str(r))).denominator != 1 for r in ratios)
+            ):
+                raise ValueError(f"attacker.{key} must give integral exercise quotas")
+    elif c.get("run_stage") == "attacker":
+        raise ValueError("attacker requires its training configuration section")
     if c.get("lessons") or set(c.get("stages", {})) - {"easy", "standard", "shared"}:
         raise ValueError("Retired curriculum lesson; use easy, standard and shared stages")
     unlimited = cfg["training"].get("until_stage_complete", False)
@@ -870,9 +1165,86 @@ def validate_config(cfg: dict) -> None:
     if not math.isfinite(visual["final_hold_seconds"]) or visual["final_hold_seconds"] < 0:
         raise ValueError("Visualization final_hold_seconds must be finite and nonnegative")
     env, train = cfg["environment"], cfg["training"]
-    expected_method = "complete_return_action_global_v7"
+    if type(train.get("random_cohort_seeds", False)) is not bool:
+        raise ValueError("training.random_cohort_seeds must be boolean")
+    expected_method = "nstep_action_outcomes_v5"
     if train.get("method") != expected_method:
-        raise ValueError("Training requires a supported complete-return method and fresh models")
+        raise ValueError(
+            "Training requires a supported n-step fork-forecast method and fresh models"
+        )
+    forecasts = train.get("forecasts", {})
+    if forecast_version(cfg) != 5:
+        raise ValueError(
+            "Unsupported outcome supervision; old checkpoints are incompatible, start fresh"
+        )
+    if any(k.startswith("pretrain_") or k == "effect_conditional_weight" for k in forecasts):
+        raise ValueError(
+            "Removed private pretraining/legacy effect settings; use the current profile"
+        )
+    if "threat_prediction_weight" in train or "stage_threat_weights" in train:
+        raise ValueError(
+            "Removed factual prediction settings; use the current outcome-only profile"
+        )
+    for stage in stages:
+        expected = (
+            "prediction_only"
+            if stage == "prediction"
+            else "placement_outcomes"
+            if is_placement_skill(stage)
+            else "action_outcomes"
+        )
+        if train.get("stage_forecast_modes", {}).get(stage) != expected:
+            raise ValueError(f"Unsupported outcome mode for {stage}; expected {expected}")
+    if forecasts.get("effect_objective") != "absolute_outcome_v4":
+        raise ValueError("Training requires absolute action outcomes")
+    if forecasts.get("protocol") != "static-fork-action-outcomes-v3":
+        raise ValueError("Training requires the outcome-only fork protocol")
+    if type(forecasts.get("enabled")) is not bool:
+        raise ValueError("training.forecasts.enabled must be boolean")
+    if forecasts.get("probe") not in ("basic", "conehead", "buckethead"):
+        raise ValueError("Static probe must be basic, conehead or buckethead")
+    if forecasts.get("extra_actions") != 2:
+        raise ValueError("training.forecasts.extra_actions must be 2")
+    collection = forecasts.get("collection_protocol")
+    if collection != "stage_action_outcomes_v5" or not absolute_outcomes(cfg):
+        raise ValueError("Training requires public-only stage action outcomes")
+    probability = forecasts.get("wait_effect_sample_probability", 1.0)
+    if (
+        type(probability) not in (int, float)
+        or not math.isfinite(probability)
+        or not 0 <= probability <= 1
+    ):
+        raise ValueError("wait_effect_sample_probability must be between zero and one")
+    for stage, count in train.get("stage_extra_actions", {}).items():
+        if stage not in stages or type(count) is not int or count not in (0, 2):
+            raise ValueError("Stage extra_actions must be zero or two")
+    for stage in stages[1:]:
+        if effect_extra_actions(cfg, stage) != 0:
+            raise ValueError(f"{stage} requires zero extra actions")
+    for key in ("lanes", "vram_mib", "chunk_ticks", "n_step", "injected_n_step"):
+        if type(forecasts.get(key)) is not int or forecasts[key] <= 0:
+            raise ValueError(f"training.forecasts.{key} must be a positive integer")
+    for key in ("warmup_games", "injection_after_games"):
+        if type(forecasts.get(key)) is not int or forecasts[key] < 0:
+            raise ValueError(f"training.forecasts.{key} must be a nonnegative integer")
+    for key in ("shaping_weight", "initial_discount_half_life_steps", "discount_half_life_steps"):
+        value = forecasts.get(key)
+        if (
+            type(value) not in (int, float)
+            or not math.isfinite(value)
+            or value < 0
+            or ("half_life" in key and value == 0)
+        ):
+            raise ValueError(f"training.forecasts.{key} is invalid")
+    if type(forecasts.get("measure_gradient_norms")) is not bool:
+        raise ValueError("training.forecasts.measure_gradient_norms must be boolean")
+    weights = forecasts.get("shaping_weights")
+    if (
+        not isinstance(weights, list)
+        or len(weights) != OUTCOME_SHAPE[1]
+        or any(type(x) not in (int, float) or not math.isfinite(x) or x < 0 for x in weights)
+    ):
+        raise ValueError("training.forecasts.shaping_weights needs three finite nonnegative values")
     if any(
         k in train
         for k in (
@@ -894,6 +1266,18 @@ def validate_config(cfg: dict) -> None:
         if type(storage.get(key)) is not int or storage[key] < 1:
             raise ValueError(f"training.storage.{key} must be a positive integer")
     performance = train.get("performance", {})
+    for key in ("fork_packed", "fork_suffix_cache"):
+        if type(performance.get(key, True)) is not bool:
+            raise ValueError(f"training.performance.{key} must be boolean")
+    threads = performance.get("fork_threads", 32)
+    if type(threads) is not int or threads not in (32, 64, 128, 256):
+        raise ValueError("training.performance.fork_threads must be 32, 64, 128 or 256")
+    for key, default in (("fork_cache_steps", 8), ("fork_cache_vram_mib", 128)):
+        if type(performance.get(key, default)) is not int or performance.get(key, default) < 0:
+            raise ValueError(f"training.performance.{key} must be a nonnegative integer")
+    for key, default in (("fork_cache_zombies", 128), ("fork_cache_projectiles", 256)):
+        if type(performance.get(key, default)) is not int or performance.get(key, default) < 1:
+            raise ValueError(f"training.performance.{key} must be a positive integer")
     if "compile_kernels" in performance:
         raise ValueError("compile_kernels was replaced by compile_collection and compile_fitting")
     for key in ("compile_collection", "compile_fitting", "telemetry"):
@@ -903,14 +1287,12 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("training.performance.fit_precision must be bf16_master")
     if type(performance.get("prefetch", False)) is not bool:
         raise ValueError("training.performance.prefetch must be a boolean")
-    if performance.get("annotation_input_cache", "auto") not in ("auto", "off"):
-        raise ValueError("training.performance.annotation_input_cache must be auto or off")
-    cache_mib = performance.get("annotation_cache_mib", 256)
-    if type(cache_mib) is not int or cache_mib < 0:
-        raise ValueError("training.performance.annotation_cache_mib must be a nonnegative integer")
-    if type(performance.get("annotation_use_fit_limits", False)) is not bool:
-        raise ValueError("training.performance.annotation_use_fit_limits must be a boolean")
-    for key in ("cherry_prefetch", "cherry_cuda_warmup", "attacker_prefetch", "attacker_cuda_warmup"):
+    for key in (
+        "cherry_prefetch",
+        "cherry_cuda_warmup",
+        "attacker_prefetch",
+        "attacker_cuda_warmup",
+    ):
         if type(performance.get(key, False)) is not bool:
             raise ValueError(f"training.performance.{key} must be a boolean")
     workers = performance.get("cherry_prepare_workers", 0)
@@ -934,16 +1316,32 @@ def validate_config(cfg: dict) -> None:
         value = performance.get(key, default)
         if type(value) is not int or value < 1:
             raise ValueError(f"training.performance.{key} must be a positive integer")
+    from pvz_rl.learning.auxiliary_settings import validate_auxiliary_settings
+
+    validate_auxiliary_settings(performance)
     if set(performance) - {
+        "interval_backend",
+        "auxiliary_hybrid",
+        "auxiliary_cpu_workers",
+        "auxiliary_worker_ram_mib",
+        "auxiliary_cuda_target_ms",
+        "auxiliary_vram_mib",
+        "auxiliary_spill_gib",
+        "auxiliary_interval_lanes",
+        "auxiliary_teacher_lanes",
+        "fork_packed",
+        "fork_threads",
+        "fork_suffix_cache",
+        "fork_cache_steps",
+        "fork_cache_vram_mib",
+        "fork_cache_zombies",
+        "fork_cache_projectiles",
         "compile_collection",
         "compile_fitting",
         "telemetry",
         "telemetry_span_limit",
         "fit_precision",
         "prefetch",
-        "annotation_input_cache",
-        "annotation_cache_mib",
-        "annotation_use_fit_limits",
         "attacker_prepare_workers",
         "attacker_worker_ram_mib",
         "attacker_prefetch",
@@ -964,9 +1362,21 @@ def validate_config(cfg: dict) -> None:
         "fit_entity_buckets",
         "fit_token_budget",
         "collection_graph_cache_entries",
+        "collection_tile_buckets",
+        "teacher_batched_transfers",
+        "teacher_pipeline",
+        "vectorized_effect_gather",
         "collection_vram_headroom_mib",
     }:
         raise ValueError("training.performance contains unsupported execution settings")
+    for key in (
+        "collection_tile_buckets",
+        "teacher_batched_transfers",
+        "teacher_pipeline",
+        "vectorized_effect_gather",
+    ):
+        if key in performance and type(performance[key]) is not bool:
+            raise ValueError(f"training.performance.{key} must be a boolean")
     fit_batch_groups = performance.get("fit_batch_groups", 4)
     if type(fit_batch_groups) is not int or not 1 <= fit_batch_groups <= 16:
         raise ValueError("training.performance.fit_batch_groups must be an integer from 1 to 16")
@@ -1056,17 +1466,8 @@ def validate_config(cfg: dict) -> None:
     ):
         if type(train[key]) is not int or train[key] <= 0:
             raise ValueError(f"{key} must be a positive integer")
-    if "tile_warmup_passes" in train:
-        raise ValueError(
-            "training.tile_warmup_passes was replaced by training.tile_only_cohorts; "
-            "n_epochs now sets all fitting passes in each cohort"
-        )
-    if type(train.get("tile_only_cohorts")) is not int or train["tile_only_cohorts"] < 0:
-        raise ValueError("training.tile_only_cohorts must be a nonnegative integer")
-    if train.get("discount_clock") != "simulation_ticks" or (
-        train["gamma"] != 1 and not (train.get("counterfactual") or train.get("search", {}).get("enabled", False))
-    ):
-        raise ValueError("Complete actual returns require gamma 1; start fresh")
+    if train.get("discount_clock") != "simulation_ticks" or not 0 < train["gamma"] <= 1:
+        raise ValueError("Returns require tick-based discounting with 0 < gamma <= 1")
     if train["batch_size"] > 1024:
         raise ValueError("Bounded minibatches must not exceed 1024")
     demo = train.get("demo", {})
@@ -1082,74 +1483,6 @@ def validate_config(cfg: dict) -> None:
             or demo.get(key, 1.0) <= 0
         ):
             raise ValueError(f"training.demo.{key} must be finite and positive")
-    annotation = train.get("annotation", {})
-    if not isinstance(annotation, dict):
-        raise ValueError("training.annotation must be a table")
-    if set(annotation) - {
-        "passes",
-        "learning_rate",
-        "batch_size",
-        "margin",
-        "learner_seed",
-        "l2_strength",
-        "sampling_seed",
-        "sampling_family",
-        "sampling_max_steps",
-        "sampling_max_attempts",
-        "sampling_plant_interval_steps",
-        "sampling_max_plants",
-    }:
-        raise ValueError("training.annotation contains unsupported settings")
-    if type(annotation.get("passes", 0)) is not int or annotation.get("passes", 0) < 0:
-        raise ValueError(
-            "training.annotation.passes must be a nonnegative integer (0 means unlimited)"
-        )
-    if type(annotation.get("batch_size", 256)) is not int or annotation.get("batch_size", 256) < 1:
-        raise ValueError("training.annotation.batch_size must be a positive integer")
-    if (
-        type(annotation.get("learner_seed", 101)) is not int
-        or annotation.get("learner_seed", 101) < 0
-    ):
-        raise ValueError("training.annotation.learner_seed must be a nonnegative integer")
-    sampling_seed = annotation.get("sampling_seed", "random")
-    if sampling_seed != "random" and (type(sampling_seed) is not int or sampling_seed < 0):
-        raise ValueError(
-            "training.annotation.sampling_seed must be 'random' or a nonnegative integer"
-        )
-    if annotation.get("sampling_family", "preset") not in (
-        "preset",
-        "diagnostic",
-        "redistributed",
-        "faster",
-        "concentrated",
-    ):
-        raise ValueError("training.annotation.sampling_family is unsupported")
-    for key in ("sampling_max_steps", "sampling_max_attempts"):
-        if (
-            type(annotation.get(key, 20000 if key.endswith("steps") else 100)) is not int
-            or annotation.get(key, 20000 if key.endswith("steps") else 100) < 1
-        ):
-            raise ValueError(f"training.annotation.{key} must be a positive integer")
-    interval = annotation.get("sampling_plant_interval_steps", [500, 1500])
-    if (
-        not isinstance(interval, list)
-        or len(interval) != 2
-        or any(type(value) is not int or value < 1 for value in interval)
-        or interval[0] > interval[1]
-    ):
-        raise ValueError(
-            "training.annotation.sampling_plant_interval_steps must be ordered positive integers"
-        )
-    max_plants = annotation.get("sampling_max_plants", 8)
-    if type(max_plants) is not int or not 1 <= max_plants < env["rows"] * env["cols"]:
-        raise ValueError(
-            "training.annotation.sampling_max_plants must leave at least one empty tile"
-        )
-    annotation_defaults = {"learning_rate": 3e-4, "margin": 1.0, "l2_strength": 1e-4}
-    for key in ("learning_rate", "margin", "l2_strength"):
-        value = annotation.get(key, annotation_defaults[key])
-        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-            raise ValueError(f"training.annotation.{key} must be finite and positive")
     if train["device"] not in ("cpu", "cuda"):
         raise ValueError("Training device must be cpu or cuda")
     seeds = train["learner_seeds"]
@@ -1193,8 +1526,10 @@ def seed_values(cfg: dict, split: str, limit: int | None = None) -> list[int]:
     return list(range(lo, hi + 1 if limit is None else lo + limit))
 
 
-def curriculum_probe_seeds(cfg: dict) -> list[int]:
+def curriculum_probe_seeds(cfg: dict, *, count: int | None = None) -> list[int]:
     """Draw a fresh mastery panel; callers retain it while validation is pending."""
+    if count is not None:
+        return _fresh_validation_seeds(cfg, count)
     split = "curriculum" if "curriculum" in cfg["splits"] else "validation"
     return random_validation_seeds(cfg, split, cfg["curriculum"]["probe_cases"])
 
@@ -1202,6 +1537,10 @@ def curriculum_probe_seeds(cfg: dict) -> list[int]:
 def random_validation_seeds(cfg: dict, split="validation", limit: int | None = None) -> list[int]:
     """Independent fresh cases outside every reserved split; splits still set counts."""
     count = len(seed_values(cfg, split, limit))
+    return _fresh_validation_seeds(cfg, count)
+
+
+def _fresh_validation_seeds(cfg, count):
     start = max(hi for _, hi in cfg["splits"].values()) + 1
     population = range(start, 2**63)
     if len(population) < count:

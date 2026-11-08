@@ -1,23 +1,40 @@
-"""Stateless, independent species and conditional-placement Q Transformers."""
+"""Shared public-board encoding with action and tile decoders and outcome readouts."""
 
 from contextlib import contextmanager
 
-import numpy as np
 import torch
 from pvz_game import Rules
 from torch import nn
 
+from pvz_rl.config import (
+    absolute_outcomes,
+    forecast_forks_enabled,
+    forecast_version,
+)
 from pvz_rl.envs.actions import ActionSchema as A
-from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.encoding import collate_observations
-from pvz_rl.policy.active_batch import ActiveBatchPlan, encode_active
+from pvz_rl.envs.outcome_math import ABSOLUTE_SIZES, OUTCOME_SIZE
+from pvz_rl.learning.forecast_labels import (
+    EFFECT_WIDTH,
+    effect_forecast,
+    effect_summary,
+)
+from pvz_rl.policy.action_decoder import ActionDecoder
+from pvz_rl.policy.active_batch import encode_active
+from pvz_rl.policy.effect_head import EffectHead
 from pvz_rl.policy.entity_attention import SpatialTransformer
+from pvz_rl.policy.forecast_input import ForecastInput
 from pvz_rl.policy.sequential_q import (
     POLICY_SIGNATURE,
+    action_branch_mask,
     action_parts,
+    card_ready,
+    greedy_choice,
     observation_tile_masks,
+    occupied_cells,
     select_q_actions,
 )
+from pvz_rl.policy.tile_decoder import TileDecoder
 
 
 class TwoStageTransformerPolicy(nn.Module):
@@ -28,25 +45,86 @@ class TwoStageTransformerPolicy(nn.Module):
         from pvz_rl.envs.encoding import ObservationEncoder
 
         self.cfg = cfg
+        self.protocol = cfg["policy"]["kind"]
+        self.absolute_outcomes = absolute_outcomes(cfg)
+        self.effect_width = EFFECT_WIDTH
+        self.effect_sizes = ABSOLUTE_SIZES
         self.layout = ObservationEncoder(cfg, Rules())
         self.fit_precision = "bf16_master"
         spec = cfg["policy"]
-        self.species_encoder = SpatialTransformer(self.layout, spec, "species")
-        self.tile_encoder = SpatialTransformer(self.layout, spec, "tile")
-        self.species_head = nn.Sequential(
-            nn.Linear(spec["species_width"], 128), nn.ReLU(), nn.Linear(128, 10)
-        )
+        self.board_encoder = SpatialTransformer(self.layout, spec, "board")
+        self.tile_decoder = TileDecoder(self.layout, spec)
+        self.action_decoder = ActionDecoder(self.layout, spec)
+        width = spec["shared_width"]
+        self.forecast_input = ForecastInput(width)
+        self.species_head = nn.Sequential(nn.Linear(width, 128), nn.ReLU(), nn.Linear(128, 1))
+        self.species_bias = nn.Parameter(torch.zeros(self.action_decoder.token_overhead))
         self.tile_head = nn.Sequential(
-            nn.Linear(spec["tile_width"], 128), nn.ReLU(), nn.Linear(128, 1)
+            nn.Linear(width + OUTCOME_SIZE, 128), nn.ReLU(), nn.Linear(128, 1)
         )
+        self.effect_head = EffectHead(
+            width,
+            self.effect_width,
+            spec["action_decoder_heads"],
+            spec["attention_query_chunk"],
+        )
+        self.injection_enabled = cfg["training"].get("forecasts", {}).get("injection_active", False)
         self._master_parameters = []
         self._master_names = []
         self._initialize_masters()
         self._set_runtime_dtype(torch.bfloat16)
 
     @property
+    def species_encoder(self):
+        return self.board_encoder
+
+    @property
+    def tile_encoder(self):
+        return self.tile_decoder
+
+    encoder_names = ("species", "tile", "action")
+
+    @property
     def encoders(self):
-        return self.species_encoder, self.tile_encoder
+        return self.board_encoder, self.tile_decoder, self.action_decoder
+
+    _FITTING_STAGES = (
+        "species",
+        "tile",
+        "tile_outcomes",
+        "placement_outcomes",
+        "prediction_only",
+        "action_heads",
+        "easy_action",
+    )
+
+    @staticmethod
+    def _eligible(name, stage):
+        if name.startswith("forecast_input."):
+            return True
+        board = name.startswith("board_encoder.")
+        action_decoder = name.startswith("action_decoder.")
+        tile_decoder = name.startswith("tile_decoder.")
+        action_head = name.startswith("species_head.") or name == "species_bias"
+        tile_head = name.startswith("tile_head.")
+        effect_head = name.startswith("effect_head.")
+        if stage == "prediction_only":
+            return True
+        if stage == "species":
+            return board or action_decoder or action_head
+        if stage == "tile":
+            return tile_decoder or tile_head
+        if stage in ("tile_outcomes", "placement_outcomes"):
+            return tile_decoder or tile_head or effect_head
+        if stage == "easy_action":
+            return action_decoder or tile_decoder or action_head or tile_head or effect_head
+        if stage == "action_heads":
+            return tile_decoder or action_head or tile_head or effect_head
+        return False
+
+    def _require_stage(self, stage):
+        if stage not in self._FITTING_STAGES:
+            raise ValueError("Parameter stage must be species, tile or outcome fitting")
 
     @property
     def device(self):
@@ -106,13 +184,11 @@ class TwoStageTransformerPolicy(nn.Module):
     def master_parameters(self, stage=None):
         if stage is None:
             return tuple(self._master_parameters)
-        if stage not in ("species", "tile"):
-            raise ValueError("Parameter stage must be species or tile")
-        prefix = f"{stage}_"
+        self._require_stage(stage)
         return tuple(
             master
             for name, master in zip(self._master_names, self._master_parameters, strict=True)
-            if name.startswith(prefix)
+            if self._eligible(name, stage)
         )
 
     def requires_grad_(self, requires_grad=True):
@@ -125,13 +201,11 @@ class TwoStageTransformerPolicy(nn.Module):
         parameters = tuple(super().parameters())
         if stage is None:
             return parameters
-        if stage not in ("species", "tile"):
-            raise ValueError("Parameter stage must be species or tile")
-        prefix = f"{stage}_"
+        self._require_stage(stage)
         return tuple(
             parameter
             for name, parameter in zip(self._master_names, parameters, strict=True)
-            if name.startswith(prefix)
+            if self._eligible(name, stage)
         )
 
     def master_state_dict(self):
@@ -198,10 +272,20 @@ class TwoStageTransformerPolicy(nn.Module):
         super().zero_grad(set_to_none=set_to_none)
 
     @torch.no_grad()
-    def accumulate_master_gradients(self):
+    def accumulate_master_gradients(self, stage=None):
+        eligible = None
+        if stage is not None:
+            self._require_stage(stage)
+            eligible = {
+                id(parameter)
+                for name, parameter in zip(self._master_names, super().parameters(), strict=True)
+                if self._eligible(name, stage)
+            }
         destinations, sources = [], []
         for master, parameter in zip(self._master_parameters, super().parameters(), strict=True):
             if parameter.grad is None:
+                continue
+            if eligible is not None and id(parameter) not in eligible:
                 continue
             if master.grad is None:
                 master.grad = parameter.grad.float()
@@ -210,6 +294,34 @@ class TwoStageTransformerPolicy(nn.Module):
                 sources.append(parameter.grad.float())
         if destinations:
             torch._foreach_add_(destinations, sources)
+
+    @torch.no_grad()
+    def update_teacher_runtime(self, teacher, stage, decay):
+        """Lerp trained runtime weights and copy frozen ones onto the teacher."""
+        if stage is None:
+            torch._foreach_lerp_(
+                list(teacher.runtime_parameters()), list(self.runtime_parameters()), 1 - decay
+            )
+            return
+        self._require_stage(stage)
+        trained_teacher, trained_online = [], []
+        frozen_teacher, frozen_online = [], []
+        for name, teacher_parameter, online_parameter in zip(
+            self._master_names,
+            teacher.runtime_parameters(),
+            self.runtime_parameters(),
+            strict=True,
+        ):
+            if self._eligible(name, stage):
+                trained_teacher.append(teacher_parameter)
+                trained_online.append(online_parameter)
+            else:
+                frozen_teacher.append(teacher_parameter)
+                frozen_online.append(online_parameter)
+        if trained_teacher:
+            torch._foreach_lerp_(trained_teacher, trained_online, 1 - decay)
+        if frozen_teacher:
+            torch._foreach_copy_(frozen_teacher, frozen_online)
 
     @property
     def runtime_dtype(self):
@@ -221,81 +333,209 @@ class TwoStageTransformerPolicy(nn.Module):
             raise ValueError("Only bf16_master fitting is supported")
         yield
 
-    def _encode(self, encoder, observations, branches=None, plan=None):
-        return (
-            encoder(observations, branches)
-            if plan is None
-            else encode_active(encoder, observations, plan, branches)
-        )
+    def _encode(self, encoder, observations, branches=None, plan=None, forecast=None):
+        if plan is None:
+            if encoder.stage == "board":
+                return encoder(observations, branches, forecast)
+            return encoder(observations, branches)
+        return encode_active(encoder, observations, plan, branches, forecast)
 
-    def species_values(self, observations, *, plan=None):
+    def encode_board(self, observations, *, plan=None, prior=None):
         observations = collate_observations(observations, self.device)
-        encoded = self._encode(self.species_encoder, observations, plan=plan)[:, 0]
-        if plan is None:
-            return self.species_head(encoded)
-        rows = torch.as_tensor(plan.original_slot_ids, device=observations.device)
-        result = encoded.new_zeros(len(observations), 10)
-        return result.index_copy(0, rows, self.species_head(encoded[rows]))
-
-    def _request_plan(self, plan, rows):
-        """Bound tile padding by published live widths without copying request IDs."""
-        if plan is None:
-            return None
-        width = max((bucket.entity_width for bucket in plan.buckets), default=0)
-        return ActiveBatchPlan.from_counts(
-            np.ones(len(rows), dtype=bool),
-            np.full(len(rows), width, dtype=np.int64),
-            self.layout.max_entities,
-            self.tile_encoder.microbatch,
-            self.tile_encoder.token_budget,
-            token_overhead=self.tile_encoder.token_overhead,
+        forecast = self.forecast_input.tokens(prior, len(observations), observations.device)
+        memory = self._encode(self.board_encoder, observations, plan=plan, forecast=forecast)
+        valid = torch.cat(
+            (
+                torch.ones((len(observations), 1), device=self.device, dtype=torch.bool),
+                forecast[1][:, None].expand(-1, 5),
+                observations.entity_mask,
+            ),
+            1,
         )
+        return memory, valid
 
-    def conditional_tiles(self, observations, branches, *, rows=None, plan=None):
+    @contextmanager
+    def board_context(self, observations, *, plan=None, prior=None):
+        # Explicit call-scoped memory, never an across-decision policy cache.
+        saved = getattr(self, "_board_context", None)
+        self._board_context = (
+            observations,
+            self.encode_board(observations, plan=plan, prior=prior),
+        )
+        try:
+            yield self._board_context[1]
+        finally:
+            self._board_context = saved
+
+    def _memory(self, observations, plan=None, prior=None):
+        cached = getattr(self, "_board_context", None)
+        if cached is not None and cached[0] is observations:
+            return cached[1]
+        return self.encode_board(observations, plan=plan, prior=prior)
+
+    def species_values(self, observations, *, plan=None, memory=None, prior=None):
+        observations = collate_observations(observations, self.device)
+        memory = self._memory(observations, plan, prior=prior) if memory is None else memory
+        return self.action_values(memory)
+
+    def action_vectors(self, memory, *, rows=None):
+        """Ten action-decoder vectors. A full-batch call is reused for its forecast."""
+        tokens, valid = memory
+        if rows is not None:
+            tokens, valid = tokens[rows], valid[rows]
+        vectors = self.action_decoder(tokens, valid)
+        if rows is None:
+            self._decision_action_vectors = vectors
+            self._decision_action_memory = tokens
+        return vectors
+
+    def action_values(self, memory, *, rows=None):
+        scores = self.species_head(self.action_vectors(memory, rows=rows)).squeeze(-1)
+        return scores + self.species_bias
+
+    def _action_vectors(self, memory):
+        cached = getattr(self, "_decision_action_vectors", None)
+        if cached is not None and getattr(self, "_decision_action_memory", None) is memory[0]:
+            return cached
+        return self.action_vectors(memory)
+
+    def _remember_tiles(self, features, branches, requested, memory):
+        """Keep one full-batch tile decode when it belongs to this memory."""
+        if memory[0].shape[0] != len(branches):
+            return
+        full = features.new_zeros(len(branches), features.shape[1], features.shape[-1])
+        branch_of = torch.zeros(len(branches), dtype=torch.long, device=branches.device)
+        if len(requested):
+            full.index_copy_(0, requested, features)
+            branch_of.index_copy_(0, requested, branches[requested])
+        self._decision_tile_features = full
+        self._decision_tile_branches = branch_of
+        self._decision_tile_memory = memory[0]
+
+    def _executed_tile_vectors(self, branches, tiles, memory):
+        """Chosen cell for a plant or dig. Wait and a rejection use ``empty_tile``."""
+        count = len(branches)
+        empty = self.effect_head.empty_tile.to(dtype=memory[0].dtype)
+        base = empty.expand(count, -1)
+        plant = branches > 0
+        if not bool(plant.any()):
+            return base
+        known = torch.zeros(count, dtype=torch.bool, device=branches.device)
+        gathered = base
+        cached = getattr(self, "_decision_tile_features", None)
+        cached_branches = getattr(self, "_decision_tile_branches", None)
+        if (
+            cached is not None
+            and getattr(self, "_decision_tile_memory", None) is memory[0]
+            and cached.shape[0] == count
+        ):
+            gathered = cached[torch.arange(count, device=tiles.device), tiles]
+            known = plant & (cached_branches == branches)
+        missing = plant & ~known
+        cells = torch.where(known[:, None], gathered, base)
+        if bool(missing.any()):
+            decoded = self.tile_decoder(memory[0][missing], memory[1][missing], branches[missing])
+            picked = decoded[
+                torch.arange(int(missing.sum()), device=decoded.device), tiles[missing]
+            ]
+            cells = cells.clone().index_copy(0, missing.nonzero(as_tuple=False).flatten(), picked)
+        return cells
+
+    def forecast_logits(self, action_vectors, actions, memory):
+        """Forecast one executed action from its action vector, cell, and board memory."""
+        branches, tiles = action_parts(actions)
+        chosen = action_vectors[torch.arange(len(branches), device=self.device), branches]
+        tile = self._executed_tile_vectors(branches, tiles, memory)
+        return self.effect_head(chosen, tile, memory[0], memory[1])
+
+    def wait_features(self, memory):
+        """Slot 0 of board memory. The effect head no longer reads this vector."""
+        return memory[0][:, 0]
+
+    def tile_values(self, features, *, action=None, wait_action=None, memory=None):
+        capture = getattr(self, "_effect_decision_cache", None) is not None
+        if self.injection_enabled or capture:
+            logits = self.effect_head(action, features, memory[0], memory[1])
+            if capture:
+                self._last_tile_effects = logits.detach()
+            summaries = effect_summary(logits).detach()
+            if self.injection_enabled:
+                empty = self.effect_head.empty_tile.to(dtype=features.dtype)
+                baseline = effect_summary(
+                    self.effect_head(
+                        wait_action, empty.expand(features.shape[0], -1), memory[0], memory[1]
+                    )
+                ).detach()
+                summaries = summaries - baseline[:, None]
+            else:
+                summaries = torch.zeros_like(summaries)
+        else:
+            summaries = features.new_zeros((*features.shape[:-1], OUTCOME_SIZE))
+        return self.tile_head(torch.cat((features, summaries.to(features.dtype)), -1)).squeeze(-1)
+
+    def tile_features(self, observations, branches, *, rows=None, plan=None, memory=None):
         observations = collate_observations(observations, self.device)
         branches = torch.as_tensor(branches, device=self.device, dtype=torch.long)
-        if branches.ndim != 1:
-            raise ValueError("Conditional branches must be a vector")
-        if rows is None:
-            if len(branches) != len(observations):
-                raise ValueError("Conditional branches must match the board batch")
-            rows = torch.arange(len(branches), device=self.device)
-        else:
-            rows = torch.as_tensor(rows, device=self.device, dtype=torch.long)
-            if rows.shape != branches.shape:
-                raise ValueError("Requested rows and branches must have matching shapes")
+        rows = (
+            torch.arange(len(branches), device=self.device)
+            if rows is None
+            else torch.as_tensor(rows, device=self.device, dtype=torch.long)
+        )
+        if branches.ndim != 1 or rows.shape != branches.shape:
+            raise ValueError("Tile branches and rows must be matching vectors")
+        memory = self._memory(observations, plan) if memory is None else memory
+        return self.tile_decoder(memory[0][rows], memory[1][rows], branches)
+
+    def conditional_tiles(self, observations, branches, *, rows=None, plan=None, memory=None):
+        observations = collate_observations(observations, self.device)
+        branches = torch.as_tensor(branches, device=self.device, dtype=torch.long)
+        rows = (
+            torch.arange(len(branches), device=self.device)
+            if rows is None
+            else torch.as_tensor(rows, device=self.device, dtype=torch.long)
+        )
         result = next(self.parameters()).new_zeros(len(branches), A.tiles)
         requested = torch.nonzero(branches > 0, as_tuple=False).flatten()
         if not len(requested):
             return result
-        pairs = rows[requested] * 10 + branches[requested]
-        unique, inverse = torch.unique(pairs, sorted=True, return_inverse=True)
-        source_rows, source_branches = unique // 10, unique % 10
-        request_plan = self._request_plan(plan, source_rows)
-        encoded = self._encode(
-            self.tile_encoder, observations[source_rows], source_branches, request_plan
-        )[:, 2:]
-        values = self.tile_head(encoded).squeeze(-1)
-        return result.index_copy(0, requested, values[inverse])
+        features = self.tile_features(
+            observations, branches[requested], rows=rows[requested], plan=plan, memory=memory
+        )
+        memory = self._memory(observations, plan) if memory is None else memory
+        self._remember_tiles(features, branches, requested, memory)
+        vectors = self._action_vectors(memory)
+        scored = rows[requested]
+        result = result.index_copy(
+            0,
+            requested,
+            self.tile_values(
+                features,
+                action=vectors[scored, branches[requested]],
+                wait_action=vectors[scored, 0],
+                memory=(memory[0][scored], memory[1][scored]),
+            ),
+        )
+        if getattr(self, "_effect_decision_cache", None) is not None:
+            self._effect_decision_cache.append(
+                (rows[requested], branches[requested], self._last_tile_effects)
+            )
+            self._last_tile_effects = None
+        return result
 
     def fitting_tiles(self, observations, branches, *, rows):
-        """Internal transport plan: one positive branch per distinct, validated row."""
-        encoded = self.tile_encoder(observations[rows], branches)[:, 2:]
-        return self.tile_head(encoded).squeeze(-1)
+        observations = collate_observations(observations, self.device)
+        memory = self._memory(observations)
+        features = self.tile_features(observations, branches, rows=rows, memory=memory)
+        vectors = self._action_vectors(memory)
+        return self.tile_values(
+            features,
+            action=vectors[rows, branches],
+            wait_action=vectors[rows, 0],
+            memory=(memory[0][rows], memory[1][rows]),
+        )
 
-    def collection_tiles(self, observations, branches, *, plan=None):
-        """One branch per board: compact eligible rows once, without deduplication."""
-        requested = torch.nonzero(branches > 0, as_tuple=False).flatten()
-        result = next(self.parameters()).new_zeros(len(branches), A.tiles)
-        if not len(requested):
-            return result
-        encoded = self._encode(
-            self.tile_encoder,
-            observations[requested],
-            branches[requested],
-            self._request_plan(plan, requested),
-        )[:, 2:]
-        return result.index_copy(0, requested, self.tile_head(encoded).squeeze(-1))
+    def collection_tiles(self, observations, branches, *, plan=None, memory=None):
+        return self.conditional_tiles(observations, branches, plan=plan, memory=memory)
 
     def selected_values(self, observations, actions, *, species=None, tiles=None):
         observations = collate_observations(observations, self.device)
@@ -323,6 +563,38 @@ class TwoStageTransformerPolicy(nn.Module):
             result = result.index_copy(0, nonwait, chosen)
         return result
 
+    def _selection_mask(self, observations, branch_usable):
+        """Hard branch mask from planted cells, sun, cooldown, and a passed card ban."""
+        layout = self.layout
+        occupied = occupied_cells(
+            observations.entities,
+            observations.entity_mask,
+            rows=layout.rows,
+            cols=layout.cols,
+            units_per_tile=layout.rules.game["units_per_tile"],
+        )
+        fields = layout.global_fields
+        passed = None
+        dig_permitted = torch.ones(len(observations), dtype=torch.bool, device=observations.device)
+        if branch_usable is None:
+            costs = observations.globals.new_tensor(
+                [layout.rules.plants[name]["cost"] for name in self.cfg["environment"]["plants"]]
+            )
+            cards = card_ready(
+                observations.globals,
+                sun_index=fields["sun"],
+                cooldown_index=[fields[f"cooldown_{i}"] for i in range(A.plant_types)],
+                cost_scale=layout.cost_scale,
+                costs=costs,
+            )
+        else:
+            passed = torch.as_tensor(branch_usable, device=observations.device, dtype=torch.bool)
+            if passed.shape != (len(observations), 10):
+                raise ValueError("Branch availability must have shape [batch, 10]")
+            cards = passed[:, 1:-1]
+            dig_permitted = passed[:, -1]
+        return occupied, action_branch_mask(occupied, cards, dig_permitted), passed
+
     def decide(
         self,
         observations,
@@ -333,58 +605,67 @@ class TwoStageTransformerPolicy(nn.Module):
         active_plan=None,
         branch_usable=None,
         supplied_branches=None,
+        prior=None,
     ):
         observations = collate_observations(observations, self.device)
-        species = self.species_values(observations, plan=active_plan)
+        self._decision_tile_features = None
+        self._decision_tile_memory = None
+        self._effect_decision_cache = (
+            []
+            if forecast_version(self.cfg) >= 2
+            and forecast_forks_enabled(self.cfg, getattr(self, "forecast_stage", None))
+            else None
+        )
+        memory = self.encode_board(observations, plan=active_plan, prior=prior)
+        species = self.species_values(observations, memory=memory)
         if action_masks is None:
             action_masks = observation_tile_masks(observations)
         if action_masks.shape != (len(observations), A.size):
             raise ValueError("Action masks must match the board batch")
-        branches = species.argmax(-1) if supplied_branches is None else supplied_branches
-        if branches.shape != (len(observations),) or branches.dtype != torch.long:
-            raise ValueError("Supplied branches must be an int64 vector matching the board batch")
-        if supplied_branches is not None:
-            branches = branches.to(device=self.device)
-            supplied_valid = ((branches >= 0) & (branches < 10)).all()
+        occupied, branch_mask, passed_usable = self._selection_mask(observations, branch_usable)
+        if supplied_branches is None:
+            branches = greedy_choice(species, branch_mask)
+            supplied_valid = True
+        else:
+            branches = torch.as_tensor(supplied_branches, device=self.device, dtype=torch.long)
+            if branches.shape != (len(observations),):
+                raise ValueError(
+                    "Supplied branches must be an int64 vector matching the board batch"
+                )
+            supplied_valid = bool(((branches >= 0) & (branches < 10)).all())
             branches = branches.clamp(0, 9)
         if active_plan is not None and active is None:
             active = torch.as_tensor(active_plan.compact_indices >= 0, device=self.device)
         if active is not None:
             branches = torch.where(active, branches, 0)
-        if branch_usable is None:
-            branch_usable = torch.ones(
-                (len(observations), 10), dtype=torch.bool, device=observations.device
-            )
-        else:
-            branch_usable = torch.as_tensor(
-                branch_usable, device=observations.device, dtype=torch.bool
-            )
-            if branch_usable.shape != (len(observations), 10):
-                raise ValueError("Branch availability must have shape [batch, 10]")
-        # Public plant count includes all plants, even when entity truncation
-        # drops a record. Also enforce the branch check for weight-only callers
-        # that have no simulator availability tensor. Never mutate a borrowed one.
-        branch_usable = branch_usable.clone()
-        branch_usable[:, -1] = dig_branch_available(
-            observations.globals[:, self.layout.global_fields["plant_count"]],
-            branch_usable[:, -1],
-        )
-        selected_usable = branch_usable.gather(1, branches[:, None]).flatten()
-        tile_rows = (branches > 0) & selected_usable
+        playable = branch_mask.gather(1, branches[:, None]).flatten()
+        tile_rows = (branches > 0) & playable
         requests = torch.where(tile_rows, branches, torch.zeros_like(branches))
-        tiles = self.collection_tiles(observations, requests, plan=active_plan)
+        tiles = self.collection_tiles(observations, requests, plan=active_plan, memory=memory)
         actions, _, _, details = select_q_actions(
             species,
             tiles,
             action_masks,
+            occupied,
+            branch_mask,
             deterministic=deterministic,
             tile_exploration_epsilon=getattr(self, "tile_exploration_epsilon", 0.0),
             active=active,
-            supplied_branches=branches if supplied_branches is not None else None,
+            supplied_branches=branches,
         )
-        details["branch_usable"] = branch_usable
-        if supplied_branches is not None:
-            details["valid"] &= supplied_valid
+        details["occupied"] = occupied
+        details["branch_usable"] = passed_usable if passed_usable is not None else branch_mask
+        details["valid"] &= supplied_valid
         details["tile_inference_skipped"] = (branches > 0) & ~tile_rows
         details["observations"] = observations
+        details["board_memory"] = memory
+        details["action_vectors"] = self._decision_action_vectors
         return actions, details
+
+    def effect_action_logits(self, actions, memory):
+        """Forecast the played action. Wait uses row 0 and ``empty_tile``."""
+        actions = torch.as_tensor(actions, device=self.device, dtype=torch.long)
+        return self.forecast_logits(self._action_vectors(memory), actions, memory)
+
+    def effect_action_display(self, actions, memory):
+        return effect_forecast(self.effect_action_logits(actions, memory))

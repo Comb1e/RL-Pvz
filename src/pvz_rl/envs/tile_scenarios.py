@@ -2,6 +2,7 @@
 
 import random
 from dataclasses import replace
+from fractions import Fraction
 
 from pvz_game import LevelSpec, Place, Spawn, Status, Wait
 from pvz_game.config import InitialPlant, resolve_level
@@ -19,7 +20,8 @@ from pvz_rl.learning.deadline import check_deadline
 
 LEGACY_SKILLS = ("peashooter", "cherry_bomb")
 BOMB_SKILLS = ("cherry_bomb", "cherry_bomb_obstacle")
-SKILLS = (*LEGACY_SKILLS, "cherry_bomb_obstacle", "attacker_pre")
+ATTACKER_EXERCISES = (*BOMB_SKILLS, "attacker_pre")
+SKILLS = (*LEGACY_SKILLS, "cherry_bomb_obstacle", "attacker_pre", "prediction", "attacker")
 
 
 def is_bomb_skill(skill):
@@ -27,7 +29,52 @@ def is_bomb_skill(skill):
 
 
 def is_placement_skill(skill):
-    return is_bomb_skill(skill) or skill == "attacker_pre"
+    return skill in (*ATTACKER_EXERCISES, "attacker")
+
+
+def is_single_frame_skill(skill):
+    return is_placement_skill(skill) or skill == "prediction"
+
+
+def prediction_settings(cfg):
+    return cfg["training"].get("tile_scenarios", {}).get("prediction")
+
+
+def attacker_mix(cfg):
+    return cfg["training"].get("tile_scenarios", {}).get("attacker_mix")
+
+
+def attacker_quotas(ratios, size):
+    """Largest remainder, breaking ties in source exercise order."""
+    shares = [size * Fraction(str(ratio)) for ratio in ratios]
+    counts = [int(share) for share in shares]
+    order = sorted(range(len(shares)), key=lambda i: counts[i] - shares[i])
+    for i in order[: size - sum(counts)]:
+        counts[i] += 1
+    return counts
+
+
+def shuffled_attacker_exercises(cfg, seeds, *, validation=False):
+    counts = attacker_quotas(attacker_mix(cfg)["ratios"], len(seeds))
+    exercises = [
+        skill for skill, count in zip(ATTACKER_EXERCISES, counts, strict=True) for _ in range(count)
+    ]
+    # Derive a separate stream from the panel identity without drawing any board RNG.
+    random.Random(repr(("attacker-exercises-v1", validation, tuple(seeds)))).shuffle(exercises)
+    return exercises
+
+
+def placement_source(stage, board):
+    return board["exercise"] if stage == "attacker" else stage
+
+
+def attacker_exercise_scores(rows):
+    scores = {skill: dict(games=0, wins=0) for skill in ATTACKER_EXERCISES}
+    for row in rows:
+        score = scores[row["exercise"]]
+        score["games"] += 1
+        score["wins"] += bool(row["win"])
+    return scores
 
 
 def placement_settings(cfg, skill):
@@ -39,9 +86,10 @@ def preparation_settings(cfg, skill):
     """One resource interface for all single-placement exercises."""
     perf = cfg["training"].get("performance", {})
     result = {k.removeprefix("cherry_"): v for k, v in perf.items() if k.startswith("cherry_")}
-    if skill == "attacker_pre":
-        result.update({k.removeprefix("attacker_"): v for k, v in perf.items()
-                       if k.startswith("attacker_")})
+    if skill in ("attacker_pre", "attacker"):
+        result.update(
+            {k.removeprefix("attacker_"): v for k, v in perf.items() if k.startswith("attacker_")}
+        )
         result["oracle"] = "distance"
     return result
 
@@ -57,7 +105,9 @@ def bomb_tile_distances(positive, illegal, *, rows, cols):
     illegal = set(illegal)
     maximum = rows + cols - 2
     return [
-        maximum if tile in illegal else min(
+        maximum
+        if tile in illegal
+        else min(
             abs(tile // cols - target // cols) + abs(tile % cols - target % cols)
             for target in positive
         )
@@ -146,10 +196,8 @@ def sample_bomb(cfg, seed, *, rules=None, deadline=None, skill="cherry_bomb"):
 
 
 def generation_failure(cfg, seed, skill="cherry_bomb"):
-    attempts = cfg["training"]["annotation"]["sampling_max_attempts"]
-    return BombGenerationFailure(
-        f"No valid {skill} board after {attempts} attempts (seed {seed})"
-    )
+    attempts = cfg["training"]["tile_scenarios"]["sampling_max_attempts"]
+    return BombGenerationFailure(f"No valid {skill} board after {attempts} attempts (seed {seed})")
 
 
 def bomb_candidates(cfg, seed, *, start=0, rules=None, deadline=None, skill="cherry_bomb"):
@@ -171,7 +219,7 @@ def bomb_initials(cfg, seed, *, start=0, rules=None, deadline=None, skill="cherr
     settings = cfg["training"]["tile_scenarios"]
     if not is_bomb_skill(skill):
         raise ValueError(f"Unknown bomb scenario: {skill}")
-    attempts = cfg["training"]["annotation"]["sampling_max_attempts"]
+    attempts = cfg["training"]["tile_scenarios"]["sampling_max_attempts"]
     namespace = "tile-cherry-bomb" if skill == "cherry_bomb" else "tile-cherry-bomb-obstacle"
     rng = random.Random(namespace_seed(namespace, seed))
     rows, cols = rules.game["rows"], rules.game["cols"]
@@ -197,7 +245,8 @@ def bomb_initials(cfg, seed, *, start=0, rules=None, deadline=None, skill="cherr
             row = rng.randrange(rows)
             x = rng.randrange(cols * rules.game["units_per_tile"])
             hit_cells = [
-                tile for tile in range(rows * cols)
+                tile
+                for tile in range(rows * cols)
                 if blast_hits(tile % cols, tile // cols, x, row, rules.game["units_per_tile"], True)
             ]
             reserved = rng.choice(hit_cells)
@@ -207,7 +256,8 @@ def bomb_initials(cfg, seed, *, start=0, rules=None, deadline=None, skill="cherr
                 continue
             count = rng.randint(max(lower, len(blockers)), upper)
             extra = rng.sample(
-                [tile for tile in range(rows * cols) if tile not in hit_cells], count - len(blockers)
+                [tile for tile in range(rows * cols) if tile not in hit_cells],
+                count - len(blockers),
             )
             plants = tuple(
                 InitialPlant(rng.choice(kinds), *divmod(tile, cols)) for tile in (*blockers, *extra)

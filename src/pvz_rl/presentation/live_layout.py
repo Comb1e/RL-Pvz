@@ -10,6 +10,7 @@ from pvz_game.config import PLANT_TYPES
 from pvz_game.cuda.schema import REASONS
 
 from pvz_rl.envs.actions import ActionSchema as A
+from pvz_rl.presentation.outcome_view import draw_live_outcomes
 from pvz_rl.presentation.rendering import render_context, reward_label
 
 NAMES = ("wait", *PLANT_TYPES, "dig")
@@ -284,7 +285,8 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 )
             ),
         )
-        size = (max(1, cell_w - 20), board_h)
+        outcome_w = min(360, (cell_w - 28) * 2 // 5)
+        size = (max(1, cell_w - 28 - outcome_w), board_h)
         cache_key = (index, size)
         if cache_key not in renderers:
             # At most one board renderer per panel, plus ordinary UI state.
@@ -299,6 +301,9 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
                 renderers[cache_key].render(frame["observation"], context=render_context(frame)),
             )
         surface.blit(boards[index][1], (x + 10, y + 42))
+        draw_live_outcomes(
+            surface, frame, pygame.Rect(x + 18 + size[0], y + 42, outcome_w, board_h)
+        )
         obs = frame["observation"]
         top = y + 45 + board_h
         caption = f"Board {obs.elapsed_seconds:.2f}s | sun {obs.sun} | {frame['outcome']}"

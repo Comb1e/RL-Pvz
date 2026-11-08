@@ -38,7 +38,10 @@ def test_cpu_agent_inference():
         with torch.no_grad():
             species = policy.species_values(board)
             tiles = policy.conditional_tiles(board, [1])
-            actions, _ = policy.decide(board)
+            actions, details = policy.decide(board)
+            effect = policy.effect_action_logits(actions, details["board_memory"])
+        assert not hasattr(policy, "threat_head")
+        assert effect.shape == (1, 5, 56) and torch.isfinite(effect).all()
         assert species.shape == (1, len(cfg["environment"]["plants"]) + 2)
         assert tiles.shape == (1, env.codec.rows * env.codec.cols)
         assert torch.isfinite(species).all() and torch.isfinite(tiles).all()
@@ -64,12 +67,11 @@ def test_cuda_learning_and_checkpoint(tmp_path):
 
         cfg = load_config()
         cfg["training"]["tile_scenarios"]["enabled"] = False
-        cfg["training"]["counterfactual"]["normal"]["enabled"] = False
-        cfg["training"]["counterfactual"].get("peashooter", {})["enabled"] = False
         cfg["training"].pop("peashooter_rules", None)
+        cfg["training"]["forecasts"]["enabled"] = False
         cfg["environment"]["cutoff_seconds"] = 1
         cfg["training"].update(
-            n_envs=2, total_games=2, n_epochs=1, tile_only_cohorts=0,
+            n_envs=2, total_games=2, n_epochs=1,
             batch_size=32, max_minutes=2
         )
         cfg["training"]["performance"].update(

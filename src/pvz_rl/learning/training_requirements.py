@@ -3,20 +3,17 @@
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 
-from pvz_rl.config import research_config, simulator, validate_config
+from pvz_rl.config import outcome_prediction_weights, research_config, simulator, validate_config
 from pvz_rl.envs.actions import ActionSchema
-from pvz_rl.learning.curriculum import selected_stage
+from pvz_rl.envs.tile_scenarios import attacker_mix
+from pvz_rl.learning.curriculum import TILE_STAGES, selected_stage
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 from pvz_rl.provenance import weight_engine_config
 
 TRAINING_CONDITIONS = ("masked",)
-CURRENT_OBJECTIVE = "complete_return_action_global_v7"
+CURRENT_OBJECTIVE = "nstep_action_outcomes_v5"
 CURRENT_REWARD = "action_global_value_v5"
-FIT_SCHEDULE_PROTOCOL = "cyclic_tile_joint_cohorts_v2"
-WEIGHT_ACTION_DISTRIBUTIONS = {
-    "sequential_q_unmasked_penalty_v1",
-    ACTION_DISTRIBUTION,
-}
+FIT_SCHEDULE_PROTOCOL = "joint_nstep_action_outcome_cohorts_v2"
 
 
 @dataclass(frozen=True)
@@ -35,16 +32,7 @@ def fitting_schedule(cfg, cohort):
     """Choose one fitting stage for an entire one-based collection cohort."""
     if type(cohort) is not int or cohort < 1:
         raise ValueError("Fitting schedule requires a positive integer cohort number")
-    tile_cohorts = cfg["training"]["tile_only_cohorts"]
-    cycle = tile_cohorts + 1
-    position = (cohort - 1) % cycle + 1
-    return CohortFitSchedule(
-        cohort,
-        position,
-        cycle,
-        "tile_only" if position <= tile_cohorts else "joint",
-        cfg["training"]["n_epochs"],
-    )
+    return CohortFitSchedule(cohort, 1, 1, "joint", cfg["training"]["n_epochs"])
 
 
 def current_model_config(cfg):
@@ -58,8 +46,8 @@ def current_model_config(cfg):
         identity
         in {
             (
-                "two_stage_transformer_q_v1",
-                "entity_v1",
+                "shared_public_outcomes_q_v10",
+                "entity_public_v4",
                 CURRENT_OBJECTIVE,
                 CURRENT_OBJECTIVE,
             ),
@@ -71,70 +59,17 @@ def current_model_config(cfg):
 
 
 def weight_model_config(cfg):
-    """The previous objective shares the exact architecture and weight contract."""
-    policy, train = cfg.get("policy", {}), cfg.get("training", {})
-    return (
-        policy.get("kind") == "two_stage_transformer_q_v1"
-        and cfg.get("encoding", {}).get("version") == "entity_v1"
-        and policy.get("action_distribution") in WEIGHT_ACTION_DISTRIBUTIONS
-        and train.get("method")
-        in (
-            "complete_return_sequential_no_probe_v1",
-            "complete_return_selective_invalid_v2",
-            "complete_return_selective_invalid_v3",
-            "complete_return_action_global_v1",
-            "complete_return_action_global_v2",
-            "complete_return_action_global_v3",
-            "complete_return_action_global_v4",
-            "complete_return_action_global_v5",
-            "complete_return_action_global_v6",
-            CURRENT_OBJECTIVE,
-        )
-        and train.get("objective", {}).get("protocol") == train.get("method")
-        and cfg.get("reward", {}).get("version")
-        in (
-            "net_value_v1",
-            "action_global_value_v1",
-            "action_global_value_v2",
-            "action_global_value_v3",
-            "action_global_value_v4",
-            CURRENT_REWARD,
-        )
-    )
+    """Only the shared-encoder family is compatible; no conversion is defined."""
+    return current_model_config(cfg)
 
 
 def inference_config(cfg):
-    """Refresh retired learning metadata only for inference/weight validation.
-
-    Resume never uses this adapter. It does not change network or encoding fields.
-    """
-    import copy
-
-    from pvz_rl.config import load_config
-
-    if not weight_model_config(cfg):
-        raise ValueError("Incompatible model/encoding or objective protocol weight contract")
-    result = weight_engine_config(cfg)
-    # Execution options are disposable when loading weights. Keep the strict
-    # retired-option error for user configuration and optimizer recovery only.
-    result["training"].get("performance", {}).pop("compile_kernels", None)
-    result["training"].pop("tile_warmup_passes", None)
-    if current_model_config(cfg):
-        return result
-    result["training"]["method"] = CURRENT_OBJECTIVE
-    result["training"]["objective"]["protocol"] = CURRENT_OBJECTIVE
-    result["training"]["objective"].pop("invalid_action_target", None)
-    result["policy"]["action_distribution"] = ACTION_DISTRIBUTION
-    defaults = load_config()
-    result["training"].setdefault("tile_only_cohorts", defaults["training"]["tile_only_cohorts"])
-    for key, value in defaults["training"]["objective"].items():
-        result["training"]["objective"].setdefault(key, copy.deepcopy(value))
-    # Weight-only transfer keeps architecture and observation compatibility but
-    # always executes under the current reward protocol.  Old net-value
-    # checkpoints remain valid as fresh initializations; they cannot resume
-    # their optimizer/recovery state.
-    result["reward"] = copy.deepcopy(defaults["reward"])
-    return result
+    """Validate this architecture before adapting execution-only engine metadata."""
+    if not current_model_config(cfg):
+        raise ValueError(
+            "Incompatible old model. Old checkpoints are incompatible with the outcome-only architecture; start fresh."
+        )
+    return weight_engine_config(cfg)
 
 
 def require_supported_policy(cfg, condition="masked"):
@@ -146,7 +81,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Use the stateless two-stage Transformer, entity_v1, "
+            "Retired policy or scheduler. Use the shared public encoder and conditional decoder, entity_public_v4, "
             "action_global_value_v5 and complete-game collection. "
             "Start fresh with the bundled train profile."
         )
@@ -218,9 +153,18 @@ def resume_protocol(cfg, condition):
     result = without_performance(research_config(cfg))
     result.pop("profile", None)
     result["conditions"] = {condition: cfg["conditions"][condition]}
+    # Equal split coefficients preserve saved outcome-only single-weight runs.
+    result["training"]["stage_outcome_weights"] = {
+        stage: dict(
+            zip(("static_field", "probe"), outcome_prediction_weights(cfg, stage), strict=True)
+        )
+        for stage in ("normal", *TILE_STAGES)
+        if stage != "attacker" or attacker_mix(cfg) is not None
+    }
+    result["training"].pop("effect_prediction_weight", None)
+    result["training"].pop("stage_effect_weights", None)
     for key in ("total_games", "total_steps", "max_minutes", "finalization_minutes"):
         result["training"].pop(key, None)
-    result["training"].pop("annotation", None)
     # Residual-sun passivity shaping is a cohort-scoped reward update. The
     # current settings are applied at the next collection boundary, so they do
     # not invalidate the optimizer or simulator state of an older run.
@@ -228,6 +172,7 @@ def resume_protocol(cfg, condition):
     # This trigger changes only at a collection boundary; probability schedules
     # and every other learning setting remain part of strict resume identity.
     result["training"]["exploration"].pop("plant_wait_check_seconds", None)
+    result["training"].get("forecasts", {}).pop("injection_active", None)
     # Only the Cherry probe interval may refresh; pending probes still run
     # against their saved weights before any further fitting.
     result["curriculum"].pop("cherry_bomb_probe_interval_games", None)
@@ -263,14 +208,13 @@ def transfer_protocol(cfg, condition="masked"):
             k: p[k]
             for k in (
                 "kind",
-                "species_width",
-                "species_layers",
-                "species_heads",
-                "species_feedforward",
-                "tile_width",
-                "tile_layers",
-                "tile_heads",
-                "tile_feedforward",
+                "shared_width",
+                "encoder_blocks",
+                "tile_decoder_blocks",
+                "attention_heads",
+                "action_decoder_blocks",
+                "action_decoder_heads",
+                "feedforward_width",
             )
             if k in p
         },

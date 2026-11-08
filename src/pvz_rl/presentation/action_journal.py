@@ -27,6 +27,8 @@ RECORD = np.dtype(
         ("coins", "?", 2),
         ("legal", "?", 10),
         ("q", "<f4", 10),
+        ("effect_prediction", "<f2", (2, 5, 10)),
+        ("effect_prediction_valid", "?"),
     ]
 )
 
@@ -55,6 +57,7 @@ class ActionJournal:
         self.sequences = [0] * count
         self.blocks = [[] for _ in range(count)]
         self.latest = [None] * count
+        self.latest_outcome = [None] * count
         try:
             self.workspace = tempfile.TemporaryDirectory(prefix="pvz-action-history-")
             self.root = Path(self.workspace.name)
@@ -74,6 +77,7 @@ class ActionJournal:
         blocks, self.blocks[env] = self.blocks[env], []
         self.sizes[env] = self.sequences[env] = 0
         self.episodes[env], self.latest[env] = int(episode), None
+        self.latest_outcome[env] = None
         for block in blocks:
             if isinstance(block, np.memmap):
                 try:
@@ -122,6 +126,9 @@ class ActionJournal:
             "next_species",
         ):
             records[name] = rows[name]
+        if "effect_prediction" in rows.dtype.names:
+            records["effect_prediction"] = rows["effect_prediction"]
+            records["effect_prediction_valid"] = rows["effect_prediction_valid"]
         records["coins"][:, 0] = rows["species_coin"]
         records["coins"][:, 1] = rows["tile_coin"]
         records["q"] = scores
@@ -138,6 +145,8 @@ class ActionJournal:
             row = records[env]
             row["sequence"] = self.sequences[env]
             self.latest[env] = row.copy()
+            if row["effect_prediction_valid"]:
+                self.latest_outcome[env] = row.copy()
             if row["action"]:
                 index, offset = divmod(self.sizes[env], self.block_rows)
                 if index == len(self.blocks[env]):
@@ -162,6 +171,11 @@ class ActionJournal:
             total=size,
             rows=rows,
             latest=None if self.latest[env] is None else public_record(self.latest[env]),
+            latest_outcome=(
+                None
+                if self.latest_outcome[env] is None
+                else public_record(self.latest_outcome[env])
+            ),
         )
 
     def write_archive(self, archive):
@@ -215,6 +229,8 @@ class ActionJournal:
                 if "executed_action" not in latest:
                     row["executed_action"] = row["action"] if row["accepted"] else 0
                 self.latest[env] = row
+                if row["effect_prediction_valid"]:
+                    self.latest_outcome[env] = row.copy()
             for index in range((self.sizes[env] + self.block_rows - 1) // self.block_rows):
                 with archive.open(f"journal/{env}-{index}.npy") as stream:
                     block = np.load(stream, allow_pickle=False)
@@ -226,6 +242,14 @@ class ActionJournal:
                     target[: len(block)]["executed_action"] = np.where(
                         target[: len(block)]["accepted"], target[: len(block)]["action"], 0
                     )
+                # Restore the latest timestamped prediction without displacing a
+                # newer Wait prediction retained by the latest-record cache.
+                valid = np.flatnonzero(target[: len(block)]["effect_prediction_valid"])
+                if len(valid):
+                    candidate = target[valid[-1]]
+                    current = self.latest_outcome[env]
+                    if current is None or candidate["sequence"] > current["sequence"]:
+                        self.latest_outcome[env] = candidate.copy()
 
     def close(self):
         for env in range(self.count):

@@ -97,10 +97,13 @@ def gather_padded(value, slots, size, *, dimension=0):
     return torch.cat((selected, value.new_zeros(shape)), dimension)
 
 
-def encode_active(encoder, observations, plan, branches=None):
+def encode_active(encoder, observations, plan, branches=None, forecast=None):
     plan = plan.for_encoder(encoder)
     parameter = next(encoder.parameters())
-    result = parameter.new_zeros(len(observations), encoder.token_overhead, encoder.width)
+    output_width = encoder.token_overhead + (
+        observations.entities.shape[1] if encoder.stage == "board" else 0
+    )
+    result = parameter.new_zeros(len(observations), output_width, encoder.width)
     for bucket in plan.buckets:
         slots = torch.as_tensor(bucket.slot_ids, device=observations.device)
         size = bucket.padded_size
@@ -119,7 +122,20 @@ def encode_active(encoder, observations, plan, branches=None):
                 batch.validated,
             )
         requested = None if branches is None else gather_padded(branches, slots, size)
-        output = encoder(batch, requested)
+        passed = None
+        if encoder.stage == "board" and forecast is not None:
+            passed = (
+                gather_padded(forecast[0], slots, size),
+                gather_padded(forecast[1], slots, size),
+            )
+        output = (
+            encoder(batch, requested, passed)
+            if encoder.stage == "board"
+            else encoder(batch, requested)
+        )
+        if encoder.stage == "board":
+            output = output[:, :output_width]
+            output = torch.nn.functional.pad(output, (0, 0, 0, output_width - output.shape[1]))
         logical = len(bucket.slot_ids)
         result = result.index_copy(0, slots, output[:logical].to(result.dtype))
     return result

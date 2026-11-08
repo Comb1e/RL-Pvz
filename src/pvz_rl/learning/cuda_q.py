@@ -1,4 +1,4 @@
-"""One CUDA trainer: complete games and sequential Q Monte Carlo regression."""
+"""One CUDA trainer: complete cohorts, private forks and frozen n-step targets."""
 
 import io
 import json
@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
 
-from pvz_rl.config import cohort_envs
+from pvz_rl.config import cohort_envs, forecast_version
 from pvz_rl.envs.tile_scenarios import BombGenerationFailure, is_placement_skill, placement_settings
 from pvz_rl.learning.cohort import (
     CohortPhase,
@@ -22,7 +22,6 @@ from pvz_rl.learning.cohort import (
 )
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.exploration import EXPLORATION_PROTOCOL, configure_exploration
-from pvz_rl.learning.objective import OBJECTIVE_PROTOCOL
 from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION, POLICY_SIGNATURE
 
@@ -39,41 +38,10 @@ def checkpoint_metadata(path, *, weights_only=False):
     from pvz_rl.learning.checkpoints import protocol_for
 
     expected = protocol_for(metadata.get("policy"))
-    if not weights_only and metadata.get("optimizer") in (
-        OBJECTIVE_PROTOCOL,
-        "tile_warmup_then_joint_v1",
-    ):
+    if metadata != expected:
         raise ValueError(
-            "Checkpoint uses a previous fitting schedule and cannot resume. "
-            "Use --init-from for a fresh run with compatible weights."
-        )
-    if weights_only and metadata.get("optimizer") not in (
-        FIT_SCHEDULE_PROTOCOL,
-        "tile_warmup_then_joint_v1",
-        OBJECTIVE_PROTOCOL,
-        "complete_return_action_global_v6",
-        "complete_return_action_global_v5",
-        "complete_return_action_global_v4",
-        "complete_return_action_global_v3",
-        "complete_return_action_global_v2",
-        "complete_return_action_global_v1",
-        "complete_return_selective_invalid_v3",
-        "complete_return_selective_invalid_v2",
-        "complete_return_sequential_no_probe_v1",
-    ):
-        raise ValueError("Unsupported weight checkpoint objective protocol")
-    comparable = {
-        key: value
-        for key, value in metadata.items()
-        if not weights_only or key not in ("exploration", "optimizer")
-    }
-    if comparable != {
-        key: value
-        for key, value in expected.items()
-        if not weights_only or key not in ("exploration", "optimizer")
-    }:
-        raise ValueError(
-            "Retired model/optimizer/exploration checkpoint protocol; fresh initialization is required"
+            "Incompatible shared-model checkpoint protocol; start fresh. "
+            "Old architectures have no weight or optimizer migration."
         )
     return metadata
 
@@ -120,6 +88,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self.phase = CohortPhase.IDLE
         self.training_games = self._n_updates = 0
         self.optimizer_commits = 0
+        self._phase_times = {}
         self.cohort_metrics = {}
         self.runtime_state = None
         self._buffer = self._runner = None
@@ -133,11 +102,12 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self.policy = self.policy_class(
             self.observation_space, self.action_space, self.lr_schedule, **self.policy_kwargs
         ).to(self.device)
+        self.policy_protocol = self.policy.features_extractor.cfg["policy"]["kind"]
         configure_exploration(self, self.policy.features_extractor.cfg)
 
     @classmethod
     def load(cls, path, *args, **kwargs):
-        if checkpoint_metadata(path)["policy"] != cls.policy_protocol:
+        if checkpoint_metadata(path)["policy"] not in ("shared_public_outcomes_q_v10",):
             raise ValueError("Incompatible checkpoint model family for this loader")
         model = super().load(path, *args, **kwargs)
         model.phase = CohortPhase(model.phase)
@@ -228,7 +198,10 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self.env.queue.prefetch(count)
 
     def _begin(self, callback):
-        callback.on_rollout_start()
+        if getattr(self, "_rollout_start_notified", False):
+            self._rollout_start_notified = False
+        else:
+            callback.on_rollout_start()
         from pvz_rl.learning.budget import budget_target, progress_value, uses_games
         from pvz_rl.learning.curriculum import pre_stage
 
@@ -271,11 +244,24 @@ class CudaCohortLifecycle(BaseAlgorithm):
         self._buffer = self._new_buffer()
         self._fit_epoch = 0
         self.cohort_games, self.cohort_start_steps = count, self.num_timesteps
-        self._phase_times = {"collect": 0.0, "finalize_rewards": 0.0, "returns": 0.0, "fit": 0.0}
+        self._phase_times = {
+            "collect": 0.0,
+            "finalize_rewards": 0.0,
+            "returns": 0.0,
+            "fit": 0.0,
+            "td_targets": 0.0,
+        }
         self._device_seconds = 0.0
         self._simulation_ticks = 0
         self._planting_samples = 0
         for key in (
+            "effect_loss",
+            "effect_brier",
+            "effect_accuracy",
+            "effect_labeled_terms",
+            "effect_eligible_decisions",
+            "primary_loss",
+            "total_loss",
             "peashooter_cross_entropy_loss",
             "peashooter_preferred_column_accuracy",
             "q_loss",
@@ -320,6 +306,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
         transitions = int(self._buffer.group_counts.sum())
         self.cohort_metrics = {
             **self._stats,
+            "cohort_seed": self.env.queue.cohort_seed,
+            "random_cohort_seeds": self.env.queue.random_cohorts,
             "validation_cohort": dict(
                 cohort=self.cohort_number,
                 domain=self.tile_skills.validation_domain if self.tile_skills.active else "normal",
@@ -347,6 +335,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "scenario_preparation": self.env.queue.preparation_metrics,
             "fit_seconds": self._phase_times["fit"],
             "returns_seconds": self._phase_times["returns"],
+            "td_target_seconds": self._phase_times.get("td_targets", 0.0),
+            "seconds_per_completed_env": (elapsed + self.env.last_preparation_seconds)
+            / max(1, self.cohort_games),
             "window_seconds": elapsed,
             "optimization_seconds": self._phase_times["fit"],
             "transitions_per_second": transitions / max(elapsed, 1e-9),
@@ -365,14 +356,15 @@ class CudaCohortLifecycle(BaseAlgorithm):
         else:
             self.normal_updates += 1
         self.logger.record("train/n_updates", self._n_updates)
-        self._buffer.close()
-        self._buffer = self._runner = None
-        if getattr(self, "_counterfactual", None) is not None:
-            self._counterfactual.close()
-            self._counterfactual = None
         if getattr(self, "_peashooter_teacher", None) is not None:
             self._peashooter_teacher.close()
             self._peashooter_teacher = None
+        if getattr(self, "_wait_outcomes", None) is not None:
+            self._wait_outcomes.close()
+            self._wait_outcomes = None
+        # Sidecar owners must release their files before the directory owner closes.
+        self._buffer.close()
+        self._buffer = self._runner = None
         self.phase = CohortPhase.IDLE
         callback.on_rollout_end()
 
@@ -396,7 +388,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self._last_obs = EntityBatch(
                 torch.zeros(self.n_envs, 0, 11, dtype=torch.int32, device=self.device),
                 torch.zeros(self.n_envs, 0, dtype=torch.bool, device=self.device),
-                torch.zeros(self.n_envs, 18, device=self.device),
+                torch.zeros(self.n_envs, len(self.policy.layout.global_fields), device=self.device),
             )
             self._last_episode_starts = np.ones(self.n_envs, dtype=bool)
         total, callback = self._setup_learn(
@@ -409,12 +401,23 @@ class CudaCohortLifecycle(BaseAlgorithm):
             self.tile_skills.active or self.num_timesteps < total or self.phase != CohortPhase.IDLE
         ):
             if self.phase == CohortPhase.IDLE:
-                from pvz_rl.learning.budget import budget_target, progress_value, uses_games
                 from pvz_rl.learning.curriculum import pre_stage
 
-                target = budget_target(self.env.cfg)
-                if pre_stage(self.env.cfg) and not self.tile_skills.active:
+                # Validation may change the active skill before the next collection.
+                if forecast_version(self.cfg) >= 2 and not getattr(
+                    self, "_rollout_start_notified", False
+                ):
+                    callback.on_rollout_start()
+                    self._rollout_start_notified = True
+                if (
+                    forecast_version(self.cfg) >= 2
+                    and pre_stage(self.env.cfg)
+                    and not self.tile_skills.active
+                ):
                     break
+                from pvz_rl.learning.budget import budget_target, progress_value, uses_games
+
+                target = budget_target(self.env.cfg)
                 if (
                     uses_games(self.env.cfg)
                     and (pre_stage(self.env.cfg) or not self.tile_skills.active)
@@ -439,28 +442,43 @@ class CudaCohortLifecycle(BaseAlgorithm):
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
                         ranking = is_placement_skill(self.tile_skills.phase)
-                        search = getattr(self, "counterfactual_training", False)
+                        prediction = self.tile_skills.phase == "prediction"
                         rules = getattr(self, "peashooter_rule_training", False)
                         self.prefit_errors = self._buffer.finalize(
                             cohort=self.cohort_number,
-                            diagnostics=not (ranking or search or rules),
+                            diagnostics=not (ranking or rules or prediction),
                         )
-                        if ranking or search or rules:
+                        if ranking or rules or prediction:
                             self.prefit_errors = {}
                             self._buffer.reward_summary["supervision"] = (
-                                "prioritized_lane_cross_entropy_v1" if rules else
-                                "paired_tile_cross_entropy_v1" if search else placement_settings(
-                                    self.cfg, self.tile_skills.phase
-                                ).get("ranking_objective", "top1_hinge_v1")
+                                "prediction_only"
+                                if prediction
+                                else "prioritized_lane_cross_entropy_v1"
+                                if rules
+                                else placement_settings(self.cfg, self.tile_skills.phase).get(
+                                    "ranking_objective", "top1_hinge_v1"
+                                )
                             )
-                        for name, values in self.prefit_errors.items():
-                            self.logger.record("train/action_count_" + name, values["count"])
-                            self.logger.record("train/value_target_error_" + name, values["mse"])
-                            self.logger.record(
-                                "train/placement_gap_" + name, values["placement_gap"]
-                            )
-                        self._phase(CohortPhase.FIT, callback)
-                        self._prefetch_cohort(callback)
+                        if not self.tile_skills.active and self.cfg["training"].get(
+                            "forecasts", {}
+                        ).get("enabled", False):
+                            from pvz_rl.learning.td_targets import TDTargetBuilder
+
+                            self._td_builder = TDTargetBuilder(self)
+                            self._phase(CohortPhase.TD_TARGETS, callback)
+                        else:
+                            self._log_prefit_errors()
+                            self._phase(CohortPhase.FIT, callback)
+                            self._prefetch_cohort(callback)
+                    elif phase == CohortPhase.TD_TARGETS:
+                        if hasattr(callback, "check_deadline"):
+                            callback.check_deadline()
+                        if self._td_builder.advance():
+                            self.prefit_errors = self._td_builder.diagnostics()
+                            self._log_prefit_errors()
+                            self._td_builder = None
+                            self._phase(CohortPhase.FIT, callback)
+                            self._prefetch_cohort(callback)
                     elif phase == CohortPhase.FIT:
                         self._fit_step(callback)
                     elif phase == CohortPhase.SYNCHRONIZE:
@@ -470,6 +488,12 @@ class CudaCohortLifecycle(BaseAlgorithm):
                     self._phase_times[phase.value] += perf_counter() - start
         callback.on_training_end()
         return self
+
+    def _log_prefit_errors(self):
+        for name, values in self.prefit_errors.items():
+            self.logger.record("train/action_count_" + name, values["count"])
+            self.logger.record("train/value_target_error_" + name, values["mse"])
+            self.logger.record("train/placement_gap_" + name, values["placement_gap"])
 
     def _restore_runtime(self):
         state = self.runtime_state
@@ -507,6 +531,22 @@ class CudaCohortLifecycle(BaseAlgorithm):
         path = Path(path)
         if not path.suffix:
             path = path.with_suffix(".zip")
+        if self.runtime_state is not None and hasattr(self, "_checkpoint_source"):
+            # No new work may commit until recovery finishes. In particular, a
+            # resource/validation failure while restoring must not replace the
+            # saved pending query with half-initialized in-memory owners.
+            source = Path(self._checkpoint_source)
+            if source.resolve() == path.resolve():
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".zip", delete=False) as file:
+                temporary = Path(file.name)
+            try:
+                shutil.copyfile(source, temporary)
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return
         runtime = self.runtime_state or {
             "environment": self.env.snapshot_training()
             if self.env is not None and self.env._tasks
@@ -555,17 +595,20 @@ class CudaCohortLifecycle(BaseAlgorithm):
                 archive.writestr(
                     "run.json",
                     json.dumps(
-                        getattr(
-                            self,
-                            "research_metadata",
-                            {
-                                "config": self.cfg,
-                                "condition": "masked",
-                                "family": "preset",
-                                "learner_seed": self.seed,
-                                "validation_limit": None,
-                                "exploration_protocol": EXPLORATION_PROTOCOL,
-                            },
+                        dict(
+                            getattr(
+                                self,
+                                "research_metadata",
+                                {
+                                    "config": self.cfg,
+                                    "condition": "masked",
+                                    "family": "preset",
+                                    "learner_seed": self.seed,
+                                    "validation_limit": None,
+                                    "exploration_protocol": EXPLORATION_PROTOCOL,
+                                },
+                            ),
+                            config=self.cfg,
                         )
                     ),
                 )
@@ -592,8 +635,6 @@ class CudaCohortLifecycle(BaseAlgorithm):
                                     archive.open(name, "w", force_zip64=True) as out,
                                 ):
                                     shutil.copyfileobj(inp, out, length=1024 * 1024)
-                if getattr(self, "_counterfactual", None) is not None:
-                    self._counterfactual.write_archive(archive)
                 if getattr(self, "_peashooter_teacher", None) is not None:
                     self._peashooter_teacher.write_archive(archive)
                 if self._buffer is not None:

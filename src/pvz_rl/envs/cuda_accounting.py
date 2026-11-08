@@ -49,6 +49,16 @@ class AccountingCudaBatch(CudaBatch):
         self.sky_sun_rate = 1.0
         self.accounting = self.cp.zeros((self.n, ACCOUNTING_WIDTH), self.cp.int64)
         self.source = accounting_kernel_source(self.source)
+        from pvz_rl.envs.field_tracking import field_kernel_source
+
+        self.source = field_kernel_source(self.source, self.max_step_ticks)
+        from pvz_rl.envs.wait_capture import wait_capture_source
+
+        self.source = wait_capture_source(self.source)
+        self.wait_capture = None
+        self.field_enabled = False
+        self.field_trace = self.cp.zeros(1, self.cp.int64)
+        self.field_error = self.cp.zeros(self.n, self.cp.int64)
         self.module = self.cp.RawModule(code=self.source, options=("--std=c++11", "--fmad=false"))
         self._step_kernel = self.module.get_function("step_games")
         self._mask = self.module.get_function("legal_masks")
@@ -57,9 +67,53 @@ class AccountingCudaBatch(CudaBatch):
     def set_sky_sun_rate(self, rate):
         self.sky_sun_rate = validate_sky_sun_rate(rate, self.rules)
 
+    def apply_actions_device(self, actions):
+        """Validate and apply a trusted proposal batch without advancing scene time."""
+        self._step(
+            (self.n,),
+            (32,),
+            (
+                self.header,
+                self.plants,
+                self.zombies,
+                self.projectiles,
+                self.mowers,
+                self.cooldowns,
+                self._schedules,
+                self._events,
+                self._event_counts,
+                self.facts,
+                actions,
+                self.n,
+                0,
+                1,
+            ),
+        )
+
+    def enable_field_tracking(self, saved=None):
+        from pvz_rl.envs.field_tracking import FIELD_HEADER
+
+        shape = (self.n, FIELD_HEADER + (self.max_step_ticks + 1) * 5)
+        if saved is None:
+            self.field_trace = self.cp.zeros(shape, self.cp.int64)
+        else:
+            if tuple(saved.shape) != shape:
+                raise ValueError("Field-trace recovery capacity differs from simulator")
+            self.field_trace = self.cp.asarray(saved)
+        self.field_error.fill(0)
+        self.field_enabled = True
+
+    def disable_field_tracking(self):
+        self.field_enabled = False
+        self.field_trace = self.cp.zeros(1, self.cp.int64)
+        self.field_error.fill(0)
+
     def reset(self, levels, seeds, *, indices=None, **kwargs):
         indices = self._indices(indices)
         super().reset(levels, seeds, indices=indices, **kwargs)
+        if self.field_enabled:
+            self.field_trace[self.cp.asarray(indices)] = 0
+            self.field_error[self.cp.asarray(indices)] = 0
         if self.sky_sun_rate != 1.0:
             from pvz_game.cuda.schema import HEADER
 
@@ -91,10 +145,15 @@ class AccountingCudaBatch(CudaBatch):
         ):
             setattr(view, name, getattr(self, name)[:count])
         view._templates = self._templates[:count]
+        view.field_error = self.field_error[:count]
+        if self.field_enabled:
+            view.field_trace = self.field_trace[:count]
         view._step = partial(type(view)._step_with_accounting, proxy(view))
         return view
 
     def _step_with_accounting(self, grid, block, args):
+        from pvz_rl.envs.wait_capture import capture_arguments
+
         self._step_kernel(
             grid,
             block,
@@ -103,5 +162,9 @@ class AccountingCudaBatch(CudaBatch):
                 self.accounting,
                 *map(self.cp.int64, self.sun_spawn_fraction),
                 self.cp.float64(self.sky_sun_rate),
+                self.field_trace,
+                self.field_error,
+                self.cp.int64(self.field_enabled),
+                *capture_arguments(self),
             ),
         )

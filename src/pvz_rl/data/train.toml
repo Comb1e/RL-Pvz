@@ -44,7 +44,7 @@ zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"]
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = "entity_v1"
+version = "entity_public_v4"
 max_entities = 256 # RTX 4070 Laptop: lower attention cost than 512; see docs/math/entity-inputs.md.
 count_scale = 75
 wave_scale = 15
@@ -81,12 +81,13 @@ block_value_by_plant = { sunflower = 0.074074074, peashooter = 0.074074074, wall
 [training]
 gamma = 1.0
 discount_clock = "simulation_ticks"
-method = "complete_return_action_global_v7"
+method = "nstep_action_outcomes_v5"
 budget_unit = "games"
 until_stage_complete = false # With --stage: stop only when its mastery gate passes.
 total_games = 10000
 total_steps = 3000000 # Inactive in normal training; bounded decision-window controls only.
 learner_seeds = [101, 102]
+random_cohort_seeds = true # Independent fresh cohort seeds; pending draws persist for recovery.
 device = "cuda"
 max_minutes = 120
 finalization_minutes = 15
@@ -101,10 +102,37 @@ torch_threads = 1
 enabled = true # Missing in older checkpoints: retain their original validation workflow.
 cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (normally 116/128).
 
+[training.forecasts]
+enabled = true
+supervision_version = 5 # Three outcomes per lane; previous checkpoints are incompatible.
+effect_objective = "absolute_outcome_v4" # Direct post-action outcomes.
+protocol = "static-fork-action-outcomes-v3"
+probe = "conehead" # One reference threat per lane; retain damaged field-phase defenses.
+extra_actions = 2 # Branch runner-up, then one uniformly legal remaining action.
+wait_effect_sample_probability = 0.005
+collection_protocol = "stage_action_outcomes_v5"
+lanes = 1024 # Upper bound; allocate no more than the current cohort can request.
+vram_mib = 1536 # Shared by physical scratch, job storage and the disposable cache.
+chunk_ticks = 1024
+warmup_games = 2048 # Completed main games; auxiliary weight ramps from zero.
+injection_after_games = 4096
+n_step = 5
+injected_n_step = 20
+initial_discount_half_life_steps = 60
+discount_half_life_steps = 600 # Longer horizon after injection; 60 simulated seconds at 10 Hz.
+shaping_weight = 0.0 # Disabled initially. Do not use network forecasts as rewards.
+shaping_weights = [1.0, 1.0, 0.25] # Field depth, breach urgency, probe depth.
+measure_gradient_norms = true # First fitted microbatch per cohort only.
+
 [training.tile_scenarios]
-enabled = true # Automatic bomb stages, attacker_pre, then peashooter; selected normal stages skip them.
+enabled = true # Automatic preliminary stages; selected normal stages skip them.
+sampling_max_attempts = 100
 
 [training.cherry_bomb]
+forecast_mode = "placement_outcomes" # Placement teacher plus one post-action field/probe target.
+extra_actions = 0
+static_field_prediction_weight = 0.5 # Scales field depth and breach time.
+probe_prediction_weight = 0.2 # Scales probe depth; retain the shared known-term average.
 # Shared by both bomb stages except temperature and validation mastery; no exploration or search.
 n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
 probe_interval_games = 10000 # Independent clock for each bomb stage; pending probes retry first.
@@ -116,7 +144,7 @@ mower_ready_probability = 0.5 # Independent per row; otherwise disappeared (spen
 ranking_objective = "set_cross_entropy_v1" # Sole loss: -log(total successful-tile probability).
 softmax_temperature = { zero_success = 0.5, full_success = 1 } # Linear in completed cohort hit rate; fixed during its fitting passes.
 prepare_workers = 32 # Capped by logical CPUs and the shared host-memory budget.
-worker_ram_mib = 96 # Reserved per worker, deducted from trajectory storage.
+worker_ram_mib = 94 # Reserved per worker, deducted from trajectory storage.
 prefetch = true # One uncommitted CPU cohort overlaps fitting; resume regenerates it.
 oracle = "cuda" # "cpu" retains the exact fork-based reference implementation.
 cuda_warmup = true # Advance initial cooldowns in the existing CUDA scratch lanes.
@@ -124,9 +152,17 @@ oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
+forecast_mode = "placement_outcomes"
+extra_actions = 0
+static_field_prediction_weight = 0.5
+probe_prediction_weight = 0.2
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.attacker_pre]
+forecast_mode = "placement_outcomes"
+extra_actions = 0
+static_field_prediction_weight = 0.5
+probe_prediction_weight = 0.2
 n_envs = 640 # Lowest measured collection time/env on the RTX 4070 Laptop profile.
 plants = [4, 8] # Total across four non-zombie lanes; at least one in each.
 zombie_count = [1, 2] # Basic zombies, all in the remaining empty lane.
@@ -143,12 +179,39 @@ cuda_warmup = true # Natural initial cooldown only; distance labels use no candi
 oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown warmup.
 oracle_vram_mib = 1024
 
+[training.prediction]
+forecast_mode = "prediction_only"
+extra_actions = 0
+n_envs = 640
+probe_interval_games = 10000
+validation_cases = 200 # Every environment must match all field, breach, and probe classes.
+plants = [0, 20]
+live_zombies = [0, 10]
+defeated_zombies = [0, 30]
+pending_zombies = [0, 20]
+sun = [0, 500]
+ready_probability = 0.5 # Applied independently to each card slot and mower.
+
+[training.attacker]
+forecast_mode = "placement_outcomes"
+extra_actions = 0
+static_field_prediction_weight = 0.5
+probe_prediction_weight = 0.2
+n_envs = 640
+validation_cases = 200 # All must pass.
+ratios = [0.1, 0.4, 0.5] # Cherry Bomb, Cherry Bomb Obstacle, Attacker Pre.
+probe_interval_games = 10000
+
 [training.peashooter]
+forecast_mode = "action_outcomes" # Teacher plus field/probe targets.
+extra_actions = 0 # The placement teacher supplies targets; retain actual-action effects only.
+static_field_prediction_weight = 0.5
+probe_prediction_weight = 0.2
 # Independent cohort/preparation sizing; shared optimizer and fitting passes.
 n_envs = 128
 sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
 probe_interval_games = 2000
-validation_success_threshold = 0.98 # Strictly exceed this rate (99/100); separate from cohort qualification.
+validation_success_threshold = 0.95 # Strictly exceed this rate (96/100); separate from cohort qualification.
 fitting_objective = "prioritized_lane_cross_entropy_v1"
 column_decay = 0.5 # Preferred-cell target weight halves with each column to the right.
 softmax_temperature = 1.0
@@ -159,12 +222,12 @@ oracle_vram_mib = 4096 # Upper bound; actual lanes shrink to preserve profile he
 oracle_chunk_ticks = 4096
 
 [training.normal]
+forecast_mode = "action_outcomes" # Post-action field/probe targets only.
 n_envs = 128
-tile_only_cohorts = 3 # Repeat three tile-only cohorts, then one joint cohort.
+static_field_prediction_weight = 0.5
+probe_prediction_weight = 0.2
 validation_schedule = "stage_success" # Evaluate normal games only after each stage passes.
 eval_interval_games = 2000 # Periodic game-count diagnostic/fixed checks.
-counterfactual_enabled = true
-comparison_temperature = 1.0
 # Species exploration stays fixed throughout a cohort; tile proposals are greedy.
 # Ordinary waits trigger the same plant probability check once per interval.
 exploration = {objective = "committed_species_epsilon_v1", plant_epsilon_start = 0.1, plant_epsilon_floor = 0.03, plant_decay_games = 10000, plant_wait_check_seconds = 15.0}
@@ -175,7 +238,7 @@ residency = "episode_start_stage"
 probe_interval_games = 2000
 minimum_stage_games = 100
 probe_interval = 16384
-probe_cases = 100 # Shared validation panel size for every stage.
+probe_cases = 100 # Default validation panel size; attacker has its own.
 consecutive_passes = 1
 minimum_stage_steps = 16384
 boundaries = [0.1, 0.4]
@@ -202,17 +265,10 @@ requirements = {easy = 100, standard = 100, hard = 100}
 ram_gib = 6
 block_rows = 32768
 
-[training.counterfactual]
-protocol = "factual_tile_replay_v1"
-objective = "paired_tile_cross_entropy_v1"
-resident_envs = 1536 # Main allocation plus scratch; fastest bounded automatic-layout mean.
-scratch_vram_mib = 1536 # Includes command storage; lanes shrink to preserve GPU headroom.
-chunk_decisions = 1 # Lowest repeated mean in the bounded automatic-layout refinement.
-
 [training.objective]
-protocol = "complete_return_action_global_v7"
+protocol = "nstep_action_outcomes_v5"
 accepted_outcome_share = 0.5
-species_consistency_weight = 1.0
+species_consistency_weight = 1.0 # Verified demo objective only; normal Q fitting omits consistency.
 species_consistency_huber_delta = 1.0
 invalid_action_q_offset = -0.1 # Illegal target = detached current head minimum Q + this offset.
 invalid_fit_group_size = 2 # Shared first-of-window size for invalid proposals and waits.
@@ -222,15 +278,28 @@ demo_rank_loss_weight = 0.10
 demo_rank_margin = 0.05
 
 [training.performance]
+auxiliary_hybrid = false # Opt in: the 128-env control still drained more slowly than synchronous execution.
+interval_backend = "packed_async" # Interval-only device roots; teacher keeps its existing workflow.
+auxiliary_cpu_workers = 4 # Fastest asynchronous setting in the warmed 4/8/12-worker screen.
+auxiliary_worker_ram_mib = 192
+auxiliary_cuda_target_ms = 2.0
+auxiliary_vram_mib = 4096 # Combined captures, interval workers, teacher workers and caches.
+auxiliary_spill_gib = 8
+auxiliary_interval_lanes = 128 # Fastest 32/64/128 interval screen; shrinks to fit VRAM.
+auxiliary_teacher_lanes = 128 # Drain may use the existing larger oracle limit.
+fork_packed = false # Packed layouts were slower in the seeded 128-env screen.
+fork_threads = 32
+fork_suffix_cache = true # Reuse only exactly matching future physical checkpoints.
+fork_cache_steps = 8
+fork_cache_zombies = 128 # Larger live rosters safely miss the disposable cache.
+fork_cache_projectiles = 256
+fork_cache_vram_mib = 128 # Included in training.forecasts.vram_mib, not additional VRAM.
 compile_collection = true
 compile_fitting = true
 telemetry = true
 telemetry_span_limit = 1024
 fit_precision = "bf16_master"
 prefetch = true
-annotation_input_cache = "auto"
-annotation_cache_mib = 256
-annotation_use_fit_limits = false
 fit_batch_groups = 4
 fit_encoder_microbatch = 192
 fit_species_microbatch = 192
@@ -238,6 +307,10 @@ fit_tile_microbatch = 192
 fit_entity_buckets = [8, 16, 32, 64, 128, 256]
 fit_token_budget = 65536
 collection_graph_cache_entries = 8
+collection_tile_buckets = true # Bound decoder capture shapes as legal non-Wait counts change.
+teacher_batched_transfers = true # One slab upload per refill; validate roots once at ingestion.
+teacher_pipeline = true # Prepare roots during CUDA chunks; pinned event-polled progress.
+vectorized_effect_gather = true # One indexed gather for tested outcome tokens, retaining loss normalization.
 collection_vram_headroom_mib = 512
 
 [splits]
@@ -263,16 +336,15 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "two_stage_transformer_q_v1"
+kind = "shared_public_outcomes_q_v10"
 action_distribution = "sequential_q_unmasked_tiles_v2"
-species_width = 128
-species_layers = 4
-species_heads = 8
-species_feedforward = 512
-tile_width = 192
-tile_layers = 6
-tile_heads = 12
-tile_feedforward = 768
+shared_width = 192
+encoder_blocks = 4
+tile_decoder_blocks = 2
+attention_heads = 12
+action_decoder_blocks = 2
+action_decoder_heads = 8
+feedforward_width = 768
 encoder_microbatch = 128
 attention_query_chunk = 64
 encoder_token_budget = 65536
@@ -282,24 +354,6 @@ passes = 40
 learning_rate = 0.0003
 learner_seed = 101
 time_budget_minutes = 30
-
-[training.annotation]
-# Annotation convergence: 0 means unlimited passes until train and validation are exact.
-# A positive pass budget counts additional passes per invocation, including resume.
-# L2 activates only after the training split first reaches exact convergence.
-passes = 0
-learning_rate = 0.0003
-batch_size = 256
-margin = 1.0
-learner_seed = 101
-l2_strength = 0.0001
-sampling_seed = "random"
-sampling_family = "preset"
-# Uniform endpoint in [0, sampling_max_steps]; finished games are retried.
-sampling_max_steps = 20000
-sampling_max_attempts = 100
-sampling_plant_interval_steps = [500, 1500]
-sampling_max_plants = 8
 
 [simulation]
 backend = "cuda"
@@ -329,7 +383,7 @@ performance = {fit_species_microbatch = 32, fit_tile_microbatch = 32, fit_token_
 device_names = ["NVIDIA GeForce RTX 4070 Laptop GPU"]
 status = "measured-eager-2026-10-15"
 torch_threads = 2
-performance = {compile_collection = false, compile_fitting = false, fit_species_microbatch = 64, fit_tile_microbatch = 64, fit_token_budget = 16384, fit_batch_groups = 2, collection_vram_headroom_mib = 1638}
+performance = {compile_collection = true, compile_fitting = false, fit_species_microbatch = 64, fit_tile_microbatch = 64, fit_token_budget = 16384, fit_batch_groups = 2, collection_vram_headroom_mib = 1638}
 
 [gpu_profiles.rtx4080-super]
 device_names = ["NVIDIA GeForce RTX 4080 SUPER"]

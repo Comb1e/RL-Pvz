@@ -9,16 +9,28 @@ import numpy as np
 import torch
 
 from pvz_rl.config import (
+    absolute_outcomes,
     bomb_max_illegal_distance,
     bomb_ranking_margin,
     bomb_softmax_temperature,
+    forecast_forks_enabled,
+    forecast_mode,
+    forecast_version,
+    outcome_prediction_weights,
     passivity_settings,
     plant_wait_check_ticks,
 )
 from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.cuda_features import REWARD_FIELDS
 from pvz_rl.envs.encoding import ENTITY_WIDTH, PackedEntityBatch
-from pvz_rl.envs.tile_scenarios import is_placement_skill, placement_settings
+from pvz_rl.envs.tile_scenarios import (
+    attacker_exercise_scores,
+    is_placement_skill,
+    is_single_frame_skill,
+    placement_settings,
+    placement_source,
+    skill_plant,
+)
 from pvz_rl.learning.action_routing import classify_actions
 from pvz_rl.learning.batch_transport import (
     BatchPrefetch,
@@ -34,9 +46,9 @@ from pvz_rl.learning.bomb_objective import (
     bomb_set_cross_entropy,
 )
 from pvz_rl.learning.cohort import CohortPhase, atomic_transition, check_transition_interruption
-from pvz_rl.learning.collection_scheduler import CollectionScheduler
-from pvz_rl.learning.counterfactual_settings import counterfactual_enabled
+from pvz_rl.learning.collection_scheduler import CollectionScheduler, unissued_collection
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
+from pvz_rl.learning.curriculum import STAGES, selected_stage
 from pvz_rl.learning.exploration import (
     CommittedPlantExploration,
     configure_exploration,
@@ -44,6 +56,7 @@ from pvz_rl.learning.exploration import (
     refresh_wait_exploration,
 )
 from pvz_rl.learning.flat_q import CohortCoefficients, batch_loss
+from pvz_rl.learning.forecast_metrics import OUTCOME_METRIC_WIDTH
 from pvz_rl.learning.objective import (
     COMPONENTS,
     consistency_diagnostics,
@@ -58,6 +71,19 @@ from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
 from pvz_rl.policy.runner import PolicyRunner
 from pvz_rl.policy.sequential_q import action_parts
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
+
+
+def joint_fitting_stage(cfg, curriculum_state):
+    """Easy trains the action decoder. Standard and shared leave it fixed."""
+    explicit = selected_stage(cfg)
+    if explicit in STAGES:
+        name = explicit
+    elif isinstance(curriculum_state, dict):
+        index = curriculum_state.get("stage")
+        name = STAGES[index] if type(index) is int and 0 <= index < len(STAGES) else None
+    else:
+        name = None
+    return "easy_action" if name == "easy" else "action_heads"
 
 
 def flat_batches(buffer, decision_budget, spool=None):
@@ -76,7 +102,7 @@ def flat_batches(buffer, decision_budget, spool=None):
 
 
 class CudaSequentialQ(CudaCohortLifecycle):
-    policy_protocol = "two_stage_transformer_q_v1"
+    policy_protocol = "shared_public_outcomes_q_v10"
     optimizer_version = FIT_SCHEDULE_PROTOCOL
 
     @property
@@ -120,71 +146,111 @@ class CudaSequentialQ(CudaCohortLifecycle):
         return PolicyRunner(self.policy)
 
     @property
-    def counterfactual_training(self):
-        return counterfactual_enabled(self.cfg, self.tile_skills.phase)
-
-    @property
     def peashooter_rule_training(self):
         return rules_enabled(self.cfg, self.tile_skills.phase)
 
+    @property
+    def outcome_training(self):
+        return forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+
+    @property
+    def outcome_weight(self):
+        return max(outcome_prediction_weights(self.cfg, self.tile_skills.phase)) * getattr(
+            self.policy, "auxiliary_scale", 1
+        )
+
+    @property
+    def fitting_parameter_stage(self):
+        if self.tile_skills.phase == "prediction":
+            return "prediction_only"
+        if self._fit_kind != "tile_only":
+            return joint_fitting_stage(self.cfg, getattr(self, "curriculum_state", None))
+        if not self.outcome_training or self.outcome_weight <= 0:
+            return "tile"
+        return (
+            "placement_outcomes" if is_placement_skill(self.tile_skills.phase) else "tile_outcomes"
+        )
+
     def _prepare_collection(self, callback):
-        if self.peashooter_rule_training:
-            draining = not self.env.enabled_envs.any() and not self._scheduler.pending.any()
-            if not draining:
+        if hasattr(callback, "check_deadline"):
+            callback.check_deadline()
+        auxiliary = getattr(self.env, "auxiliary", None)
+        if auxiliary is not None:
+            if self.peashooter_rule_training and "teacher" in auxiliary.families:
+                with atomic_transition():
+                    self._peashooter_teacher.advance()
+                    if not self.env.enabled_envs.any() and not self._scheduler.pending.any():
+                        self._peashooter_teacher.seal()
+            self._stats["auxiliary_simulation"] = dict(auxiliary.metrics)
+        if absolute_outcomes(self.cfg):
+            self._scheduler.draining = getattr(self, "_pending_effect", None) is not None
+            owner = getattr(self, "_wait_outcomes", None)
+            if owner is not None:
+                started = perf_counter()
+                try:
+                    with atomic_transition(), self.env.device_context():
+                        owner.advance()
+                        if not self.env.enabled_envs.any() and not self._scheduler.pending.any():
+                            if not owner.finalize():
+                                if auxiliary is not None:
+                                    from time import sleep
+
+                                    sleep(0.001)
+                                if hasattr(callback, "log_progress"):
+                                    callback.log_progress()
+                                return False
+                finally:
+                    self._phase_times["collect"] += perf_counter() - started
+                    self._stats["wait_outcomes"] = dict(owner.metrics)
+        if self.outcome_training or self.peashooter_rule_training:
+            if self.env.enabled_envs.any() or self._scheduler.pending.any():
                 return True
             if hasattr(callback, "check_deadline"):
                 callback.check_deadline()
             started = perf_counter()
             try:
                 with atomic_transition(), self.env.device_context():
-                    if self._peashooter_teacher.advance():
+                    ready, staging = True, 0
+                    owner = getattr(self, "_wait_outcomes", None)
+                    if owner is not None:
+                        staging += owner.estimated_bytes
+                    if auxiliary is not None:
+                        staging += auxiliary.estimated_bytes
+                    if self.peashooter_rule_training:
+                        ready = self._peashooter_teacher.advance() and ready
+                        staging += self._peashooter_teacher.estimated_bytes
+                        self._stats["peashooter_teacher"] = dict(self._peashooter_teacher.metrics)
+                    if not self._buffer.reserve_staging(staging):
+                        raise MemoryError(
+                            "Shared RAM budget cannot hold placement/outcome metadata"
+                        )
+                    if ready:
                         self._phase(CohortPhase.FINALIZE_REWARDS, callback)
-                    if not self._buffer.reserve_staging(self._peashooter_teacher.estimated_bytes):
-                        raise MemoryError("Shared RAM budget cannot hold Peashooter oracle metadata")
             finally:
                 self._phase_times["collect"] += perf_counter() - started
-            self._stats["peashooter_teacher"] = dict(self._peashooter_teacher.metrics)
             if hasattr(callback, "log_progress"):
                 callback.log_progress()
+            if auxiliary is not None and not ready:
+                from time import sleep
+
+                sleep(0.001)
             return False
-        if not self.counterfactual_training:
-            return True
-        if hasattr(callback, "check_deadline"):
-            callback.check_deadline()
-        started = perf_counter()
-        try:
-            with atomic_transition(), self.env.device_context():
-                draining = not self.env.enabled_envs.any() and not self._scheduler.pending.any()
-                complete = self._counterfactual.advance(draining=draining)
-                if not self._buffer.reserve_staging(self._counterfactual.estimated_bytes):
-                    raise MemoryError("Shared trajectory RAM budget cannot hold factual replay metadata")
-                if draining and complete:
-                    self._phase(CohortPhase.FINALIZE_REWARDS, callback)
-        finally:
-            self._phase_times["collect"] += perf_counter() - started
-        self._stats["counterfactual"] = dict(self._counterfactual.metrics)
-        if hasattr(callback, "log_progress"):
-            callback.log_progress()
-        # Scratch completion never blocks live main games. Only final draining
-        # owns additional collection units after every main episode has ended.
-        return not draining
+        return True
 
     def _begin(self, callback):
-        from pvz_rl.learning.counterfactual_settings import reject_search_resume
-        reject_search_resume({"tile_scenarios": self.tile_skill_state}, self.cfg)
         # A restored cohort keeps the buffer configuration it was collected
         # with. New buffers receive the current requested reward settings.
         self.cfg["reward"]["passivity"] = copy.deepcopy(self._passivity_requested)
         self._passivity_active = copy.deepcopy(self._passivity_requested)
         self._drain()
         self._close_batches()
-        if getattr(self, "_counterfactual", None) is not None:
-            self._counterfactual.close()
-            self._counterfactual = None
         if getattr(self, "_peashooter_teacher", None) is not None:
             self._peashooter_teacher.close()
             self._peashooter_teacher = None
-        if not self.peashooter_rule_training and getattr(self.env, "lane_preparation", None) is not None:
+        if (
+            not self.peashooter_rule_training
+            and getattr(self.env, "lane_preparation", None) is not None
+        ):
             self.env.lane_preparation.close()
             self.env.lane_preparation = None
         boundary = self._phase_memory("before_collection_release")
@@ -201,6 +267,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self.env.cp.get_default_memory_pool().free_all_blocks()
         released = self._phase_memory("after_collection_release")
         self.collection_execution = {}
+        for name in ("_collection_effect",):
+            if hasattr(self, name):
+                delattr(self, name)
+        if getattr(self, "_wait_outcomes", None) is not None:
+            self._wait_outcomes.close()
+            self._wait_outcomes = None
         super()._begin(callback)
         self._stats["phase_memory"] = [boundary, released]
         self._stats["collection_logical_rows"] = 0
@@ -233,20 +305,72 @@ class CudaSequentialQ(CudaCohortLifecycle):
             device=self.device,
         )
         self._ensure_teacher()
+        settings = self.cfg["training"].get("forecasts", {})
+        injection = (
+            not is_single_frame_skill(self.tile_skills.phase)
+            and forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+            and self.training_games >= settings.get("injection_after_games", 4096)
+        )
+        total = self.training_games + self.tile_skills.total
+        half_life = (
+            settings.get("discount_half_life_steps", 600)
+            if injection
+            else settings.get("initial_discount_half_life_steps", 60)
+        )
+        self._resolved_forecast_schedule = dict(
+            injection=injection,
+            auxiliary_scale=1.0
+            if self.tile_skills.phase == "prediction"
+            else min(1.0, (total + self.cohort_games) / max(1, settings.get("warmup_games", 2048))),
+            n_step=settings.get("injected_n_step", 20) if injection else settings.get("n_step", 5),
+            gamma_tick=0.5 ** (1 / (half_life * self.cfg["environment"]["decision_ticks"])),
+        )
+        self.cfg["training"]["forecasts"]["injection_active"] = injection
+        for network in (self.policy, self._teacher):
+            network.forecast_stage = self.tile_skills.phase
+            network.injection_enabled = injection
+            network.auxiliary_scale = self._resolved_forecast_schedule["auxiliary_scale"]
+        self._stats["forecast_schedule"] = dict(self._resolved_forecast_schedule)
+        self._stats["forecast_mode"] = forecast_mode(self.cfg, self.tile_skills.phase)
+        if self.tile_skills.phase == "prediction":
+            self._stats["fitting_objective"] = "prediction_only"
+        # Resource admission can fail before the first action. Retain a complete
+        # empty ticket state so recovery can use the already prepared boards.
+        self._scheduler = CollectionScheduler(self.n_envs, self.device)
+        self._pending_effect = None
+        self._wait_outcomes = None
+        from pvz_rl.learning.auxiliary_settings import enabled as hybrid_enabled
+
+        if (hybrid_enabled(self.cfg) or is_single_frame_skill(self.tile_skills.phase)) and (
+            self.peashooter_rule_training
+            or (self.outcome_training and forecast_forks_enabled(self.cfg, self.tile_skills.phase))
+        ):
+            from pvz_rl.learning.auxiliary_service import AuxiliarySimulationService
+
+            self.env.auxiliary = AuxiliarySimulationService(self.env, self._buffer)
         if self.peashooter_rule_training:
             from pvz_rl.learning.peashooter_teacher import PeashooterTeacher
 
             self._stats["fitting_objective"] = RULE_OBJECTIVE
             self._peashooter_teacher = PeashooterTeacher(
-                self.env, self._buffer, (self.cohort_number, self.optimizer_commits),
-            )
-        if self.counterfactual_training:
-            from pvz_rl.learning.counterfactual import CounterfactualRunner
-            self._counterfactual = CounterfactualRunner(
-                self.env, self._buffer, self.seed, self.tile_skills.phase,
+                self.env,
+                self._buffer,
                 (self.cohort_number, self.optimizer_commits),
             )
-        self._scheduler = CollectionScheduler(self.n_envs, self.device)
+        if (
+            absolute_outcomes(self.cfg)
+            and self.outcome_training
+            and forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+        ):
+            from pvz_rl.learning.placement_outcomes import PlacementOutcomes
+            from pvz_rl.learning.wait_outcomes import WaitOutcomes
+
+            owner = (
+                PlacementOutcomes if is_single_frame_skill(self.tile_skills.phase) else WaitOutcomes
+            )
+            self._wait_outcomes = owner(self.env, self._buffer)
+        if getattr(self.env, "auxiliary", None) is not None:
+            self.env.auxiliary.start()
         if compilation_requested(self.cfg["training"]["performance"]):
             for encoder in self._teacher.encoders:
                 if encoder.compilation_status == "disabled":
@@ -267,25 +391,19 @@ class CudaSequentialQ(CudaCohortLifecycle):
     @torch.no_grad()
     def _update_teacher(self, stage=None):
         self._ensure_teacher()
-        decay = self.cfg["training"]["objective"]["ema_decay"]
-        teacher_parameters = self._teacher.runtime_parameters(stage)
-        online_parameters = self.policy.runtime_parameters(stage)
-        torch._foreach_lerp_(
-            list(teacher_parameters),
-            list(online_parameters),
-            1 - decay,
+        self.policy.update_teacher_runtime(
+            self._teacher, stage, self.cfg["training"]["objective"]["ema_decay"]
         )
         self._teacher_version += 1
 
     def _finalize_rewards(self, callback):
         self.env.handoff.clear()
-        self._buffer.reserve_staging(
+        if not self._buffer.reserve_staging(
             self._peashooter_teacher.estimated_bytes if self.peashooter_rule_training else 0
-        )
+        ):
+            raise MemoryError("Shared RAM budget cannot hold placement/outcome metadata")
         pending = getattr(self, "_pending_episodes", {})
-        summary = self._buffer.finalize_rewards(
-            pending
-        )
+        summary = self._buffer.finalize_rewards(pending)
         passivity = summary.get("passivity", {}).get("episodes", {})
         for slot, item in pending.items():
             episode = item.get("episode")
@@ -303,15 +421,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     "wait_passivity_shortest_run": int(details.get("shortest_run", 0)),
                     "wait_passivity_longest_run": int(details.get("longest_run", 0)),
                     "wait_passivity_run_details": details.get("run_details", []),
-                    "wait_passivity_penalty_minimum": float(
-                        details.get("minimum_penalty", 0.0)
-                    ),
-                    "wait_passivity_penalty_maximum": float(
-                        details.get("maximum_penalty", 0.0)
-                    ),
-                    "wait_passivity_skipped_no_wait": bool(
-                        details.get("skipped_no_wait", False)
-                    ),
+                    "wait_passivity_penalty_minimum": float(details.get("minimum_penalty", 0.0)),
+                    "wait_passivity_penalty_maximum": float(details.get("maximum_penalty", 0.0)),
+                    "wait_passivity_skipped_no_wait": bool(details.get("skipped_no_wait", False)),
                 }
             )
         finalize_episode_metrics(
@@ -344,11 +456,25 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _phase(self, phase, callback):
         if phase == CohortPhase.FIT:
+            if getattr(self, "_wait_outcomes", None) is not None:
+                if not self._wait_outcomes.published:
+                    raise RuntimeError("Cannot fit unresolved absolute outcomes")
+                self._stats["wait_outcomes"] = dict(self._wait_outcomes.metrics)
+                self._wait_outcomes.close()
+                self._wait_outcomes = None
+            if self.env.static_forks is not None:
+                if self.env.static_forks.request is not None:
+                    raise RuntimeError("Cannot fit with an unfinished static fork")
+                self._stats["static_forks"] = dict(self.env.static_forks.metrics)
+                self.env.static_forks.close()
+                self.env.static_forks = None
             if getattr(self, "_peashooter_teacher", None) is not None:
                 self._peashooter_teacher.release()
-                self._buffer.reserve_staging(self._peashooter_teacher.estimated_bytes)
-            if getattr(self, "_counterfactual", None) is not None:
-                self._counterfactual.release()
+                if not self._buffer.reserve_staging(self._peashooter_teacher.estimated_bytes):
+                    raise MemoryError("Shared RAM budget cannot hold placement/outcome metadata")
+            if getattr(self.env, "auxiliary", None) is not None:
+                self._stats["auxiliary_simulation"] = dict(self.env.auxiliary.metrics)
+                self.env.auxiliary.close()
             for encoder in self.policy.encoders:
                 encoder.release_collection()
             if getattr(self, "_teacher", None) is not None:
@@ -362,6 +488,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
         super()._phase(phase, callback)
 
     def _collect_step(self, callback, *, draining=False):
+        auxiliary = getattr(self.env, "auxiliary", None)
+        if auxiliary is not None:
+            auxiliary.main_start()
+        try:
+            return self._collect_step_body(callback, draining=draining)
+        finally:
+            if auxiliary is not None:
+                auxiliary.main_end()
+
+    def _collect_step_body(self, callback, *, draining=False):
         if not draining:
             check_transition_interruption()
         self._collection_callback = callback
@@ -383,40 +519,75 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["reset"] = self._scheduler.resets
             rows["env"] = np.arange(self.n_envs)
             source_decisions = self._scheduler.decisions.copy()
+            fresh = np.flatnonzero(self._scheduler.resets)
+            if is_single_frame_skill(self.tile_skills.phase):
+                fresh = np.arange(self.n_envs)
+            self._scheduler.clear_forecast(fresh)
+            seen_classes = self._scheduler.forecast_classes.copy()
+            seen_valid = self._scheduler.forecast_valid.copy()
+            self._scheduler.hold_forecast(seen_classes, seen_valid)
+            forecast_prior = (
+                torch.as_tensor(seen_classes, device=self.device, dtype=torch.long),
+                torch.as_tensor(seen_valid, device=self.device),
+            )
             masks = env.action_masks().clone()
             branch_available = env.branch_availability()
+            legal = None
             if new.any():
                 supplied = None
-                if self.tile_skills.active:
+                if self.tile_skills.active and self.tile_skills.phase != "prediction":
                     supplied = env.supplied_branches(self.tile_skills.phase, branch_available)
                 with env.profiler.track("online_inference"):
                     result = self._runner.decide(
                         self._last_obs,
                         masks,
                         active=enabled,
-                        deterministic=False,
+                        deterministic=self.tile_skills.phase == "prediction",
                         defer_check=True,
                         plan=plan,
                         branch_usable=branch_available,
                         supplied_branches=supplied,
+                        prior=forecast_prior,
                     )
                 actions, values, tile_values, details = result
                 if self.tile_skills.active:
                     details.update(
-                        policy_action=actions, exploration_mode=torch.zeros_like(actions),
+                        policy_action=actions,
+                        exploration_mode=torch.zeros_like(actions),
                         pending_species=torch.zeros_like(actions),
                     )
                 else:
                     actions, values, tile_values, details = self._plant_exploration.apply(
-                        self.policy, actions, details, masks, env.header_tensor[:, 2],
-                        torch.from_dlpack(env.batch.cooldowns), self._plant_costs, enabled,
-                        branch_usable=branch_available, plan=plan,
+                        self.policy,
+                        actions,
+                        details,
+                        masks,
+                        env.header_tensor[:, 2],
+                        torch.from_dlpack(env.batch.cooldowns),
+                        self._plant_costs,
+                        enabled,
+                        branch_usable=branch_available,
+                        plan=plan,
                     )
                 self._runner.valid &= details["valid"]
-                if self.counterfactual_training:
-                    if not hasattr(self, "_counterfactual_tiles"):
-                        self._counterfactual_tiles = torch.zeros_like(details["tile_q"])
-                    self._counterfactual_tiles[enabled] = details["tile_q"][enabled]
+                from pvz_rl.learning.forecast_labels import effect_forecast
+                from pvz_rl.policy.forecast_input import effect_classes, played_logits
+
+                index, logits = played_logits(
+                    self.policy, actions, details["board_memory"], enabled
+                )
+                if len(index):
+                    self._scheduler.note_forecast(
+                        index.detach().cpu().numpy(),
+                        effect_classes(logits).to(dtype=torch.int8).cpu().numpy(),
+                    )
+                    if self.outcome_training and forecast_version(self.cfg) >= 2:
+                        if not hasattr(self, "_collection_effect"):
+                            self._collection_effect = torch.zeros(
+                                (self.n_envs, 2, 5, 10), device=self.device
+                            )
+                        self._collection_effect[index] = effect_forecast(logits)
+                self.policy._effect_decision_cache = None
             if not hasattr(self, "_collection_packed"):
                 self._collection_packed = torch.empty(
                     self.n_envs * env.features.limit,
@@ -469,6 +640,17 @@ class CudaSequentialQ(CudaCohortLifecycle):
             columns, issued = self._scheduler.retain(columns, new)
             actions = columns[:, 1].long()
             executing = issued
+            if (
+                forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+                and getattr(self, "_pending_effect", None) is None
+                and issued_host.any()
+            ):
+                from pvz_rl.learning.effect_collection import begin_effects
+
+                if legal is None:
+                    legal = env.engine_action_masks_device()
+                self._pending_effect = begin_effects(self, actions, details, issued_host, legal)
+                self._scheduler.pending |= issued_host
             with env.profiler.track("encoding"):
                 counts = torch.where(executing, env.features.summary_tensor[: self.n_envs, 0], 0)
                 offsets = counts.cumsum(0) - counts
@@ -486,16 +668,46 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         branch_available=branch_available & executing[:, None],
                         columns=columns,
                         valid=self._runner.valid,
+                        **(
+                            {"effect_prediction": self._collection_effect}
+                            if self.outcome_training
+                            else {}
+                        ),
                     ),
                 )
-            if self.counterfactual_training:
-                self._counterfactual.before(
-                    actions, self._counterfactual_tiles, masks, executing,
-                    env._episode_serial, source_decisions,
-                )
             if self.peashooter_rule_training:
-                self._peashooter_teacher.before(actions, executing, branch_available)
+                if (
+                    getattr(env, "auxiliary", None) is not None
+                    and "teacher" in env.auxiliary.families
+                ):
+                    self._peashooter_teacher.before(
+                        actions,
+                        executing,
+                        branch_available,
+                        self._pending_effect,
+                        issued=issued_host,
+                    )
+                else:
+                    self._peashooter_teacher.before(actions, executing, branch_available)
+            if getattr(self, "_wait_outcomes", None) is not None:
+                self._wait_outcomes.arm(self._pending_effect)
             env.step_device(actions, active=executing)
+            forecast_host = None
+            if self.outcome_training and not is_single_frame_skill(self.tile_skills.phase):
+                from pvz_rl.envs.field_tracking import FIELD_HEADER
+
+                count = self.cfg["environment"]["decision_ticks"] + 1
+                forecast_host = env.handoff.enqueue_fields(
+                    "forecast_step",
+                    dict(
+                        trace=torch.from_dlpack(
+                            env.batch.field_trace[:, FIELD_HEADER : FIELD_HEADER + count * 5]
+                        ).to(torch.uint8),
+                        breaches=torch.from_dlpack(env.batch.field_trace[:, 1:6]),
+                        errors=torch.from_dlpack(env.batch.field_error),
+                        **({}),
+                    ),
+                )
             checks = self._plant_exploration.observe(
                 actions,
                 env.header_tensor[:, 12].bool(),
@@ -519,6 +731,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         wait_checks=checks.wait_checks,
                     ),
                 )
+            if getattr(env, "auxiliary", None) is not None:
+                env.auxiliary.main_end()
             previous_wait = env.handoff.wait_seconds
             env.handoff.wait()
             for encoder in self.policy.encoders:
@@ -581,12 +795,36 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 :, [REWARD_FIELDS.index(k) for k in ("home_outer_entries", "home_inner_entries")]
             ]
             staging = env.handoff.nbytes + self._scheduler.retained_bytes
-            if self.counterfactual_training:
-                staging += self._counterfactual.estimated_bytes
+            if getattr(env, "auxiliary", None) is not None:
+                staging += env.auxiliary.estimated_bytes
+            if env.static_forks is not None:
+                staging += env.static_forks.host_bytes
+            if getattr(self, "_pending_effect", None) is not None:
+                staging += sum(
+                    v.nbytes for v in self._pending_effect.values() if isinstance(v, np.ndarray)
+                )
             if self.peashooter_rule_training:
                 staging += self._peashooter_teacher.estimated_bytes
             if not self._buffer.reserve_staging(staging):
                 raise MemoryError("RAM budget cannot hold actual collection staging")
+            if self.outcome_training:
+                if forecast_host is not None:
+                    if bool(forecast_host["errors"].any()):
+                        raise RuntimeError("Exact field tracker failure; recovery retained")
+                    rows["field_trace"] = forecast_host["trace"].numpy().reshape(self.n_envs, -1, 5)
+                    rows["field_breach"] = forecast_host["breaches"].numpy()
+                rows["effect_prediction"] = host["effect_prediction"].numpy()
+                rows["effect_prediction_valid"] = active
+            pending = getattr(self, "_pending_effect", None)
+            if pending is not None:
+                if not pending["ready"]:
+                    raise RuntimeError("An incomplete effect fork cannot commit a main action")
+                rows["effect_actions"] = pending["actions"]
+                rows["effect_valid"] = pending["valid"]
+                rows["effect_labels"] = pending["labels"]
+                if not self._scheduler.pending.any():
+                    self._pending_effect = None
+                    self._scheduler.draining = False
             presentation_started = perf_counter()
             env.action_journal.record_batch_safe(
                 rows,
@@ -598,15 +836,17 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["executed_action"] = np.where(rows["accepted"], rows["action"], 0)
             rows[~active] = np.zeros((), dtype=rows.dtype)
             rows["env"] = np.arange(self.n_envs)
-            if self.counterfactual_training:
-                self._counterfactual.observe(
-                    rows, wait_available=branch_available_host[:, 1:].any(axis=1),
-                )
-                self._stats["counterfactual"] = dict(self._counterfactual.metrics)
+            rows["prior_classes"][active] = self._scheduler.held_classes[active]
+            rows["prior_valid"][active] = self._scheduler.held_valid[active]
+            self._scheduler.clear_forecast(np.flatnonzero(rows["done"] & active))
             storage_started = perf_counter()
             receipt = self._buffer.append(
                 rows, observations, identities=(env._episode_serial, source_decisions)
             )
+            if getattr(self, "_wait_outcomes", None) is not None:
+                self._wait_outcomes.observe(pending, rows, receipt)
+                if not self._buffer.reserve_staging(staging + self._wait_outcomes.estimated_bytes):
+                    raise MemoryError("Shared RAM budget cannot hold Wait target metadata")
             if self.peashooter_rule_training:
                 self._peashooter_teacher.observe(receipt)
             env.profiler.host("storage", perf_counter() - storage_started)
@@ -635,7 +875,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     name: {
                         stage: dict(encoder.collection_metrics)
                         for stage, encoder in zip(
-                            ("species", "tile"), network.encoders, strict=True
+                            network.encoder_names, network.encoders, strict=True
                         )
                     }
                     for name, network in (("online", self.policy), ("ema", self._teacher))
@@ -694,8 +934,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 }
             )
             # Publish the phase before callbacks may request an interruption.
-            if (not env.enabled_envs.any() and not self._scheduler.pending.any()
-                    and not self.counterfactual_training and not self.peashooter_rule_training):
+            if (
+                not env.enabled_envs.any()
+                and not self._scheduler.pending.any()
+                and not self.peashooter_rule_training
+                and not self.outcome_training
+            ):
                 self._phase(CohortPhase.FINALIZE_REWARDS, callback)
             if not callback.on_step() and not draining:
                 raise KeyboardInterrupt
@@ -797,7 +1041,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         for network in (self.policy, getattr(self, "_teacher", None)):
             if network is not None:
                 for encoder in network.encoders:
-                    encoder.release_fitting()
+                    encoder.release_fitting(recompile=True)
                     encoder.release_collection()
 
     def _fit_step(self, callback):
@@ -846,11 +1090,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 torch.cuda.empty_cache()
 
     def _prepare_bomb_temperature(self):
-        settings = placement_settings(self.cfg, self.tile_skills.phase)
-        if (
-            not is_placement_skill(self.tile_skills.phase)
-            or settings.get("ranking_objective") != BOMB_OBJECTIVE
-        ):
+        stage = self.tile_skills.phase
+        settings = placement_settings(self.cfg, stage)
+        if not is_placement_skill(stage) or settings.get("ranking_objective") != BOMB_OBJECTIVE:
             return
         # These attributed-hit outcomes and the settings are already checkpointed.
         # Reconstruct the same scalar on pass replay; never use validation or a
@@ -858,14 +1100,33 @@ class CudaSequentialQ(CudaCohortLifecycle):
         episodes = self._pending_episodes
         if not episodes or len(episodes) != self.cohort_games:
             raise RuntimeError("Bomb fitting temperature requires a completed cohort")
+        if stage == "attacker":
+            scores = attacker_exercise_scores(item["metrics"] for item in episodes.values())
+            self._bomb_fit_temperature = {
+                skill: bomb_softmax_temperature(
+                    placement_settings(self.cfg, skill),
+                    score["wins"] / score["games"],
+                    skill=skill,
+                )
+                for skill, score in scores.items()
+                if score["games"]
+            }
+            for skill, temperature in self._bomb_fit_temperature.items():
+                self.logger.record(f"train/attacker_softmax_temperature/{skill}", temperature)
+            return
         rate = sum(bool(item["metrics"]["win"]) for item in episodes.values()) / len(episodes)
         self._bomb_fit_temperature = bomb_softmax_temperature(
-            settings, rate, skill=self.tile_skills.phase,
+            settings,
+            rate,
+            skill=stage,
         )
-        prefix = "attacker" if self.tile_skills.phase == "attacker_pre" else "bomb"
+        prefix = "attacker" if stage == "attacker_pre" else "bomb"
         self.logger.record(f"train/{prefix}_softmax_temperature", self._bomb_fit_temperature)
 
     def _start_pass(self):
+        from pvz_rl.learning.forecast_metrics import reset_calibration
+
+        reset_calibration(self.policy)
         self._prepare_bomb_temperature()
         self._ensure_teacher()
         if self.execution_state["precision"] != "bf16_master":
@@ -874,6 +1135,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             raise RuntimeError("BF16 runtime inference is unavailable on this CUDA device")
         self.policy.zero_grad(set_to_none=True)
         self._pass_metrics = torch.zeros(10, device=self.device, dtype=torch.float64)
+        self._outcome_pass_metrics = torch.zeros(
+            OUTCOME_METRIC_WIDTH, device=self.device, dtype=torch.float64
+        )
         self._bomb_pass_metrics = torch.zeros(
             len(bomb_loss_metrics(placement_settings(self.cfg, self.tile_skills.phase))),
             device=self.device,
@@ -902,15 +1166,16 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._fitting_spool = FittingSpool(self._buffer)
         if self.peashooter_rule_training:
             self._peashooter_objective = PeashooterObjective(
-                self._peashooter_teacher, self._fitting_spool, self.device,
+                self._peashooter_teacher,
+                self._fitting_spool,
+                self.device,
             )
             self._peashooter_pass_metrics = torch.zeros(3, device=self.device)
-        if self.counterfactual_training:
-            from pvz_rl.learning.counterfactual_objective import CounterfactualObjective
-            self._counterfactual_objective = CounterfactualObjective(
-                self._counterfactual, self._fitting_spool, self.device,
-            )
-            self._counterfactual_pass_metrics = torch.zeros(6, device=self.device)
+        if self.outcome_training:
+            targets = self._fitting_spool.rows
+            self._outcome_decisions = len(targets)
+        else:
+            self._outcome_decisions = 0
         self._fit_kind = self.fit_stage
         self._fit_outcome_counts = (
             self._fitting_spool.tile_outcome_counts
@@ -967,33 +1232,73 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 gap_sum / gap_n if gap_n else None,
             )
             self._cached_fit_examples = int(selected_n)
+            if self.outcome_training:
+                (
+                    effect,
+                    effect_brier,
+                    effects,
+                    decisions,
+                    effect_correct,
+                    weighted_field,
+                    weighted_probe,
+                ) = self._outcome_pass_metrics.cpu().tolist()
+                from pvz_rl.learning.forecast_metrics import calibration_report
+
+                self._stats["forecast_calibration"] = calibration_report(self.policy)
+                for key, value in dict(
+                    effect_loss=effect if effects else None,
+                    effect_brier=effect_brier / effects if effects else None,
+                    effect_accuracy=effect_correct / effects if effects else None,
+                    effect_labeled_terms=effects,
+                    effect_eligible_decisions=decisions,
+                    total_loss=loss,
+                    outcome_objective="absolute_outcome_v4",
+                    outcome_loss=effect if effects else None,
+                    outcome_accuracy=effect_correct / effects if effects else None,
+                    outcome_brier=effect_brier / effects if effects else None,
+                    static_field_weighted_loss=weighted_field,
+                    probe_weighted_loss=weighted_probe,
+                ).items():
+                    if not isinstance(value, str):
+                        self.logger.record("train/" + key, value)
+                    self._stats[key] = value
+                loss -= weighted_field + weighted_probe
+                self._cached_metrics = (loss, self._cached_metrics[1], self._cached_metrics[2])
+            self.logger.record("train/primary_loss", loss)
+            self._stats["primary_loss"] = loss
+            if self.tile_skills.phase == "prediction":
+                self._cached_fit_examples = self._outcome_decisions
             if is_placement_skill(self.tile_skills.phase):
                 self._cached_fit_examples = self.cohort_games
                 for key, number in zip(
-                    bomb_loss_metrics(placement_settings(self.cfg, self.tile_skills.phase),
-                                      prefix="attacker" if self.tile_skills.phase == "attacker_pre" else "bomb"),
-                    self._bomb_pass_metrics.cpu().tolist(), strict=True,
+                    bomb_loss_metrics(
+                        placement_settings(self.cfg, self.tile_skills.phase),
+                        prefix="attacker"
+                        if self.tile_skills.phase in ("attacker_pre", "attacker")
+                        else "bomb",
+                    ),
+                    self._bomb_pass_metrics.cpu().tolist(),
+                    strict=True,
                 ):
                     self.logger.record("train/" + key, number)
-            if self.counterfactual_training:
-                for key, number in zip(
-                    ("comparison_loss", "feasibility_loss", "comparison_accuracy_sum", "comparison_weight",
-                     "feasibility_accuracy_sum", "feasibility_weight"),
-                    self._counterfactual_pass_metrics.cpu().tolist(), strict=True,
-                ):
-                    self.logger.record("train/" + key, number)
-                values = self._counterfactual_pass_metrics.cpu().tolist()
-                self.logger.record("train/comparison_accuracy", values[2] / values[3] if values[3] else None)
-                self.logger.record("train/feasibility_accuracy", values[4] / values[5] if values[5] else None)
+                    self._stats[key] = number
             if self.peashooter_rule_training:
                 values = self._peashooter_pass_metrics.cpu().tolist()
                 self._cached_fit_examples = self._peashooter_objective.examples
                 self.logger.record("train/peashooter_cross_entropy_loss", values[0])
-                self.logger.record("train/peashooter_preferred_column_accuracy", values[1] / values[2] if values[2] else None)
+                self.logger.record(
+                    "train/peashooter_preferred_column_accuracy",
+                    values[1] / values[2] if values[2] else None,
+                )
         loss, selected_error, placement_gap = self._cached_metrics
+        if self.tile_skills.phase == "prediction":
+            loss = None
         self.logger.record("train/q_loss", loss)
         self.logger.record("train/selected_action_error", selected_error)
         self.logger.record("train/placement_gap", placement_gap)
+        self._stats.update(
+            q_loss=loss, selected_action_error=selected_error, placement_gap=placement_gap
+        )
         self._last_metrics_at = perf_counter()
 
     def _fit_chunk(self, callback):
@@ -1016,9 +1321,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._publish_fit_metrics(final=True)
             if not torch.isfinite(self._pass_metrics).all():
                 raise FloatingPointError("Non-finite two-stage Q loss")
-            parameters = self.policy.master_parameters(
-                "tile" if self._fit_kind == "tile_only" else None
-            )
+            parameters = self.policy.master_parameters(self.fitting_parameter_stage)
             try:
                 norm = torch.nn.utils.clip_grad_norm_(
                     parameters, self.max_grad_norm, error_if_nonfinite=True
@@ -1032,7 +1335,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._optimizer_committing = True
             self.policy.optimizer.step()
             self.policy.sync_runtime_from_masters()
-            self._update_teacher("tile" if self._fit_kind == "tile_only" else None)
+            self._update_teacher(self.fitting_parameter_stage)
             self._optimizer_committing = False
             end.record()
             self._optimizer_events.append((start, end))
@@ -1045,31 +1348,51 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._fit_epoch += 1
             self._close_batches()
             self.logger.record("train/q_grad_norm", float(norm))
+            self._stats["q_grad_norm"] = float(norm)
         else:
             rows, observations, *metadata = item
             self.policy.set_training_mode(True)
-            if self.peashooter_rule_training:
+            if self.tile_skills.active and self.outcome_training:
+                loss, selected_error, placement_gap = self._placement_outcome_loss(
+                    rows, observations
+                )
+            elif self.peashooter_rule_training:
                 loss, selected_error, placement_gap, detail = self._peashooter_objective.loss(
-                    self.policy, rows, observations,
+                    self.policy,
+                    rows,
+                    observations,
                 )
                 self._peashooter_pass_metrics += detail
-            elif self.counterfactual_training:
-                loss, selected_error, placement_gap, detail = self._counterfactual_objective.loss(
-                    self.policy, rows, observations, self._fit_kind,
-                )
-                self._counterfactual_pass_metrics += detail
             elif is_placement_skill(self.tile_skills.phase):
                 loss, selected_error, placement_gap = self._bomb_loss(rows, observations)
             else:
                 loss, selected_error, placement_gap = batch_loss(
-                    self.policy, rows, self._fit_outcome_counts, observations,
-                    metadata[0] if metadata else None, teacher=self._teacher,
+                    self.policy,
+                    rows,
+                    self._fit_outcome_counts,
+                    observations,
+                    metadata[0] if metadata else None,
+                    teacher=self._teacher,
                     consistency_counts=self._fit_consistency_counts,
-                    coefficients=self._fit_coefficients, fit_stage=self._fit_kind,
+                    coefficients=self._fit_coefficients,
+                    fit_stage=self._fit_kind,
+                    outcome_decision_count=self._outcome_decisions,
+                    outcome_enabled=self.outcome_training,
                 )
+            if self.outcome_training:
+                self._outcome_pass_metrics += self.policy._last_outcome_metrics
+                if (
+                    self.cfg["training"]["forecasts"]["measure_gradient_norms"]
+                    and "forecast_gradient_ratios" not in self._stats
+                ):
+                    from pvz_rl.learning.forecast_objective import gradient_norm_ratios
+
+                    self._stats["forecast_gradient_ratios"] = gradient_norm_ratios(self.policy)
             loss.backward()
-            self.policy.accumulate_master_gradients()
+            self.policy.accumulate_master_gradients(self.fitting_parameter_stage)
             self.policy.clear_runtime_grad(set_to_none=True)
+            self.policy._primary_graph = None
+            self.policy._forecast_components = None
             self._pass_metrics += torch.cat(
                 (
                     torch.stack(
@@ -1090,25 +1413,116 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if hasattr(callback, "log_progress"):
             callback.log_progress()
 
-    def _bomb_loss(self, rows, observations):
+    def _placement_outcome_loss(self, rows, observations):
         from pvz_rl.envs.encoding import collate_observations
-        from pvz_rl.learning.annotation_fit import set_ranking_loss
+        from pvz_rl.learning.forecast_objective import forecast_auxiliary
+        from pvz_rl.policy.forecast_input import prior_from_rows
+
+        observations = collate_observations(observations, self.device)
+        if self.tile_skills.phase == "prediction":
+            with self.policy.board_context(
+                observations, prior=prior_from_rows(rows, self.device)
+            ) as memory:
+                loss, metrics = forecast_auxiliary(
+                    self.policy,
+                    observations,
+                    rows,
+                    memory,
+                    decision_count=self._outcome_decisions,
+                    stage="prediction",
+                )
+            self.policy._primary_graph = None
+            self.policy._last_outcome_metrics = metrics
+            self.policy._last_species_consistency_loss = loss.new_zeros(())
+            self.policy._last_species_consistency_metrics = loss.new_zeros(4, dtype=torch.float64)
+            return loss, loss.new_empty(0), loss.new_empty(0)
+        branches, _ = action_parts(torch.as_tensor(np.array(rows["action"]), device=self.device))
+        requested = np.flatnonzero(rows["active"] & rows["branch_usable"] & (rows["action"] > 0))
+        at = torch.as_tensor(requested, device=self.device)
+        features = next(self.policy.parameters()).new_zeros(
+            (len(rows), 45, self.cfg["policy"]["shared_width"])
+        )
+        with self.policy.board_context(
+            observations, prior=prior_from_rows(rows, self.device)
+        ) as memory:
+            if len(at):
+                features = features.index_copy(
+                    0,
+                    at,
+                    self.policy.tile_features(observations, branches[at], rows=at, memory=memory),
+                )
+            if self.peashooter_rule_training:
+                loss, error, gap, detail = self._peashooter_objective.loss(
+                    self.policy, rows, observations, features=features, memory=memory
+                )
+                self._peashooter_pass_metrics += detail
+            else:
+                loss, error, gap = self._bomb_loss(
+                    rows, observations, features=features, memory=memory
+                )
+            self.policy._primary_graph = loss
+            auxiliary, metrics = forecast_auxiliary(
+                self.policy,
+                observations,
+                rows,
+                memory,
+                features=features[at],
+                feature_rows=requested,
+                decision_count=self._outcome_decisions,
+                stage=self.tile_skills.phase,
+            )
+            loss = loss + auxiliary
+            self.policy._last_outcome_metrics = metrics
+        return loss, error, gap
+
+    def _bomb_loss(self, rows, observations, *, features=None, memory=None):
+        from pvz_rl.envs.encoding import collate_observations
+        from pvz_rl.learning.placement_labels import set_ranking_loss
 
         labels = [self.env.tile_boards[int(index)] for index in rows["env"]]
         observations = collate_observations(observations, self.device)
-        branches = [self.cfg["environment"]["plants"].index(label.get("supplied_plant", "cherry_bomb")) + 1
-                    for label in labels]
-        values = self.policy.fitting_tiles(
-            observations, torch.tensor(branches, device=self.device, dtype=torch.long),
-            rows=torch.arange(len(rows), device=self.device),
-        ).float()
-        settings = placement_settings(self.cfg, self.tile_skills.phase)
+        stage = self.tile_skills.phase
+        sources = [placement_source(stage, label) for label in labels]
+        branches = [
+            self.cfg["environment"]["plants"].index(skill_plant(source, label)) + 1
+            for source, label in zip(sources, labels, strict=True)
+        ]
+        branch_tensor = torch.tensor(branches, device=self.device, dtype=torch.long)
+        if features is None:
+            values = self.policy.fitting_tiles(
+                observations,
+                branch_tensor,
+                rows=torch.arange(len(rows), device=self.device),
+            ).float()
+        else:
+            vectors = self.policy._action_vectors(memory)
+            values = self.policy.tile_values(
+                features,
+                action=vectors[torch.arange(len(rows), device=self.device), branch_tensor],
+                wait_action=vectors[:, 0],
+                memory=memory,
+            ).float()
+        settings = placement_settings(self.cfg, stage)
         positives = [label["feasible_tiles"] for label in labels]
         objective = settings.get("ranking_objective", "top1_hinge_v1")
         if objective == BOMB_OBJECTIVE:
-            loss = bomb_set_cross_entropy(
-                values, positives, temperature=self._bomb_fit_temperature,
-            )
+            if stage == "attacker":
+                loss = values.new_zeros(())
+                for skill, temperature in self._bomb_fit_temperature.items():
+                    indices = [i for i, source in enumerate(sources) if source == skill]
+                    if indices:
+                        group = bomb_set_cross_entropy(
+                            values[indices],
+                            [positives[i] for i in indices],
+                            temperature=temperature,
+                        )
+                        loss = loss + group * (len(indices) / len(rows))
+            else:
+                loss = bomb_set_cross_entropy(
+                    values,
+                    positives,
+                    temperature=self._bomb_fit_temperature,
+                )
             detail = loss.detach().reshape(1)
         elif objective in DISTANCE_OBJECTIVES:
             illegal = [
@@ -1116,8 +1530,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 for label in labels
             ]
             loss, detail = bomb_distance_loss(
-                values, positives, illegal, rows=self.cfg["environment"]["rows"],
-                cols=self.cfg["environment"]["cols"], margin=bomb_ranking_margin(settings),
+                values,
+                positives,
+                illegal,
+                rows=self.cfg["environment"]["rows"],
+                cols=self.cfg["environment"]["cols"],
+                margin=bomb_ranking_margin(settings),
                 weight=settings["distance_weight"],
                 temperature=settings["distance_temperature"],
             )
@@ -1134,8 +1552,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _synchronize(self, callback):
         self._drain()
-        if getattr(self, "_counterfactual", None) is not None:
-            self._stats["counterfactual"] = dict(self._counterfactual.metrics)
         self._stats["trajectory_bytes"] = (
             self._buffer.size * self._buffer.dtype.itemsize + self._buffer.entity_size * 44
         )
@@ -1157,19 +1573,36 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._stats["bomb_selected_tile_distance"] = (
                 sum(distances) / len(distances) if distances else None
             )
+            if self.tile_skills.phase == "attacker":
+                self._stats["attacker_exercise_scores"] = attacker_exercise_scores(
+                    item["metrics"] for item in self._pending_episodes.values()
+                )
             if self.tile_skills.phase == "attacker_pre":
                 metrics = [item["metrics"] for item in self._pending_episodes.values()]
-                self._stats["attacker_selected_tile_distance"] = self._stats.pop("bomb_selected_tile_distance")
-                self._stats["attacker_fallback_rate"] = sum(m["fallback"] for m in metrics) / len(metrics)
+                self._stats["attacker_selected_tile_distance"] = self._stats.pop(
+                    "bomb_selected_tile_distance"
+                )
+                self._stats["attacker_fallback_rate"] = sum(m["fallback"] for m in metrics) / len(
+                    metrics
+                )
                 self._stats["attacker_accuracy"] = sum(m["win"] for m in metrics) / len(metrics)
                 self._stats["attacker_breakdown"] = {
                     f"{kind}/{count}": dict(
-                        episodes=len(group), correct=sum(m["win"] for m in group),
+                        episodes=len(group),
+                        correct=sum(m["win"] for m in group),
                         fallbacks=sum(m["fallback"] for m in group),
                     )
-                    for kind in self.cfg["training"]["tile_scenarios"]["attacker"]["provided_plants"]
+                    for kind in self.cfg["training"]["tile_scenarios"]["attacker"][
+                        "provided_plants"
+                    ]
                     for count in (1, 2)
-                    if (group := [m for m in metrics if m["supplied_plant"] == kind and m["zombie_count"] == count])
+                    if (
+                        group := [
+                            m
+                            for m in metrics
+                            if m["supplied_plant"] == kind and m["zombie_count"] == count
+                        ]
+                    )
                 }
         self._stats["fit_schedule"] = self.fit_schedule.summary()
         self._stats["fitting_spool_rows"] = len(getattr(self, "_fitting_spool", None) or ())
@@ -1184,14 +1617,13 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._stats["collection_graphs"] = {
             name: {
                 stage: dict(encoder.collection_metrics)
-                for stage, encoder in zip(("species", "tile"), network.encoders, strict=True)
+                for stage, encoder in zip(network.encoder_names, network.encoders, strict=True)
             }
             for name, network in (("online", self.policy), ("ema", self._teacher))
         }
         if getattr(self, "_fitting_spool", None) is not None:
             self._fitting_spool.close()
             self._fitting_spool = None
-        self._counterfactual_objective = None
         self._peashooter_objective = None
         super()._synchronize(callback)
 
@@ -1217,27 +1649,33 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._fitting_spool = None
 
     def _restore_runtime(self):
+        original = self.runtime_state
+        try:
+            self._restore_runtime_payload()
+        except BaseException:
+            self.runtime_state = original
+            raise
+
+    def _restore_runtime_payload(self):
         extra = self.runtime_state
-        from pvz_rl.learning.counterfactual_settings import validate_counterfactual_recovery
+        self._rollout_start_notified = (
+            extra.get("rollout_start_notified", False) if extra else False
+        )
         if extra:
-            validate_counterfactual_recovery(extra, self.cfg)
             from pvz_rl.learning.peashooter_teacher import validate_rule_recovery
 
             validate_rule_recovery(extra, self.cfg)
         if extra and extra.get("tile_scenarios") is not None:
             if (
-                (
-                    is_placement_skill(self.tile_skills.phase)
-                    or (self.tile_skills.active and self.tile_skills.stage_order is None)
+                is_placement_skill(self.tile_skills.phase)
+                or (self.tile_skills.active and self.tile_skills.stage_order is None)
+            ) and (
+                placement_settings(self.cfg, self.tile_skills.phase).get(
+                    "ranking_objective", "top1_hinge_v1"
                 )
-                and (
-                    placement_settings(self.cfg, self.tile_skills.phase).get("ranking_objective", "top1_hinge_v1")
-                    != extra.get("tile_ranking_objective")
-                )
+                != extra.get("tile_ranking_objective")
             ):
-                raise ValueError(
-                    "Cherry Bomb objective changed; use --init-from for fresh fitting"
-                )
+                raise ValueError("Cherry Bomb objective changed; use --init-from for fresh fitting")
             if extra.get("tile_scenario_protocol") != TILE_SCENARIO_PROTOCOL:
                 raise ValueError("Unsupported tile prerequisite recovery protocol")
             if TileSkillState(**extra["tile_scenarios"]).to_dict() != self.tile_skills.to_dict():
@@ -1254,35 +1692,59 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     "pending_episodes",
                     "compilation",
                     "plant_exploration",
-                    "collection_scheduler",
                 )
             ):
                 raise ValueError("Incomplete objective recovery state")
+            if (
+                self.phase != CohortPhase.IDLE
+                and extra.get("collection_scheduler") is None
+                and not unissued_collection(
+                    extra, self.phase, self.num_timesteps, self.cohort_start_steps
+                )
+            ):
+                raise ValueError("Missing collection tickets after decisions were issued")
         super()._restore_runtime()
+        from pvz_rl.learning.auxiliary_settings import enabled as hybrid_enabled
+
+        if (
+            self._buffer is not None
+            and (self.phase == CohortPhase.COLLECT or (extra and extra.get("wait_outcomes")))
+            and (
+                self.peashooter_rule_training
+                or (
+                    self.outcome_training
+                    and forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+                )
+            )
+            and (
+                hybrid_enabled(self.cfg)
+                or is_single_frame_skill(self.tile_skills.phase)
+                or (extra and extra.get("auxiliary_simulation"))
+            )
+        ):
+            from pvz_rl.learning.auxiliary_service import AuxiliarySimulationService
+
+            self.env.auxiliary = AuxiliarySimulationService(
+                self.env, self._buffer, extra.get("auxiliary_simulation") if extra else None
+            )
         if extra and extra.get("peashooter_teacher") is not None:
             from zipfile import ZipFile
 
             from pvz_rl.learning.peashooter_teacher import PeashooterTeacher
 
             identity = tuple(extra["peashooter_teacher"]["identity"])
-            if self.phase == CohortPhase.COLLECT and identity != (self.cohort_number, self.optimizer_commits):
+            if self.phase == CohortPhase.COLLECT and identity != (
+                self.cohort_number,
+                self.optimizer_commits,
+            ):
                 raise ValueError("Peashooter oracle weights differ from saved cohort")
             with ZipFile(self._checkpoint_source) as archive:
                 self._peashooter_teacher = PeashooterTeacher(
-                    self.env, self._buffer, identity, extra["peashooter_teacher"], archive,
-                )
-        if extra and extra.get("counterfactual") is not None:
-            from zipfile import ZipFile
-
-            from pvz_rl.learning.counterfactual import CounterfactualRunner
-            if self.phase == CohortPhase.COLLECT and tuple(extra["counterfactual"]["identity"]) != (
-                self.cohort_number, self.optimizer_commits
-            ):
-                raise ValueError("Factual collection weights differ from the saved policy identity")
-            with ZipFile(self._checkpoint_source) as archive:
-                self._counterfactual = CounterfactualRunner(
-                    self.env, self._buffer, self.seed, self.tile_skills.phase,
-                    tuple(extra["counterfactual"]["identity"]), extra["counterfactual"], archive,
+                    self.env,
+                    self._buffer,
+                    identity,
+                    extra["peashooter_teacher"],
+                    archive,
                 )
         if extra and extra.get("plant_exploration") is not None:
             self._plant_exploration = CommittedPlantExploration(
@@ -1322,7 +1784,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._teacher.load_state_dict(extra["teacher"])
             self._teacher_version = extra["teacher_version"]
             for name, network in (("policy", self.policy), ("teacher", self._teacher)):
-                for stage, encoder in zip(("species", "tile"), network.encoders, strict=True):
+                for stage, encoder in zip(network.encoder_names, network.encoders, strict=True):
                     compilation = extra["compilation"][name][stage]
                     if compilation.get("status") not in (
                         "disabled",
@@ -1336,9 +1798,61 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         encoder.disable_compilation(compilation["error"])
                     elif compilation_requested(self.cfg["training"]["performance"]):
                         encoder.enable_compilation()
+        if extra and extra.get("collection_effect") is not None:
+            self._collection_effect = extra["collection_effect"].to(self.device)
         self._scheduler = CollectionScheduler(self.n_envs, self.device)
         if extra and extra.get("collection_scheduler") is not None:
             self._scheduler.restore(extra["collection_scheduler"])
+        self._pending_effect = extra.get("pending_effect") if extra else None
+        self._wait_outcomes = None
+        if extra and extra.get("wait_outcomes") is not None:
+            from pvz_rl.learning.placement_outcomes import PlacementOutcomes
+            from pvz_rl.learning.wait_outcomes import WaitOutcomes
+
+            owner = (
+                PlacementOutcomes if is_single_frame_skill(self.tile_skills.phase) else WaitOutcomes
+            )
+            self._wait_outcomes = owner(self.env, self._buffer, extra["wait_outcomes"])
+        elif (
+            absolute_outcomes(self.cfg)
+            and self.outcome_training
+            and forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+            and self.phase == CohortPhase.COLLECT
+        ):
+            if self._buffer.size:
+                raise ValueError("Missing semantic Wait trajectory recovery")
+            from pvz_rl.learning.placement_outcomes import PlacementOutcomes
+            from pvz_rl.learning.wait_outcomes import WaitOutcomes
+
+            owner = (
+                PlacementOutcomes if is_single_frame_skill(self.tile_skills.phase) else WaitOutcomes
+            )
+            self._wait_outcomes = owner(self.env, self._buffer)
+        if (
+            forecast_forks_enabled(self.cfg, self.tile_skills.phase)
+            and self.phase == CohortPhase.COLLECT
+        ):
+            from pvz_rl.learning.effect_collection import validate_effect_request
+
+            validate_effect_request(self._pending_effect, self)
+        if getattr(self.env, "auxiliary", None) is not None:
+            self.env.auxiliary.start()
+        if extra and extra.get("collection_valid") is not None and self._runner is not None:
+            self._runner.valid &= extra["collection_valid"].to(self.device)
+        if extra and extra.get("forecast_schedule"):
+            self._resolved_forecast_schedule = extra["forecast_schedule"]
+            self.cfg["training"]["forecasts"]["injection_active"] = (
+                self._resolved_forecast_schedule["injection"]
+            )
+            for network in (self.policy, self._teacher):
+                network.forecast_stage = self.tile_skills.phase
+                network.injection_enabled = self._resolved_forecast_schedule["injection"]
+                network.auxiliary_scale = self._resolved_forecast_schedule["auxiliary_scale"]
+        self._td_builder = None
+        if extra and extra.get("td_preparation"):
+            from pvz_rl.learning.td_targets import TDTargetBuilder
+
+            self._td_builder = TDTargetBuilder(self, extra["td_preparation"])
         self.policy.zero_grad(set_to_none=True)
         self._batch_iterator = None
         if not getattr(self, "execution_state", None):
@@ -1358,14 +1872,45 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         encoder.activation_checkpointing = False
 
     def _extra_runtime(self):
+        auxiliary = getattr(self.env, "auxiliary", None)
+        if auxiliary is None:
+            return self._extra_runtime_body()
+        with auxiliary.quiescent():
+            return self._extra_runtime_body()
+
+    def _extra_runtime_body(self):
+        pending = getattr(self, "_pending_effect", None)
+        if pending is not None and getattr(self.env, "auxiliary", None) is not None:
+            pending = dict(
+                pending,
+                pre_states={
+                    k: v.resolve(wait=True) if hasattr(v, "resolve") else v
+                    for k, v in pending["pre_states"].items()
+                },
+            )
         skills = dict(
+            auxiliary_simulation=self.env.auxiliary.snapshot()
+            if getattr(self.env, "auxiliary", None) is not None
+            else None,
+            forecast_schedule=getattr(self, "_resolved_forecast_schedule", None),
+            td_preparation=self._td_builder.snapshot()
+            if getattr(self, "_td_builder", None)
+            else None,
+            pending_effect=pending,
+            wait_outcomes=self._wait_outcomes.snapshot()
+            if getattr(self, "_wait_outcomes", None) is not None
+            else None,
+            collection_valid=self._runner.valid.cpu() if getattr(self, "_runner", None) else None,
+            collection_effect=getattr(self, "_collection_effect", None),
+            rollout_start_notified=getattr(self, "_rollout_start_notified", False),
             tile_scenarios=self.tile_skill_state,
             tile_scenario_protocol=TILE_SCENARIO_PROTOCOL,
             tile_ranking_objective=placement_settings(self.cfg, self.tile_skills.phase).get(
                 "ranking_objective"
             ),
-            counterfactual=self._counterfactual.snapshot() if getattr(self, "_counterfactual", None) else None,
-            peashooter_teacher=self._peashooter_teacher.snapshot() if getattr(self, "_peashooter_teacher", None) else None,
+            peashooter_teacher=self._peashooter_teacher.snapshot()
+            if getattr(self, "_peashooter_teacher", None)
+            else None,
         )
         if getattr(self, "_teacher", None) is None:
             return skills
@@ -1388,7 +1933,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             compilation={
                 name: {
                     stage: dict(status=encoder.compilation_status, error=encoder.compilation_error)
-                    for stage, encoder in zip(("species", "tile"), network.encoders, strict=True)
+                    for stage, encoder in zip(network.encoder_names, network.encoders, strict=True)
                 }
                 for name, network in (("policy", self.policy), ("teacher", self._teacher))
             },
@@ -1397,6 +1942,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def _excluded_save_params(self):
         return [
             *super()._excluded_save_params(),
+            "_outcome_pass_metrics",
+            "_collection_effect",
             "_batch_iterator",
             "_fitting_spool",
             "_pass_metrics",
@@ -1409,13 +1956,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
             "_teacher",
             "_plant_exploration",
             "_plant_costs",
-            "_counterfactual",
-            "_counterfactual_objective",
-            "_counterfactual_pass_metrics",
-            "_counterfactual_tiles",
             "_peashooter_teacher",
             "_peashooter_objective",
             "_peashooter_pass_metrics",
             "_bomb_pass_metrics",
             "_pending_episodes",
+            "_td_builder",
+            "_pending_effect",
+            "_wait_outcomes",
         ]

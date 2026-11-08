@@ -263,6 +263,7 @@ def build_run_report(run, cfg=None):
         if hardware:
             images.append(hardware)
     metrics = [row for _, series in segments for row in series["training-metrics"]]
+
     status = {**(metrics[-1] if metrics else {}), **read_json(run / "status.json", {})}
     best = read_json(run / "best.json", {})
     visual_status = read_json(output / "status.json", {})
@@ -320,7 +321,7 @@ def build_run_report(run, cfg=None):
         if meta.get("family") in ("diagnostic",)
         else "Tile-skill training stage"
         if pre_stage(cfg)
-        else "One shared policy for Cherry Bomb, Peashooter, easy, standard, and shared stages"
+        else "One shared board encoder and conditional policy across all training stages"
     )
     completion = (
         "Curriculum incomplete" if status.get("curriculum_incomplete") else "Curriculum status"
@@ -337,16 +338,19 @@ def build_run_report(run, cfg=None):
     )
     skills = status.get("tile_scenarios") or {}
     has_pre = (
-        any(domain(row) != "normal" for row in metrics) or pre_stage(cfg)
+        any(domain(row) != "normal" for row in metrics)
+        or pre_stage(cfg)
         or skills.get("phase") in TILE_STAGES
     )
     mastered = ", ".join(
-        skill for skill in skills.get("stage_order") or []
+        skill
+        for skill in skills.get("stage_order") or []
         if skills.get("scores", {}).get(skill, -1) >= required_validation_wins(cfg, skill)
     )
     mastery = (
         f"Joint mastery: {escape(skills.get('phase') == 'complete')}. "
-        if skills.get("stage_order") is None else f"Completed stages: {escape(mastered or 'none')}. "
+        if skills.get("stage_order") is None
+        else f"Completed stages: {escape(mastered or 'none')}. "
     )
     pre_progress = (
         (
@@ -355,7 +359,9 @@ def build_run_report(run, cfg=None):
             f"Peashooter: {escape(skills.get('episodes', {}).get('peashooter', 0))}; "
             f"Cherry Bomb: {escape(skills.get('episodes', {}).get('cherry_bomb', 0))}; "
             f"Obstacle: {escape(skills.get('episodes', {}).get('cherry_bomb_obstacle', 0))}; "
-            f"Attacker pre: {escape(skills.get('episodes', {}).get('attacker_pre', 0))}. "
+            f"Attacker pre: {escape(skills.get('episodes', {}).get('attacker_pre', 0))}; "
+            f"Prediction: {escape(skills.get('episodes', {}).get('prediction', 0))}; "
+            f"Attacker: {escape(skills.get('episodes', {}).get('attacker', 0))}. "
             f"Generation failures: {escape(skills.get('generation_failures', 0))}. "
             + mastery
             + f"Latest validation successes: {escape(skills.get('scores') or 'not recorded')}. "
@@ -370,7 +376,8 @@ def build_run_report(run, cfg=None):
     trigger = status.get("validation_trigger", {})
     if trigger.get("enabled"):
         run_progress += (
-            f"<p>Validation requires full-cohort success strictly above {trigger['cohort_success_threshold']:.0%}. "
+            f"<p>Validation normally requires full-cohort success strictly above {trigger['cohort_success_threshold']:.0%}. "
+            "Prediction validation requires a full fitted cohort at its interval. "
             f"Next check: {escape(trigger.get('next_check'))} completed episodes. "
             f"Pending validation: {escape(trigger.get('pending') or 'none')}.</p>"
         )
@@ -387,15 +394,34 @@ def build_run_report(run, cfg=None):
         run_progress += "</table></details>"
     probes = [row for _, series in segments for row in series.get("tile-skill-probes", [])]
     if probes:
-        run_progress += "<details><summary>Tile-stage validation and transitions</summary><table><tr><th>Stage</th><th>Completed episodes</th><th>Cherry Bomb</th><th>Peashooter</th><th>Training stage</th></tr>"
+        run_progress += (
+            "<details><summary>Tile-stage validation and transitions</summary><table><tr>"
+            "<th>Stage</th><th>Completed episodes</th>"
+            + "".join(f"<th>{escape(skill)}</th>" for skill in TILE_STAGES)
+            + "<th>Training stage</th></tr>"
+        )
         for probe in probes:
             counts = {skill: len(rows) for skill, rows in probe.get("cases", {}).items()}
+            breakdown = "".join(
+                f"<br>{escape(skill)} {score['wins']}/{score['games']}"
+                for skill, score in probe.get("exercise_scores", {}).items()
+            )
+            prediction_losses = ""
+            if probe.get("stage") == "prediction" and "mean_loss" in probe:
+                mean, worst = probe["mean_loss"], probe["worst_loss"]
+                prediction_losses = (
+                    f"<br>Mean loss {mean:.6f}<br>Worst loss {worst:.6f}"
+                    if mean is not None
+                    else "<br>Non-finite scene loss"
+                )
             run_progress += (
                 f"<tr><td>{escape(probe.get('stage', 'pre'))}</td>"
                 f"<td>{probe.get('stage_episodes', probe['episodes'])}</td>"
                 + "".join(
-                    f"<td>{probe['scores'][skill]}/{counts.get(skill, cfg['curriculum']['probe_cases'])}</td>"
-                    if skill in probe["scores"] else "<td>—</td>"
+                    f"<td>{probe['scores'][skill]}/{counts.get(skill, cfg['curriculum']['probe_cases'])}"
+                    f"{breakdown if skill == 'attacker' else prediction_losses if skill == 'prediction' else ''}</td>"
+                    if skill in probe["scores"]
+                    else "<td>—</td>"
                     for skill in TILE_STAGES
                 )
                 + f"<td>{escape(probe.get('previous'))} → {escape(probe.get('next'))}</td></tr>"
