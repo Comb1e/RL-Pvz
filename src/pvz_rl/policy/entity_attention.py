@@ -85,8 +85,8 @@ class AttentionBlock(nn.Module):
 class SpatialTransformer(nn.Module):
     """Public-board memory encoder.
 
-    Token 0 is the global board summary. The next five tokens are the previous
-    decision's forecast, supplied by the caller. Entity tokens follow them.
+    Token 0 is the global board summary. Entity tokens follow it. The pre-action
+    forecast is not an encoder input.
     """
 
     def __init__(self, layout, spec, stage):
@@ -95,7 +95,7 @@ class SpatialTransformer(nn.Module):
             raise ValueError("Unknown spatial Transformer stage")
         self.layout = layout
         self.stage = stage
-        self.token_overhead = 6
+        self.token_overhead = 1
         self.width = width = spec["shared_width"]
         self.microbatch = spec["encoder_microbatch"]
         self.token_budget = spec["encoder_token_budget"]
@@ -313,30 +313,23 @@ class SpatialTransformer(nn.Module):
         """Embed a public EntityBatch; retained for diagnostics and math tests."""
         return self._embed_tensors(batch.entities, batch.entity_mask)
 
-    def _encode(self, entities, mask, globals_, branches, forecast_tokens, forecast_valid):
+    def _encode(self, entities, mask, globals_, branches):
         del branches
         embedded = self._embed_tensors(entities, mask)
         with torch.autocast(globals_.device.type, enabled=False):
             readouts = self.global_projection(globals_.to(self.global_projection.weight.dtype))[
                 :, None
             ]
-        forecast_tokens = forecast_tokens.to(dtype=embedded.dtype)
-        forecast_tokens = forecast_tokens.masked_fill(~forecast_valid[:, None, None], 0)
-        lane_valid = forecast_valid[:, None].expand(-1, 5)
-        x = torch.cat((readouts, forecast_tokens, embedded), 1)
+        x = torch.cat((readouts, embedded), 1)
         valid = torch.cat(
-            (
-                torch.ones(readouts.shape[:2], dtype=torch.bool, device=x.device),
-                lane_valid,
-                mask,
-            ),
+            (torch.ones(readouts.shape[:2], dtype=torch.bool, device=x.device), mask),
             1,
         )
         for layer in self.layers:
             x = layer(x, valid)
         return stable_norm(self.norm, x)
 
-    def forward(self, observations, branches=None, forecast=None):
+    def forward(self, observations, branches=None):
         self.layout.validate(observations)
         if len(observations.shape) != 1:
             raise ValueError("Spatial inference requires flat board batches")
@@ -346,28 +339,12 @@ class SpatialTransformer(nn.Module):
             raise ValueError("Branches must be an int64 board vector")
         if not len(observations):
             return self.numeric.weight.new_empty(0, self.token_overhead, self.width)
-        if forecast is None:
-            tokens = self.numeric.weight.new_zeros(len(observations), 5, self.width)
-            forecast_valid = torch.zeros(
-                len(observations), dtype=torch.bool, device=observations.device
-            )
-        else:
-            tokens, forecast_valid = forecast
-            if tokens.shape != (len(observations), 5, self.width) or forecast_valid.shape != (
-                len(observations),
-            ):
-                raise ValueError("Forecast tokens must be [batch, 5, width] with one valid bit")
         length = observations.entities.shape[-2] + self.token_overhead
         size = max(1, min(self.microbatch, self.token_budget // length))
         results = []
         for start in range(0, len(observations), size):
             part = observations[start : start + size]
-            args = (
-                *part.tensors(),
-                branches[start : start + size],
-                tokens[start : start + size],
-                forecast_valid[start : start + size],
-            )
+            args = (*part.tensors(), branches[start : start + size])
             logical = len(part)
             compile_args = args
             if (

@@ -6,46 +6,30 @@ from enum import StrEnum
 from queue import Empty, Full
 from time import monotonic
 
-from pvz_game.config import PLANT_TYPES
-from pvz_game.cuda.schema import REASONS
-
 from pvz_rl.envs.actions import ActionSchema as A
+from pvz_rl.envs.tile_scenarios import is_placement_skill
+from pvz_rl.presentation.forecast_display import scores_recorded, tile_label
 from pvz_rl.presentation.outcome_view import draw_live_outcomes
-from pvz_rl.presentation.rendering import render_context, reward_label
+from pvz_rl.presentation.rendering import render_context
 
-NAMES = ("wait", *PLANT_TYPES, "dig")
-SHORT = (
-    "Wait",
-    "Sunflower",
-    "Peashooter",
-    "Wall-nut",
-    "Cherry",
-    "Mine",
-    "Snow pea",
-    "Chomper",
-    "Repeater",
-    "Dig",
+TABLE_WIDTHS = (36, 44, 18, 36, *([48] * 10))
+QUIET_WIDTHS = (36, 44, 18, 36)
+CARD_COLOR = (
+    (140, 148, 142),
+    (248, 207, 94),
+    (127, 186, 86),
+    (197, 140, 77),
+    (216, 92, 88),
+    (201, 156, 89),
+    (130, 201, 207),
+    (180, 149, 229),
+    (112, 181, 91),
+    (196, 164, 120),
 )
-TABLE_WIDTHS = (78, 75, 105, 300, 100, *([90] * 10))
 
 
-def horizontal_limit(viewport_width):
-    return max(0, sum(TABLE_WIDTHS) - viewport_width)
-
-
-def result_label(record, *, show_penalty=True):
-    if record.get("accepted", True):
-        return "accepted"
-    reason = REASONS[record.get("reason", 0)] or "rejected"
-    result = f"automatic wait: {reason}"
-    return f"{result} | penalty {record.get('penalty', 0):+.6g}" if show_penalty else result
-
-
-def entity_label(record):
-    if "entity_count" not in record:
-        return ""
-    omitted = record.get("entity_omitted", (0, 0, 0))
-    return f" | entities {record['entity_count']} | omitted P/Z/Q " + "/".join(map(str, omitted))
+def horizontal_limit(viewport_width, widths=None):
+    return max(0, sum(widths or TABLE_WIDTHS) - viewport_width)
 
 
 def branch(action):
@@ -148,38 +132,60 @@ def accept_history_response(packets, browse, response):
 def draw_learning_settings(surface, font, renderers):
     """Wrap immutable run settings above the boards, including before the first frame."""
     settings = renderers.get("learning_settings", ())
-    if not settings:
-        return 34
+    if not settings or not renderers.get("show_settings", False):
+        return 28
+    width = surface.get_width()
+    y = 28
+    for _title, entries in settings:
+        x = 12
+        for text in entries:
+            label = font.render(str(text), True, (216, 226, 212))
+            if x > 12 and x + label.get_width() > width - 12:
+                x = 12
+                y += 18
+            surface.blit(label, (x, y))
+            x += label.get_width() + 14
+        y += 18
+    return y + 6
+
+
+def _dash(surface, rect, color):
     import pygame
 
-    expanded = renderers.get("show_settings", True)
-    width = surface.get_width()
-    heading = "Learning settings: retained on resume"
-    toggle = f"S: {'hide' if expanded else 'show'} settings"
-    surface.blit(font.render(heading, True, (237, 211, 153)), (12, 33))
-    toggle_image = font.render(toggle, True, (190, 211, 194))
-    surface.blit(toggle_image, (width - toggle_image.get_width() - 12, 33))
-    y = 56
-    if expanded:
-        for title, entries in settings:
-            x = 12
-            for text in (f"{title}:", *entries):
-                label = font.render(text, True, (216, 226, 212))
-                if x > 12 and x + label.get_width() > width - 12:
-                    x = 12
-                    y += 20
-                surface.blit(label, (x, y))
-                x += label.get_width() + 16
-            y += 20
-    pygame.draw.line(surface, (67, 85, 69), (12, y + 1), (width - 12, y + 1))
-    return y + 8
+    step = 8
+    for x in range(rect.left, rect.right, step * 2):
+        pygame.draw.line(surface, color, (x, rect.top), (min(rect.right, x + step), rect.top), 2)
+        pygame.draw.line(
+            surface, color, (x, rect.bottom - 1), (min(rect.right, x + step), rect.bottom - 1), 2
+        )
+    for y in range(rect.top, rect.bottom, step * 2):
+        pygame.draw.line(surface, color, (rect.left, y), (rect.left, min(rect.bottom, y + step)), 2)
+        pygame.draw.line(
+            surface, color, (rect.right - 1, y), (rect.right - 1, min(rect.bottom, y + step)), 2
+        )
+
+
+def _swatch(surface, color, center, branch_id):
+    import pygame
+
+    if branch_id == 0:
+        pygame.draw.circle(surface, (214, 222, 214), center, 5, 1)
+    else:
+        pygame.draw.circle(surface, color, center, 5)
+
+
+def _mark(surface, font, origin, color, text, branch_id):
+    _swatch(surface, color, (origin[0] + 6, origin[1] + 8), branch_id)
+    if text:
+        label = font.render(text, True, (232, 237, 226))
+        surface.blit(label, (origin[0] + 16, origin[1]))
 
 
 def draw_view(surface, packets, activity, *, renderers, boards, pending=(), count=128):
     import pygame
     from pvz_game.rendering import BoardRenderer
 
-    from .live_view import ACTIVITY_TEXT, Activity, decision_reason
+    from .live_view import ACTIVITY_TEXT, Activity
 
     surface.fill((18, 27, 24))
     width, height = surface.get_size()
@@ -201,13 +207,17 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
     for key in list(browse):
         if key not in valid:
             del browse[key]
-    label = (
-        ACTIVITY_TEXT[Activity(activity)]
-        + " | F follow latest | F11 fullscreen | Focus / Esc | wheel: history, Shift+wheel: columns"
-    )
-    surface.blit(small.render(label, True, (225, 237, 226)), (12, 8))
-    header_height = draw_learning_settings(surface, small, renderers)
     buttons = []
+    surface.blit(
+        small.render(ACTIVITY_TEXT[Activity(activity)], True, (225, 237, 226)), (12, 8)
+    )
+    if renderers.get("learning_settings"):
+        mark = "v" if renderers.get("show_settings") else ">"
+        glyph = small.render(mark, True, (216, 226, 212))
+        toggle = glyph.get_rect(topright=(width - 12, 8))
+        surface.blit(glyph, toggle)
+        buttons.append((toggle, None, ("settings", None)))
+    header_height = draw_learning_settings(surface, small, renderers)
     old_clip = surface.get_clip()
     indices = [focus] if focus is not None else list(range(4))
     for index in indices:
@@ -226,65 +236,71 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
         surface.set_clip(rect)
         pygame.draw.rect(surface, (34, 47, 40), rect, border_radius=5)
         if index >= len(packets):
-            surface.blit(
-                font.render(
-                    "No additional environment" if index >= count else "Awaiting first board",
-                    True,
-                    (211, 224, 210),
-                ),
-                (x + 12, y + 15),
-            )
             continue
         packet, frame = packets[index], packets[index]["frame"]
         gen = packet["generation"]
-        for label, offset, operation in [
-            ("Switch", 92, "switch"),
-            ("Grid" if focus is not None else "Focus", 170, "focus"),
-            ("Follow latest", 290, "follow"),
-        ]:
-            r = pygame.Rect(x + cell_w - offset, y + 8, 112 if operation == "follow" else 72, 27)
-            pygame.draw.rect(surface, (60, 99, 75), r, border_radius=4)
-            surface.blit(small.render(label, True, (241, 243, 230)), (r.x + 4, r.y + 4))
-            buttons.append((r, index, (operation, gen)))
-        title = (
-            f"Env {packet['env']}"
-            if not frame
-            else f"Env {packet['env']} | {frame['task']} | game {frame['episode']}"
+        key = keys[index]
+        state = browse.setdefault(key, Browse()) if frame else None
+        if frame:
+            incoming = frame.get("history")
+            if state.follow and incoming is not None:
+                state.page = incoming
+            elif incoming is not None and state.page is not None:
+                state.page["total"] = incoming["total"]
+        page = (state.page if state else None) or (frame or {}).get("history") or dict(
+            start=0, total=0, rows=[]
         )
+        decision = (
+            state.selected
+            if state and not state.follow and state.selected
+            else (frame or {}).get("decision")
+        )
+        for label, offset, operation in (
+            ("v", 52, "follow"),
+            ("+", 96, "focus"),
+            ("<>", 148, "switch"),
+        ):
+            r = pygame.Rect(x + cell_w - offset - 36, y + 8, 40, 24)
+            following = operation == "follow" and state is not None and state.follow
+            pygame.draw.rect(
+                surface, (90, 122, 78) if following else (60, 99, 75), r, border_radius=4
+            )
+            glyph = small.render(label, True, (241, 243, 230))
+            surface.blit(glyph, glyph.get_rect(center=r.center))
+            buttons.append((r, index, (operation, gen)))
         switching = packet["state"] == "selecting" or index in pending
+        finished = bool(frame) and frame.get("outcome") not in (None, "running")
         if switching:
-            title = f"Switching to env {packet['env']} — previous board retained"
+            _dash(surface, rect, (212, 168, 74))
+        elif finished:
+            pygame.draw.rect(surface, (212, 168, 74), rect, width=2, border_radius=5)
+        title = str(packet["env"]) if not frame else f"{packet['env']}  {frame['task']}"
+        task = frame.get("task") if frame else None
+        if frame and task != "prediction" and not is_placement_skill(task):
+            reward = frame.get("reward")
+            if isinstance(reward, (int, float)):
+                title += f"  {reward:+.3g}{'~' if frame.get('reward_pending') else ''}"
+        elif (
+            task == "prediction"
+            and decision
+            and decision.get("effect_prediction_valid")
+            and frame.get("observation") is not None
+        ):
+            rate = max(1, frame["observation"].tick_rate)
+            title += f"  {decision.get('tick', 0) / rate:.1f}"
         title_clip = surface.get_clip()
-        surface.set_clip(pygame.Rect(x + 10, y + 8, max(1, cell_w - 308), 28))
-        surface.blit(font.render(title, True, (233, 237, 224)), (x + 12, y + 11))
+        surface.set_clip(pygame.Rect(x + 10, y + 8, max(1, cell_w - 196), 26))
+        surface.blit(font.render(title, True, (233, 237, 224)), (x + 12, y + 10))
         surface.set_clip(title_clip)
         if not frame:
-            surface.blit(
-                font.render("Waiting for collection", True, (201, 213, 201)), (x + 12, y + 60)
-            )
             continue
-        key = keys[index]
-        state = browse.setdefault(key, Browse())
-        incoming = frame.get("history")
-        if state.follow and incoming is not None:
-            state.page = incoming
-        elif incoming is not None and state.page is not None:
-            state.page["total"] = incoming["total"]
-        page = state.page or incoming or dict(start=0, total=0, rows=[])
-        state.horizontal = max(0, min(state.horizontal, horizontal_limit(cell_w - 24)))
-        board_h = max(
-            85,
-            int(
-                cell_h
-                * (
-                    0.34
-                    if focus is not None and height < 700
-                    else 0.46
-                    if focus is not None
-                    else 0.40
-                )
-            ),
+        recorded = scores_recorded(decision)
+        widths = TABLE_WIDTHS if recorded else QUIET_WIDTHS
+        state.horizontal = max(0, min(state.horizontal, horizontal_limit(cell_w - 24, widths)))
+        extras = (44 if recorded else 22 if decision and decision.get("action") else 0) + (
+            120 if page.get("total") else 0
         )
+        board_h = max(85, cell_h - 48 - extras)
         outcome_w = min(360, (cell_w - 28) * 2 // 5)
         size = (max(1, cell_w - 28 - outcome_w), board_h)
         cache_key = (index, size)
@@ -305,119 +321,76 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
             surface, frame, pygame.Rect(x + 18 + size[0], y + 42, outcome_w, board_h)
         )
         obs = frame["observation"]
-        top = y + 45 + board_h
-        caption = f"Board {obs.elapsed_seconds:.2f}s | sun {obs.sun} | {frame['outcome']}"
-        caption += " | " + reward_label(frame.get("reward"), frame.get("reward_pending"))
-        if switching:
-            caption += " | waiting for unfinished replacement"
-        surface.blit(small.render(caption, True, (234, 219, 159)), (x + 12, top))
-        decision = state.selected if not state.follow and state.selected else frame.get("decision")
-        if decision:
-            greedy, chosen = branch(decision["greedy_action"]), branch(decision["action"])
+        top = y + 48 + board_h
+        if recorded and decision:
+            chosen = branch(decision["action"])
             legal = decision.get("legal", [q is not None for q in decision["q"]])
-            # Q values are immutable collection-time diagnostics. Current
-            # decisions compare all ten outputs; preserve archived flags
-            # without hiding any recorded score.
-            values = list(decision["q"])
-            mode = (
-                "Latest decision" if state.follow or state.selected is None else "Historical action"
-            )
-            summary = f"{mode} #{decision.get('sequence', '?')} @ {decision['tick'] / obs.tick_rate:.2f}s | proposal {NAMES[chosen]}"
-            surface.blit(
-                small.render(
-                    summary + " | coins S/T " + "/".join(str(int(c)) for c in decision["coins"]),
-                    True,
-                    (244, 232, 175),
-                ),
-                (x + 12, top + 21),
-            )
-            reason = f"Greedy {NAMES[greedy]}: {decision_reason(greedy, values)}"
-            if decision["action"] != decision["greedy_action"]:
-                reason += " | exploration override"
-            surface.blit(small.render(reason, True, (216, 230, 214)), (x + 12, top + 41))
-            surface.blit(
-                small.render(
-                    "Raw Q | " + result_label(decision) + entity_label(decision),
-                    True,
-                    (220, 232, 215),
-                ),
-                (x + 12, top + 61),
-            )
-            # All ten outputs at fixed font size; horizontal scroll also applies here.
+            explored = decision["action"] != decision.get("greedy_action")
+            stride = max(44, (cell_w - 24) // 5)
             for k, (q, ok) in enumerate(zip(decision["q"], legal)):
-                text = (
-                    f"{SHORT[k]} {q:+.5g}{'' if ok else '*'}"
-                    if q is not None
-                    else f"{SHORT[k]} unavailable"
-                )
-                color = (
-                    (252, 223, 131) if k == chosen else (221, 231, 215) if ok else (184, 192, 182)
-                )
-                surface.blit(
-                    small.render(text, True, color),
-                    (
-                        x + 12 + k % 5 * 157 - min(state.horizontal, max(0, 785 - cell_w + 24)),
-                        top + 81 + k // 5 * 20,
-                    ),
-                )
-        table_y = top + 126
+                origin = (x + 12 + (k % 5) * stride, top + (k // 5) * 20)
+                slot = pygame.Rect(origin[0], origin[1] - 1, stride - 4, 18)
+                surface.set_clip(rect.clip(slot))
+                if k == chosen:
+                    pygame.draw.rect(
+                        surface,
+                        (120, 78, 36) if explored else (92, 78, 40),
+                        slot,
+                        border_radius=3,
+                    )
+                text = "" if q is None else f"{q:+.1f}"
+                color = CARD_COLOR[k] if ok else (90, 98, 92)
+                _mark(surface, small, origin, color, text, k)
+                surface.set_clip(rect)
+            top += 42
+        elif decision and decision.get("action"):
+            chosen_branch = branch(decision["action"])
+            _mark(
+                surface,
+                small,
+                (x + 12, top),
+                CARD_COLOR[chosen_branch],
+                tile_label(decision["action"]),
+                chosen_branch,
+            )
+            top += 22
+        if not page.get("total"):
+            continue
+        table_y = top + 6
         row_height = 22
-        if table_y + row_height > y + cell_h - 27:
-            continue  # Compact panels reserve their space for the board and decision.
-        visible = max(0, (y + cell_h - table_y - 27 - row_height) // row_height)
+        if table_y + row_height > y + cell_h - 8:
+            continue
+        visible = max(0, (y + cell_h - table_y - 8 - row_height) // row_height)
         rows = (
             (page["rows"][-visible:] if state.follow else page["rows"][:visible]) if visible else []
         )
-        headings = ["Decision", "Time(s)", "Proposal", "Result", "Penalty", *SHORT]
-        widths = TABLE_WIDTHS
         tx = x + 12 - state.horizontal
-        pygame.draw.rect(surface, (48, 67, 54), (x + 8, table_y, cell_w - 16, row_height))
-        for heading, col_w in zip(headings, widths):
-            surface.set_clip(rect.clip(pygame.Rect(tx, table_y, col_w - 4, row_height)))
-            surface.blit(small.render(heading, True, (229, 237, 221)), (tx, table_y + 2))
-            tx += col_w
-        surface.set_clip(rect)
         for offset, row in enumerate(rows):
-            ry = table_y + (offset + 1) * row_height
+            ry = table_y + offset * row_height
+            rejected = row.get("accepted") is False
             if state.selected and row["sequence"] == state.selected["sequence"]:
                 pygame.draw.rect(surface, (70, 86, 56), (x + 8, ry, cell_w - 16, row_height))
+            elif rejected:
+                pygame.draw.rect(surface, (92, 48, 40), (x + 8, ry, cell_w - 16, row_height))
             cells = [
                 str(row["sequence"]),
-                f"{row['tick'] / obs.tick_rate:.2f}",
-                NAMES[branch(row["action"])],
-                result_label(row, show_penalty=False),
-                f"{row.get('penalty', 0):+.5g}",
+                f"{row['tick'] / obs.tick_rate:.1f}",
+                branch(row["action"]),
+                tile_label(row["action"]),
             ]
-            cells += [f"{q:+.5g}{'' if ok else '*'}" for q, ok in zip(row["q"], row["legal"])]
+            if recorded:
+                cells += [None if q is None else f"{q:+.1f}" for q in row["q"]]
             tx = x + 12 - state.horizontal
-            for c, (text, col_w) in enumerate(zip(cells, widths)):
-                color = (220, 231, 218) if c < 5 or row["legal"][c - 5] else (184, 192, 182)
-                surface.set_clip(rect.clip(pygame.Rect(tx, ry, col_w - 4, row_height)))
-                surface.blit(small.render(text, True, color), (tx, ry + 2))
+            for text, col_w in zip(cells, widths):
+                surface.set_clip(rect.clip(pygame.Rect(tx, ry, col_w - 2, row_height)))
+                if isinstance(text, int):
+                    _swatch(surface, CARD_COLOR[text], (tx + 7, ry + 11), text)
+                else:
+                    surface.blit(small.render(text, True, (220, 231, 218)), (tx, ry + 2))
                 tx += col_w
             surface.set_clip(rect)
             buttons.append(
                 (pygame.Rect(x + 8, ry, cell_w - 16, row_height), index, ("row", gen, row))
-            )
-        if not rows:
-            surface.blit(
-                small.render("No plant/dig actions in this game yet", True, (184, 205, 186)),
-                (x + 12, table_y + 25),
-            )
-        if state.selected and not state.selected["accepted"]:
-            reason = result_label(state.selected)
-            surface.blit(
-                small.render(reason, True, (250, 181, 137)),
-                (x + 12, y + cell_h - 22),
-            )
-        else:
-            surface.blit(
-                small.render(
-                    f"{'Follow latest' if state.follow else 'Browsing'} | {page['total']} actions | scroll for more",
-                    True,
-                    (169, 192, 177),
-                ),
-                (x + 12, y + cell_h - 22),
             )
     surface.set_clip(old_clip)
     return buttons
@@ -490,7 +463,7 @@ def viewer_main(
                     elif event.key == pygame.K_f:
                         resume_visible_history(packets, renderers)
                     elif event.key == pygame.K_s:
-                        renderers["show_settings"] = not renderers.get("show_settings", True)
+                        renderers["show_settings"] = not renderers.get("show_settings", False)
                     dirty = True
                 elif event.type == pygame.MOUSEWHEEL:
                     for index, rect in renderers.get("regions", {}).items():
@@ -530,6 +503,10 @@ def viewer_main(
                         if not rect.collidepoint(event.pos):
                             continue
                         operation, generation, *extra = target
+                        if operation == "settings":
+                            renderers["show_settings"] = not renderers.get("show_settings", False)
+                            dirty = True
+                            break
                         p = packets[index]
                         if operation == "switch":
                             switch(index, generation)

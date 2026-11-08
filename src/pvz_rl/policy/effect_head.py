@@ -1,4 +1,4 @@
-"""One forecast query over the executed action, chosen cell, and board memory."""
+"""Five lane queries over the current board, before any action is chosen."""
 
 import torch
 from torch import nn
@@ -7,9 +7,10 @@ from pvz_rl.policy.entity_attention import attend, stable_norm
 
 
 class EffectHead(nn.Module):
-    """Fuse the action and tile vectors, then cross-attend the full board memory.
+    """Cross-attend the encoder memory and emit one outcome vector per lane.
 
-    Wait and a rejected action pass ``empty_tile`` instead of a tile-decoder row.
+    The queries are learned lane embeddings. They do not see the action, the
+    chosen cell, or these outputs.
     """
 
     def __init__(self, width, effect_width, heads, query_chunk):
@@ -18,29 +19,19 @@ class EffectHead(nn.Module):
             raise ValueError("shared_width must be divisible by effect attention heads")
         self.heads, self.query_chunk = heads, query_chunk
         self.effect_width = effect_width
-        self.empty_tile = nn.Parameter(torch.zeros(width))
-        self.fuse = nn.Linear(width * 2, width)
+        self.lane_queries = nn.Embedding(5, width)
         self.query_norm, self.memory_norm = nn.LayerNorm(width), nn.LayerNorm(width)
         self.query = nn.Linear(width, width)
         self.key_value = nn.Linear(width, width * 2)
         self.output = nn.Linear(width, width)
-        self.mlp = nn.Sequential(
-            nn.Linear(width, width), nn.GELU(), nn.Linear(width, 5 * effect_width)
-        )
+        self.mlp = nn.Sequential(nn.Linear(width, width), nn.GELU(), nn.Linear(width, effect_width))
 
-    def forward(self, action, tile, memory, valid):
-        squeeze = action.ndim == 2 and tile.ndim == 2
-        if action.ndim == 2:
-            action = action[:, None, :]
-        if tile.ndim == 2:
-            tile = tile[:, None, :]
-        if action.shape[1] == 1 and tile.shape[1] != 1:
-            action = action.expand(-1, tile.shape[1], -1)
-        elif tile.shape[1] == 1 and action.shape[1] != 1:
-            tile = tile.expand(-1, action.shape[1], -1)
-        if action.shape[:2] != tile.shape[:2] or action.shape[-1] != tile.shape[-1]:
-            raise ValueError("Action and tile vectors must broadcast over the same queries")
-        queries = self.fuse(torch.cat((action, tile), -1))
+    def forward(self, memory, valid):
+        if memory.ndim != 3 or valid.shape != memory.shape[:2]:
+            raise ValueError("Effect head requires encoder memory and its valid mask")
+        index = torch.arange(5, device=memory.device)
+        queries = self.lane_queries(index).to(dtype=memory.dtype)
+        queries = queries[None].expand(memory.shape[0], -1, -1).contiguous()
         batch, length, width = queries.shape
         q = self.query(stable_norm(self.query_norm, queries)).reshape(batch, length, self.heads, -1)
         kv = self.key_value(stable_norm(self.memory_norm, memory)).reshape(
@@ -54,5 +45,4 @@ class EffectHead(nn.Module):
             query_chunk=self.query_chunk,
         )
         hidden = queries + self.output(attended.transpose(1, 2).reshape(batch, length, width))
-        logits = self.mlp(hidden).reshape(batch, length, 5, self.effect_width)
-        return logits.squeeze(1) if squeeze else logits
+        return self.mlp(hidden)

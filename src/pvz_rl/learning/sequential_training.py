@@ -65,16 +65,20 @@ from pvz_rl.learning.objective import (
 from pvz_rl.learning.peashooter_rules import RULE_OBJECTIVE, PeashooterObjective, rules_enabled
 from pvz_rl.learning.performance import compilation_requested
 from pvz_rl.learning.tile_curriculum import TILE_SCENARIO_PROTOCOL, TileSkillState
-from pvz_rl.learning.training_requirements import FIT_SCHEDULE_PROTOCOL, fitting_schedule
+from pvz_rl.learning.training_requirements import (
+    FIT_SCHEDULE_PROTOCOL,
+    cohort_epoch_stage,
+    fitting_schedule,
+)
 from pvz_rl.policy.active_batch import ActiveBatchPlan
 from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
 from pvz_rl.policy.runner import PolicyRunner
 from pvz_rl.policy.sequential_q import action_parts
-from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
+from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy, execution_scope_for
 
 
 def joint_fitting_stage(cfg, curriculum_state):
-    """Easy trains the action decoder. Standard and shared leave it fixed."""
+    """Easy, standard, and shared train the action decoder with the tile groups."""
     explicit = selected_stage(cfg)
     if explicit in STAGES:
         name = explicit
@@ -102,12 +106,16 @@ def flat_batches(buffer, decision_budget, spool=None):
 
 
 class CudaSequentialQ(CudaCohortLifecycle):
-    policy_protocol = "shared_public_outcomes_q_v10"
+    policy_protocol = "shared_public_outcomes_q_v11"
     optimizer_version = FIT_SCHEDULE_PROTOCOL
 
     @property
     def fit_schedule(self):
-        schedule = fitting_schedule(self.cfg, self.normal_updates + 1)
+        stage_name = cohort_epoch_stage(
+            self.cfg, self.tile_skills.phase, getattr(self, "curriculum_state", None)
+        )
+        schedule = fitting_schedule(self.cfg, self.normal_updates + 1, stage_name)
+        self.n_epochs = schedule.passes
         return replace(schedule, stage="tile_only") if self.tile_skills.active else schedule
 
     @property
@@ -267,7 +275,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self.env.cp.get_default_memory_pool().free_all_blocks()
         released = self._phase_memory("after_collection_release")
         self.collection_execution = {}
-        for name in ("_collection_effect",):
+        for name in ("_collection_effect", "_collection_breach"):
             if hasattr(self, name):
                 delattr(self, name)
         if getattr(self, "_wait_outcomes", None) is not None:
@@ -306,30 +314,19 @@ class CudaSequentialQ(CudaCohortLifecycle):
         )
         self._ensure_teacher()
         settings = self.cfg["training"].get("forecasts", {})
-        injection = (
-            not is_single_frame_skill(self.tile_skills.phase)
-            and forecast_forks_enabled(self.cfg, self.tile_skills.phase)
-            and self.training_games >= settings.get("injection_after_games", 4096)
-        )
         total = self.training_games + self.tile_skills.total
-        half_life = (
-            settings.get("discount_half_life_steps", 600)
-            if injection
-            else settings.get("initial_discount_half_life_steps", 60)
-        )
+        half_life = settings.get("initial_discount_half_life_steps", 60)
         self._resolved_forecast_schedule = dict(
-            injection=injection,
             auxiliary_scale=1.0
             if self.tile_skills.phase == "prediction"
             else min(1.0, (total + self.cohort_games) / max(1, settings.get("warmup_games", 2048))),
-            n_step=settings.get("injected_n_step", 20) if injection else settings.get("n_step", 5),
+            n_step=settings.get("n_step", 5),
             gamma_tick=0.5 ** (1 / (half_life * self.cfg["environment"]["decision_ticks"])),
         )
-        self.cfg["training"]["forecasts"]["injection_active"] = injection
         for network in (self.policy, self._teacher):
             network.forecast_stage = self.tile_skills.phase
-            network.injection_enabled = injection
             network.auxiliary_scale = self._resolved_forecast_schedule["auxiliary_scale"]
+            network.execution_scope = execution_scope_for(self.tile_skills.phase)
         self._stats["forecast_schedule"] = dict(self._resolved_forecast_schedule)
         self._stats["forecast_mode"] = forecast_mode(self.cfg, self.tile_skills.phase)
         if self.tile_skills.phase == "prediction":
@@ -379,6 +376,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._fitting_spool = None
         self._reset_execution()
 
+    def _apply_execution_scope(self):
+        scope = execution_scope_for(self.tile_skills.phase)
+        for network in (self.policy, getattr(self, "_teacher", None)):
+            if network is not None:
+                network.execution_scope = scope
+
     def _ensure_teacher(self):
         if getattr(self, "_teacher", None) is None:
             with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
@@ -386,6 +389,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     TwoStageTransformerPolicy(self.cfg).to(self.device).eval().requires_grad_(False)
                 )
             self._teacher.load_state_dict(self.policy.runtime_state_dict())
+            self._teacher.execution_scope = self.policy.execution_scope
             self._teacher_version = getattr(self, "_teacher_version", 0)
 
     @torch.no_grad()
@@ -519,17 +523,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["reset"] = self._scheduler.resets
             rows["env"] = np.arange(self.n_envs)
             source_decisions = self._scheduler.decisions.copy()
-            fresh = np.flatnonzero(self._scheduler.resets)
-            if is_single_frame_skill(self.tile_skills.phase):
-                fresh = np.arange(self.n_envs)
-            self._scheduler.clear_forecast(fresh)
-            seen_classes = self._scheduler.forecast_classes.copy()
-            seen_valid = self._scheduler.forecast_valid.copy()
-            self._scheduler.hold_forecast(seen_classes, seen_valid)
-            forecast_prior = (
-                torch.as_tensor(seen_classes, device=self.device, dtype=torch.long),
-                torch.as_tensor(seen_valid, device=self.device),
-            )
             masks = env.action_masks().clone()
             branch_available = env.branch_availability()
             legal = None
@@ -547,7 +540,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         plan=plan,
                         branch_usable=branch_available,
                         supplied_branches=supplied,
-                        prior=forecast_prior,
                     )
                 actions, values, tile_values, details = result
                 if self.tile_skills.active:
@@ -570,24 +562,23 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         plan=plan,
                     )
                 self._runner.valid &= details["valid"]
-                from pvz_rl.learning.forecast_labels import effect_forecast
-                from pvz_rl.policy.forecast_input import effect_classes, played_logits
+                if self.outcome_training and forecast_version(self.cfg) >= 2:
+                    from pvz_rl.learning.forecast_labels import effect_blocks, effect_forecast
 
-                index, logits = played_logits(
-                    self.policy, actions, details["board_memory"], enabled
-                )
-                if len(index):
-                    self._scheduler.note_forecast(
-                        index.detach().cpu().numpy(),
-                        effect_classes(logits).to(dtype=torch.int8).cpu().numpy(),
-                    )
-                    if self.outcome_training and forecast_version(self.cfg) >= 2:
-                        if not hasattr(self, "_collection_effect"):
-                            self._collection_effect = torch.zeros(
-                                (self.n_envs, 2, 5, 10), device=self.device
-                            )
-                        self._collection_effect[index] = effect_forecast(logits)
-                self.policy._effect_decision_cache = None
+                    if not hasattr(self, "_collection_effect"):
+                        self._collection_effect = torch.zeros(
+                            (self.n_envs, 2, 5, 10), device=self.device
+                        )
+                    if not hasattr(self, "_collection_breach"):
+                        self._collection_breach = torch.zeros(
+                            (self.n_envs, 5), dtype=torch.uint8, device=self.device
+                        )
+                    forecast = effect_forecast(details["effect_logits"])
+                    self._collection_effect[enabled] = forecast[enabled]
+                    _, breach_logits, _ = effect_blocks(details["effect_logits"])
+                    self._collection_breach[enabled] = breach_logits.argmax(-1).to(torch.uint8)[
+                        enabled
+                    ]
             if not hasattr(self, "_collection_packed"):
                 self._collection_packed = torch.empty(
                     self.n_envs * env.features.limit,
@@ -669,8 +660,15 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         columns=columns,
                         valid=self._runner.valid,
                         **(
-                            {"effect_prediction": self._collection_effect}
-                            if self.outcome_training
+                            {
+                                "effect_prediction": self._collection_effect,
+                                **(
+                                    {"breach_prediction": self._collection_breach}
+                                    if hasattr(self, "_collection_breach")
+                                    else {}
+                                ),
+                            }
+                            if self.outcome_training and hasattr(self, "_collection_effect")
                             else {}
                         ),
                     ),
@@ -831,14 +829,14 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 packed[:, 7:17],
                 env.last_action_result_host,
                 env._episode_serial,
+                breach=host["breach_prediction"].numpy()
+                if self.outcome_training and "breach_prediction" in host
+                else None,
             )
             env.profiler.host("presentation", perf_counter() - presentation_started)
             rows["executed_action"] = np.where(rows["accepted"], rows["action"], 0)
             rows[~active] = np.zeros((), dtype=rows.dtype)
             rows["env"] = np.arange(self.n_envs)
-            rows["prior_classes"][active] = self._scheduler.held_classes[active]
-            rows["prior_valid"][active] = self._scheduler.held_valid[active]
-            self._scheduler.clear_forecast(np.flatnonzero(rows["done"] & active))
             storage_started = perf_counter()
             receipt = self._buffer.append(
                 rows, observations, identities=(env._episode_serial, source_decisions)
@@ -1233,6 +1231,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             )
             self._cached_fit_examples = int(selected_n)
             if self.outcome_training:
+                values = self._outcome_pass_metrics.cpu().tolist()
                 (
                     effect,
                     effect_brier,
@@ -1241,7 +1240,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     effect_correct,
                     weighted_field,
                     weighted_probe,
-                ) = self._outcome_pass_metrics.cpu().tolist()
+                ) = values[:7]
+                scene_correct = values[7] if len(values) > 8 else 0
+                scene_count = values[8] if len(values) > 8 else 0
                 from pvz_rl.learning.forecast_metrics import calibration_report
 
                 self._stats["forecast_calibration"] = calibration_report(self.policy)
@@ -1258,6 +1259,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
                     outcome_brier=effect_brier / effects if effects else None,
                     static_field_weighted_loss=weighted_field,
                     probe_weighted_loss=weighted_probe,
+                    forecast_fully_correct_scenes=scene_correct,
+                    forecast_scene_count=scene_count,
+                    forecast_fully_correct=(
+                        scene_correct / scene_count if scene_count else None
+                    ),
                 ).items():
                     if not isinstance(value, str):
                         self.logger.record("train/" + key, value)
@@ -1416,13 +1422,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
     def _placement_outcome_loss(self, rows, observations):
         from pvz_rl.envs.encoding import collate_observations
         from pvz_rl.learning.forecast_objective import forecast_auxiliary
-        from pvz_rl.policy.forecast_input import prior_from_rows
 
         observations = collate_observations(observations, self.device)
         if self.tile_skills.phase == "prediction":
-            with self.policy.board_context(
-                observations, prior=prior_from_rows(rows, self.device)
-            ) as memory:
+            with self.policy.board_context(observations) as memory:
                 loss, metrics = forecast_auxiliary(
                     self.policy,
                     observations,
@@ -1442,9 +1445,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         features = next(self.policy.parameters()).new_zeros(
             (len(rows), 45, self.cfg["policy"]["shared_width"])
         )
-        with self.policy.board_context(
-            observations, prior=prior_from_rows(rows, self.device)
-        ) as memory:
+        with self.policy.board_context(observations) as memory:
             if len(at):
                 features = features.index_copy(
                     0,
@@ -1495,13 +1496,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 rows=torch.arange(len(rows), device=self.device),
             ).float()
         else:
-            vectors = self.policy._action_vectors(memory)
-            values = self.policy.tile_values(
-                features,
-                action=vectors[torch.arange(len(rows), device=self.device), branch_tensor],
-                wait_action=vectors[:, 0],
-                memory=memory,
-            ).float()
+            del memory
+            values = self.policy.tile_values(features).float()
         settings = placement_settings(self.cfg, stage)
         positives = [label["feasible_tiles"] for label in labels]
         objective = settings.get("ranking_objective", "top1_hinge_v1")
@@ -1841,13 +1837,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._runner.valid &= extra["collection_valid"].to(self.device)
         if extra and extra.get("forecast_schedule"):
             self._resolved_forecast_schedule = extra["forecast_schedule"]
-            self.cfg["training"]["forecasts"]["injection_active"] = (
-                self._resolved_forecast_schedule["injection"]
-            )
             for network in (self.policy, self._teacher):
                 network.forecast_stage = self.tile_skills.phase
-                network.injection_enabled = self._resolved_forecast_schedule["injection"]
                 network.auxiliary_scale = self._resolved_forecast_schedule["auxiliary_scale"]
+                network.execution_scope = execution_scope_for(self.tile_skills.phase)
+        self._apply_execution_scope()
         self._td_builder = None
         if extra and extra.get("td_preparation"):
             from pvz_rl.learning.td_targets import TDTargetBuilder

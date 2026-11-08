@@ -23,7 +23,6 @@ from pvz_rl.envs.tile_scenarios import (
 )
 from pvz_rl.evaluation.cuda_evaluation import deterministic_validation
 from pvz_rl.learning.deadline import check_deadline
-from pvz_rl.policy.forecast_input import ForecastCarry
 from pvz_rl.policy.runner import PolicyRunner
 
 
@@ -45,6 +44,17 @@ def _validation_groups(cfg, skills, seeds):
 
 def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, skills=LEGACY_SKILLS):
     results = {skill: [] for skill in skills}
+    previous_scope = model.policy.execution_scope
+    model.policy.execution_scope = "placement"
+    try:
+        return _validate_tile_skills(
+            cfg, model, seeds, results, deadline=deadline, progress=progress, skills=skills
+        )
+    finally:
+        model.policy.execution_scope = previous_scope
+
+
+def _validate_tile_skills(cfg, model, seeds, results, *, deadline, progress, skills):
     with deterministic_validation(model):
         if (
             not skills
@@ -82,7 +92,6 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                         env.reset_indices(list(range(len(chunk))), tile_seeds=chunk)
                         obs = env.features.obs_tensor
                         runner = PolicyRunner(model.policy)
-                        carry = ForecastCarry(len(chunk), model.device)
                         while env.enabled_envs.any():
                             check_deadline(deadline)
                             with torch.inference_mode():
@@ -91,15 +100,13 @@ def validate_tile_skills(cfg, model, seeds, *, deadline=None, progress=None, ski
                                 )
                                 availability = env.branch_availability(active=active)
                                 supplied = env.supplied_branches(skill, availability)
-                                actions, _, _, details = runner.decide(
+                                actions, _, _, _details = runner.decide(
                                     obs,
                                     env.action_masks(),
                                     active=active,
                                     branch_usable=availability,
                                     supplied_branches=supplied,
-                                    prior=carry.as_prior(),
                                 )
-                                carry.record(model.policy, actions, details["board_memory"], active)
                             obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
                             for index in np.flatnonzero(env._step_active):
                                 traces[index].append(int(env._record[index, 6]))

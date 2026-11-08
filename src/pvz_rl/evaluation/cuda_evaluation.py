@@ -10,7 +10,6 @@ from pvz_rl.config import runtime_settings
 from pvz_rl.envs.cuda_env import CudaVecEnv
 from pvz_rl.learning.deadline import check_deadline
 from pvz_rl.monitoring.cuda_diagnostics import DeviceProfiler
-from pvz_rl.policy.forecast_input import ForecastCarry
 from pvz_rl.policy.runner import PolicyRunner
 
 
@@ -104,22 +103,19 @@ def refilled_games(
         inference_start = [0.0] * count
         obs = env.reset()
         runner = PolicyRunner(policy.policy)
-        carry = ForecastCarry(count, policy.policy.device)
         with env.device_context():
             while finished < len(cases):
                 check_deadline(deadline)
                 with torch.inference_mode():
                     active = torch.as_tensor(env.enabled_envs.copy(), device=policy.policy.device)
                     with timer.track("inference"):
-                        actions, _, _, details = runner.decide(
+                        actions, _, _, _details = runner.decide(
                             obs,
                             env.action_masks(),
                             active=active,
                             branch_usable=env.branch_availability(active=active),
                             defer_check=True,
-                            prior=carry.as_prior(),
                         )
-                        carry.record(policy.policy, actions, details["board_memory"], active)
                 if record:
                     buffered.append(actions)
                 obs, _, _, _, _, infos = env.step_tensors(actions, autoreset=False)
@@ -152,8 +148,6 @@ def refilled_games(
                         assigned.append(cases[next_case])
                         next_case += 1
                         started[i], inference_start[i] = perf_counter(), inference
-                if done:
-                    carry.clear_indices(done)
                 if reset:
                     env.reset_indices(reset, assigned)
                     obs = env.features.obs_tensor
@@ -195,7 +189,6 @@ def fixed_batches(
             try:
                 obs = env.reset()
                 runner = PolicyRunner(policy.policy)
-                carry = ForecastCarry(len(chunk), policy.policy.device)
                 with env.device_context():
                     while len(completed) < len(chunk):
                         check_deadline(deadline)
@@ -204,16 +197,12 @@ def fixed_batches(
                                 env.enabled_envs.copy(), device=policy.policy.device
                             )
                             with inference_timer.track("inference"):
-                                actions, _, _, details = runner.decide(
+                                actions, _, _, _details = runner.decide(
                                     obs,
                                     env.action_masks(),
                                     active=active,
                                     branch_usable=env.branch_availability(active=active),
                                     defer_check=True,
-                                    prior=carry.as_prior(),
-                                )
-                                carry.record(
-                                    policy.policy, actions, details["board_memory"], active
                                 )
                         if record:
                             buffered.append(actions)
@@ -227,8 +216,6 @@ def fixed_batches(
                         finished_slots = [
                             i for i, info in enumerate(infos) if "episode_metrics" in info
                         ]
-                        if finished_slots:
-                            carry.clear_indices(finished_slots)
                         for i in finished_slots:
                             info = infos[i]
                             completed[i] = {

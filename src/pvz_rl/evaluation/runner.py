@@ -33,7 +33,6 @@ def select_action(env: PvZEnv, obs, *, policy=None, baseline=None, rng=None, mas
         return env.codec.encode(choose_action(env.public_board()))
     if policy is None:
         raise ValueError("Specify a baseline or trained policy")
-    from pvz_rl.policy.forecast_input import ForecastCarry
     from pvz_rl.policy.runner import PolicyRunner
 
     network = getattr(policy, "policy", None)
@@ -44,23 +43,14 @@ def select_action(env: PvZEnv, obs, *, policy=None, baseline=None, rng=None, mas
 
         if env.metrics["decisions"] == 0:
             env._policy_runner = PolicyRunner(network)
-            env._forecast_carry = ForecastCarry(1, network.device)
         runner = env._policy_runner
-        carry = env._forecast_carry
         board = collate_observations(obs, network.device)
-        actions, _, _, details = runner.decide(
+        actions, _, _, _details = runner.decide(
             board,
             torch.as_tensor(env.action_masks(), device=network.device).reshape(1, -1),
             branch_usable=torch.as_tensor(env.branch_availability(), device=network.device).reshape(
                 1, -1
             ),
-            prior=carry.as_prior(),
-        )
-        carry.record(
-            network,
-            actions,
-            details["board_memory"],
-            torch.ones(1, dtype=torch.bool, device=network.device),
         )
         return int(actions[0])
     kwargs = {"action_masks": env.action_masks()} if masked else {}

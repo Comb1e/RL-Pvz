@@ -86,14 +86,14 @@ class CollectionProgress:
         )
 
     @staticmethod
-    def text(row, games):
+    def text(row, games, unit="game"):
         """Format explicit units; an unmeasured interval is not a zero rate."""
         per_game = row["interval_decisions_per_game_per_second"]
         transitions = row["interval_active_transitions_per_second"]
         return (
             f"active {row['active_games']}/{games} | "
             + ("n/a" if per_game is None else f"{per_game:,.2f}")
-            + " decisions/game/s | "
+            + f" decisions/{unit}/s | "
             + ("n/a" if transitions is None else f"{transitions:,.0f}")
             + " active transitions/s"
         )
@@ -213,8 +213,11 @@ class ProgressReporter:
             width = max(20, shutil.get_terminal_size((120, 20)).columns - 1)
             visible = line.split("] ", 1)[-1]
             if len(visible) > width:
-                visible = visible.replace("decisions/game/s", "dec/g/s").replace(
-                    "active transitions/s", "active t/s"
+                visible = (
+                    visible.replace("decisions/scene/s", "d/scene/s")
+                    .replace("decisions/board/s", "d/board/s")
+                    .replace("decisions/game/s", "d/game/s")
+                    .replace("active transitions/s", "t/s")
                 )
             visible = visible[:width]
             self.stream.write("\r" + visible + " " * max(0, self._open_width - len(visible)))

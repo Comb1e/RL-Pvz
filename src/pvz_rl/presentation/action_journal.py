@@ -29,6 +29,8 @@ RECORD = np.dtype(
         ("q", "<f4", 10),
         ("effect_prediction", "<f2", (2, 5, 10)),
         ("effect_prediction_valid", "?"),
+        ("breach_prediction", "u1", 5),
+        ("breach_prediction_valid", "?"),
     ]
 )
 
@@ -104,15 +106,15 @@ class ActionJournal:
         self.blocks[env].append(block)
         return block
 
-    def record_batch_safe(self, rows, scores, results, episodes):
+    def record_batch_safe(self, rows, scores, results, episodes, breach=None):
         if self.disabled:
             return
         try:
-            self.record_batch(rows, scores, results, episodes)
+            self.record_batch(rows, scores, results, episodes, breach=breach)
         except (OSError, MemoryError, ValueError) as exc:
             self.fail(exc)
 
-    def record_batch(self, rows, scores, results, episodes):
+    def record_batch(self, rows, scores, results, episodes, breach=None):
         records = np.zeros(self.count, dtype=RECORD)
         for name in (
             "tick",
@@ -129,6 +131,9 @@ class ActionJournal:
         if "effect_prediction" in rows.dtype.names:
             records["effect_prediction"] = rows["effect_prediction"]
             records["effect_prediction_valid"] = rows["effect_prediction_valid"]
+        if breach is not None:
+            records["breach_prediction"] = breach
+            records["breach_prediction_valid"] = records["effect_prediction_valid"]
         records["coins"][:, 0] = rows["species_coin"]
         records["coins"][:, 1] = rows["tile_coin"]
         records["q"] = scores

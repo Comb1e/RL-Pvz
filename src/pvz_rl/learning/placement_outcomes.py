@@ -1,15 +1,13 @@
-"""One exact post-proposal field/probe target per single-frame exercise."""
+"""One exact pre-action field/probe target per single-frame exercise."""
 
 import copy
 from time import perf_counter
 
-from pvz_rl.envs.static_fork import reference_tau
 from pvz_rl.learning.auxiliary_service import root_bytes
-from pvz_rl.learning.forecast_labels import outcome_codes
 
 
 class PlacementOutcomes:
-    protocol = "single-placement-outcomes-v2"
+    protocol = "single-placement-outcomes-v3"
 
     def __init__(self, env, buffer, state=None):
         self.env, self.buffer, self.auxiliary = env, buffer, env.auxiliary
@@ -65,7 +63,7 @@ class PlacementOutcomes:
             if not job["submitted"]:
                 # Retain ownership until queue admission succeeds. Resource failure
                 # leaves an exact root in recovery, even after the real action.
-                self.auxiliary.submit(identity, job["root"], action=job["action"])
+                self.auxiliary.submit(identity, job["root"], action=0)
                 job["submitted"] = True
                 job.pop("root")
 
@@ -76,10 +74,8 @@ class PlacementOutcomes:
             index = self.jobs[identity]["row"]
             block, offset = divmod(index, self.buffer.block_rows)
             row = self.buffer.blocks[block][offset]
-            row["effect_labels"][0] = outcome_codes(
-                result["outcome"], reference_tau(self.env.batch.rules)
-            )
-            row["null_target_valid"] = False
+            row["baseline_outcomes"] = result["outcome"]
+            row["null_target_valid"] = True
             row["outcome_ready"] = True
             self.auxiliary.acknowledge(identity)
             del self.jobs[identity]

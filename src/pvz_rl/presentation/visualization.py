@@ -16,11 +16,38 @@ from pvz_rl.config import output_settings
 from pvz_rl.evaluation.runner import evaluate
 from pvz_rl.learning.curriculum import TILE_STAGES, pre_stage
 from pvz_rl.learning.deadline import BudgetExpired, check_deadline
-from pvz_rl.learning.tile_curriculum import required_validation_wins
+from pvz_rl.learning.tile_curriculum import required_validation_wins, tile_validation_count
 from pvz_rl.monitoring.progress import Phase, ProgressReporter
+from pvz_rl.presentation.forecast_display import fully_correct_text
 from pvz_rl.presentation.training_charts import domain, episodes, report_charts
 from pvz_rl.presentation.video import export_replay, video_settings
 from pvz_rl.provenance import current_engine_config, file_hash, write_json
+
+
+def score_text(scores, cfg):
+    if not scores:
+        return "not recorded"
+    parts = []
+    for skill, wins in scores.items():
+        total = tile_validation_count(cfg, skill)
+        if skill == "prediction":
+            parts.append(fully_correct_text(wins, total) or f"{wins}/{total}")
+        else:
+            parts.append(f"{skill} {wins}/{total}")
+    return ", ".join(parts)
+
+
+def cohort_result_text(check):
+    cohort = check.get("cohort") or {}
+    domain_name = cohort.get("domain") or check.get("domain")
+    if domain_name == "prediction" or cohort.get("skill") == "prediction":
+        rate = fully_correct_text(
+            cohort.get("fully_correct_scenes"), cohort.get("forecast_scene_count")
+        )
+        if rate:
+            return rate
+        return f"{cohort.get('games', 0)} scenes"
+    return f"{cohort.get('wins', 0)}/{cohort.get('games', 0)}"
 
 
 def read_json(path, default=None):
@@ -364,7 +391,7 @@ def build_run_report(run, cfg=None):
             f"Attacker: {escape(skills.get('episodes', {}).get('attacker', 0))}. "
             f"Generation failures: {escape(skills.get('generation_failures', 0))}. "
             + mastery
-            + f"Latest validation successes: {escape(skills.get('scores') or 'not recorded')}. "
+            + f"Validation: {escape(score_text(skills.get('scores'), cfg))}. "
             f"Stop reason: {escape(status.get('stop_reason') or status.get('state', 'in progress'))}.</p>"
         )
         if has_pre
@@ -375,11 +402,14 @@ def build_run_report(run, cfg=None):
     )
     trigger = status.get("validation_trigger", {})
     if trigger.get("enabled"):
+        pending = trigger.get("pending") or "—"
+        threshold = (
+            ""
+            if skills.get("phase") == "prediction" or status.get("curriculum_stage") == "prediction"
+            else f"{trigger['cohort_success_threshold']:.0%} · "
+        )
         run_progress += (
-            f"<p>Validation normally requires full-cohort success strictly above {trigger['cohort_success_threshold']:.0%}. "
-            "Prediction validation requires a full fitted cohort at its interval. "
-            f"Next check: {escape(trigger.get('next_check'))} completed episodes. "
-            f"Pending validation: {escape(trigger.get('pending') or 'none')}.</p>"
+            f"<p>{threshold}next {escape(trigger.get('next_check'))} · {escape(pending)}</p>"
         )
     checks = [row for _, series in segments for row in series.get("validation-checks", [])]
     if checks:
@@ -388,7 +418,7 @@ def build_run_report(run, cfg=None):
             cohort = check["cohort"]
             run_progress += (
                 f"<tr><td>{escape(cohort.get('skill') or check['domain'])}</td>"
-                f"<td>{check['progress']}</td><td>{cohort.get('wins', 0)}/{cohort.get('games', 0)}</td>"
+                f"<td>{check['progress']}</td><td>{escape(cohort_result_text(check))}</td>"
                 f"<td>{'Launch' if check['eligible'] else 'Skip'} ({escape(check['reason'])})</td></tr>"
             )
         run_progress += "</table></details>"
@@ -406,20 +436,16 @@ def build_run_report(run, cfg=None):
                 f"<br>{escape(skill)} {score['wins']}/{score['games']}"
                 for skill, score in probe.get("exercise_scores", {}).items()
             )
-            prediction_losses = ""
-            if probe.get("stage") == "prediction" and "mean_loss" in probe:
-                mean, worst = probe["mean_loss"], probe["worst_loss"]
-                prediction_losses = (
-                    f"<br>Mean loss {mean:.6f}<br>Worst loss {worst:.6f}"
-                    if mean is not None
-                    else "<br>Non-finite scene loss"
-                )
             run_progress += (
                 f"<tr><td>{escape(probe.get('stage', 'pre'))}</td>"
                 f"<td>{probe.get('stage_episodes', probe['episodes'])}</td>"
                 + "".join(
-                    f"<td>{probe['scores'][skill]}/{counts.get(skill, cfg['curriculum']['probe_cases'])}"
-                    f"{breakdown if skill == 'attacker' else prediction_losses if skill == 'prediction' else ''}</td>"
+                    (
+                        f"<td>{escape(fully_correct_text(probe['scores'][skill], counts.get(skill) or tile_validation_count(cfg, skill)) or '—')}</td>"
+                        if skill == "prediction"
+                        else f"<td>{probe['scores'][skill]}/{counts.get(skill, cfg['curriculum']['probe_cases'])}"
+                        f"{breakdown if skill == 'attacker' else ''}</td>"
+                    )
                     if skill in probe["scores"]
                     else "<td>—</td>"
                     for skill in TILE_STAGES
@@ -427,12 +453,6 @@ def build_run_report(run, cfg=None):
                 + f"<td>{escape(probe.get('previous'))} → {escape(probe.get('next'))}</td></tr>"
             )
         run_progress += "</table></details>"
-    run_progress += (
-        "<p>Episode curves summarize completed games and can lag behind the current policy. "
-        "Optimizer and conditional planting measurements describe the current cohort. "
-        "Truncated episode returns are incomplete, not evidence of victory. "
-        "With gamma=1, discounted and undiscounted episode rewards are equal.</p>"
-    )
     if status.get("selected_stage"):
         run_progress += (
             f"<p>Single stage: {escape(status['selected_stage'])}. "
@@ -490,11 +510,6 @@ height:auto;border-radius:6px}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;
 <p>{policy_description}. Training: <b>{escape(status.get("state", "unknown"))}</b>.</p>
 {run_progress}
 {task_table}
-<p>Checkpoint selection uses equal-weight validation win rates. These development curves and
-fixed validation demonstrations do not establish held-out performance.</p>
-<p>Training curves use up to {output_settings(cfg)["logging"]["rolling_window"]} completed episodes;
-difficulty composition changes with the curriculum. Reward is not comparable across reward settings.
-Pre and normal counters have separate charts. Lines break at skill/stage and resume boundaries. Unavailable metrics are omitted.</p>
 <details><summary>Settings, checkpoint, and export status</summary>
 <pre>{escape(json.dumps(details, indent=2))}</pre></details></header>{charts}
 <section><h2>Shared checkpoint demonstrations</h2>

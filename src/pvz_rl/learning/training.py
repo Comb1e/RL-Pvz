@@ -23,6 +23,7 @@ from pvz_rl.config import (
     random_validation_seeds,
     runtime_settings,
     simulator,
+    stage_epochs,
     validate_config,
 )
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
@@ -47,6 +48,7 @@ from pvz_rl.learning.budget import (
 )
 from pvz_rl.learning.cohort import atomic_transition
 from pvz_rl.learning.curriculum import (
+    SELECTABLE_STAGES,
     CurriculumState,
     initial_state,
     pre_stage,
@@ -72,6 +74,7 @@ from pvz_rl.learning.tile_curriculum import (
 )
 from pvz_rl.learning.training_requirements import (
     FIT_SCHEDULE_PROTOCOL,
+    cohort_epoch_stage,
     parameter_changes,
     require_cuda_training,
     require_supported_policy,
@@ -82,6 +85,7 @@ from pvz_rl.learning.validation_trigger import ValidationTrigger
 from pvz_rl.monitoring.metrics import episode_task, mean_agent_actions, task_statistics
 from pvz_rl.monitoring.progress import CollectionProgress, Phase, ProgressReporter
 from pvz_rl.monitoring.timing import TrainingTimings
+from pvz_rl.presentation.forecast_display import fully_correct_text
 from pvz_rl.provenance import append_jsonl, file_hash, metadata, verify_engine, write_json
 
 
@@ -105,12 +109,13 @@ def build_model(cfg, condition, env, seed, log_dir=None):
 
     algorithm, policy_class = CudaSequentialQ, TwoStageQPolicy
     policy_kwargs = {"features_extractor_kwargs": {"layout_cfg": cfg}}
+    phase = initial_tile_state(cfg)["phase"]
     model = algorithm(
         policy_class,
         env,
         learning_rate=t["learning_rate"],
         batch_size=t["batch_size"],
-        n_epochs=t["n_epochs"],
+        n_epochs=stage_epochs(cfg, cohort_epoch_stage(cfg, phase)),
         max_grad_norm=t["max_grad_norm"],
         policy_kwargs=policy_kwargs,
         seed=seed,
@@ -153,6 +158,22 @@ def optimizer_step(model):
 
 def seconds_text(value):
     return "n/a" if value is None or not math.isfinite(value) else f"{value:.0f}s"
+
+
+def progress_unit(phase):
+    """Collection noun for one environment: a scene, a board, or a game."""
+    if phase == "prediction":
+        return "scene"
+    if is_placement_skill(phase):
+        return "board"
+    return "game"
+
+
+def progress_phase(model):
+    skills = getattr(model, "tile_skills", None)
+    if skills is not None and getattr(skills, "active", False):
+        return skills.phase
+    return getattr(getattr(model, "env", None), "tile_scenario", None) or "normal"
 
 
 class ResearchCallback(BaseCallback):
@@ -528,22 +549,39 @@ class ResearchCallback(BaseCallback):
             provisional=any(row.get("time_reward_pending", False) for row in rows),
         )
 
+    def fitted_scene_rate(self):
+        """Fully-correct rate for the cohort that just finished fitting.
+
+        ``cohort_metrics`` still describes the previous cohort while the next
+        one is collecting, so a rate is shown only when the cohort ids match.
+        """
+        metrics = getattr(self.model, "cohort_metrics", None) or {}
+        cohort = metrics.get("validation_cohort") or {}
+        if cohort.get("cohort") != getattr(self.model, "cohort_number", None):
+            return None
+        if cohort.get("domain") != "prediction" and cohort.get("skill") != "prediction":
+            return None
+        return fully_correct_text(
+            cohort.get("fully_correct_scenes"), cohort.get("forecast_scene_count")
+        )
+
     def cohort_text(self):
         summary = self.cohort_summary()
-        if is_placement_skill(self.model.tile_skills.phase) or is_placement_skill(
-            getattr(self.model.env, "tile_scenario", None)
-        ):
-            return (
-                f"done {summary['completed']}/{summary['games']} "
-                f"correct {summary['wins']}/{summary['games']}; placement supervision"
-            )
+        phase = progress_phase(self.model)
+        done = f"{summary['completed']}/{summary['games']}"
+        if phase == "prediction":
+            rate = self.fitted_scene_rate()
+            complete = summary["games"] and summary["completed"] >= summary["games"]
+            return rate if complete and rate else done
+        if is_placement_skill(phase):
+            return f"{done}  correct {summary['wins']}/{summary['games']}"
         raw = "n/a" if summary["raw_return"] is None else f"{summary['raw_return']:.3g}"
         fitted = (
             "n/a" if summary["training_return"] is None else f"{summary['training_return']:.3g}"
         )
         marker = "~" if summary["provisional"] else ""
         return (
-            f"done {summary['completed']}/{summary['games']} wins {summary['wins']}/{summary['games']} "
+            f"{done}  wins {summary['wins']}/{summary['games']}  "
             f"Rraw={raw} Rtrain={fitted}{marker}"
         )
 
@@ -576,53 +614,45 @@ class ResearchCallback(BaseCallback):
         """Terminal summary from host-side status; never reads device tensors."""
         model = self.model
         phase = str(row["training_phase"])
+        skill = progress_phase(model)
+        unit = progress_unit(skill)
         cohort = getattr(model, "cohort_number", getattr(model, "_n_updates", 0) + 1)
-        if phase == "collect" and getattr(model, "env", None) is not None:
-            size = getattr(model, "cohort_games", 0)
-            finished = max(0, size - int(model.env.enabled_envs[:size].sum()))
-            marker = f"{finished}/{size} games"
-        elif phase == "fit":
+        if phase == "fit":
             if model._fit_epoch >= model.total_fit_passes:
                 marker = "fit complete"
             else:
                 stage = "tile-only" if model.fit_stage == "tile_only" else "joint"
                 marker = f"{stage} pass {model._fit_epoch + 1}/{model.total_fit_passes}"
+        elif phase == "collect":
+            marker = ""
         else:
             marker = phase
-        games = (
-            f"scenario episodes {row['budget_progress']:,}"
+        budget = (
+            f"{row['budget_progress']:,}"
             if pre_stage(self.cfg)
-            else f"normal games total {row['training_games']:,}"
+            else f"{row['training_games']:,}"
         )
         if row["target_games"] is not None:
-            games += f"/{row['target_games']:,}"
+            budget += f"/{row['target_games']:,}"
         step = optimizer_step(model)
         parts = [
-            f"tile stage {self.model.tile_skills.phase} "
-            f"({self.model.tile_skills.progress:,} episodes)"
+            f"{skill} {self.model.tile_skills.progress:,} {unit}s"
             if self.model.tile_skills.active
-            else f"{selected_stage(self.cfg)} stage complete"
+            else f"{selected_stage(self.cfg)} complete"
             if pre_stage(self.cfg)
-            else "normal training",
+            else "normal",
             f"cohort {cohort} {self.cohort_text()}",
-            CollectionProgress.text(row["collection_progress"], getattr(model, "cohort_games", 0)),
+            CollectionProgress.text(
+                row["collection_progress"], getattr(model, "cohort_games", 0), unit
+            ),
             marker,
-            games,
-            f"transitions total {row['training_steps']:,}",
+            f"budget {budget} {unit}s",
             "collect "
             + seconds_text(row["last_collection_seconds"])
             + " fit "
             + seconds_text(row["last_optimization_seconds"]),
-            f"optimizer step {step:,}",
+            f"step {step:,}",
         ]
-        hardware = row["hardware"]
-        usage = [
-            f"{name} {hardware[key]:.0f}%"
-            for name, key in (("GPU", "gpu_percent"), ("CPU", "system_cpu_percent"))
-            if isinstance(hardware.get(key), (int, float)) and math.isfinite(hardware[key])
-        ]
-        if usage:
-            parts.append(" ".join(usage))
         change = (
             phase,
             cohort,
@@ -633,7 +663,7 @@ class ResearchCallback(BaseCallback):
             tuple(row["current_cohort"].values()),
             row["collection_progress"]["active_games"],
         )
-        return " | ".join(parts), change
+        return " | ".join(part for part in parts if part), change
 
     def cohort_phase(self, previous, phase):
         """Print cohort boundaries: collection start/completion; fitting is reported at its end."""
@@ -647,10 +677,11 @@ class ResearchCallback(BaseCallback):
             model = self.model
             seconds = model._phase_times["collect"]
             transitions = model.num_timesteps - getattr(model, "cohort_start_steps", 0)
+            noun = progress_unit(progress_phase(model)) + "s"
             self.progress.emit(
-                f"Cohort {model._n_updates + 1} collected: {getattr(model, 'cohort_games', 0)} "
-                f"games, {transitions:,} transitions in {seconds:.1f}s "
-                f"({transitions / max(seconds, 1e-9):,.0f}/s); {self.cohort_text()}",
+                f"cohort {model._n_updates + 1}  {getattr(model, 'cohort_games', 0)} {noun}  "
+                f"{transitions:,}  {seconds:.1f}s  "
+                f"{transitions / max(seconds, 1e-9):,.0f}/s  {self.cohort_text()}",
                 force=True,
             )
         else:
@@ -669,6 +700,7 @@ class ResearchCallback(BaseCallback):
             "effect_loss",
             "effect_brier",
             "effect_accuracy",
+            "forecast_fully_correct",
             "changed_effect_accuracy",
             "unchanged_effect_accuracy",
             "effect_change_precision",
@@ -1006,15 +1038,15 @@ class ResearchCallback(BaseCallback):
                         optimizer_step=optimizer_step(self.model),
                     ),
                 )
-            evidence = (
-                f"{cohort.get('games', 0)} completed scenes"
-                if domain == "prediction"
-                else f"{cohort.get('wins', 0)}/{cohort.get('games', 0)} cohort successes"
-            )
+            if domain == "prediction":
+                evidence = fully_correct_text(
+                    cohort.get("fully_correct_scenes"), cohort.get("forecast_scene_count")
+                ) or f"{cohort.get('games', 0)} scenes"
+            else:
+                evidence = f"{cohort.get('wins', 0)}/{cohort.get('games', 0)}"
             self.progress.emit(
-                f"Validation check: {evidence}; {'launch' if allowed else 'skip'}; "
-                f"next check after {progress + self.validation_trigger.interval_for(domain):,} "
-                f"{domain} episodes",
+                f"validation {domain}  {evidence}  {'launch' if allowed else 'skip'}  "
+                f"next {progress + self.validation_trigger.interval_for(domain):,}",
                 force=True,
             )
         if allowed or checked:
@@ -1173,7 +1205,7 @@ class ResearchCallback(BaseCallback):
 
         def probe():
             names = ", ".join(skills.validation_skills)
-            self.progress.phase(Phase.VALIDATING, f"Tile stage validation: {names}")
+            self.progress.phase(Phase.VALIDATING, names)
             try:
                 if skills.phase == "prediction":
                     from pvz_rl.evaluation.prediction import validate_prediction
@@ -1240,19 +1272,20 @@ class ResearchCallback(BaseCallback):
                         ),
                     )
                 self.save_checkpoint("latest.zip")
-            detail = str(scores)
+            detail = "  ".join(f"{skill} {wins}/{count}" for skill, wins in scores.items())
             if prediction_metrics:
-                detail = f"prediction {scores['prediction']}/{count} environments"
-            if breakdown is not None:
-                detail = (
-                    f"attacker {scores['attacker']}/{count} overall ("
-                    + ", ".join(
-                        f"{skill} {score['wins']}/{score['games']}"
-                        for skill, score in breakdown.items()
-                    )
-                    + ")"
+                rate = fully_correct_text(scores["prediction"], count) or (
+                    f"{scores['prediction']}/{count}"
                 )
-            self.progress.emit(f"Tile validation: {detail}; next phase {skills.phase}", force=True)
+                loss = prediction_metrics["mean_loss"]
+                loss_text = f"  {loss:.2f}" if loss is not None else ""
+                detail = f"prediction  {rate}{loss_text}  → {skills.phase}"
+            if breakdown is not None:
+                detail = f"attacker  {scores['attacker']}/{count}  " + "  ".join(
+                    f"{skill} {score['wins']}/{score['games']}"
+                    for skill, score in breakdown.items()
+                )
+            self.progress.emit(f"validation  {detail}", force=True)
             if not skills.active:
                 self.recent.clear()
                 self.recent_by_task.clear()
@@ -1343,13 +1376,14 @@ class ResearchCallback(BaseCallback):
         self.sync_curriculum()
         self.progress.phase(Phase.UPDATING)
         cohort = self.model.cohort_metrics
+        tile_only = cohort.get("tile_only_optimizer_steps", 0)
+        joint = cohort.get("joint_optimizer_steps", 0)
+        split = f"  {tile_only} tile-only  {joint} joint" if tile_only or joint else ""
         self.progress.emit(
-            f"Cohort {self.model._n_updates} fitted: {cohort.get('q_optimizer_steps', 0)} passes "
-            f"({cohort.get('tile_only_optimizer_steps', 0)} tile-only + "
-            f"{cohort.get('joint_optimizer_steps', 0)} joint) "
-            f"in {cohort['fit_seconds']:.1f}s after {cohort['collection_seconds']:.1f}s "
-            f"collection; {cohort['transitions_per_second']:,.0f} transitions/s; "
-            f"optimizer step {optimizer_step(self.model):,}; {self.cohort_text()}",
+            f"cohort {self.model._n_updates}  {cohort.get('q_optimizer_steps', 0)} passes{split}  "
+            f"fit {cohort['fit_seconds']:.1f}s  collect {cohort['collection_seconds']:.1f}s  "
+            f"{cohort['transitions_per_second']:,.0f}/s  "
+            f"step {optimizer_step(self.model):,}  {self.cohort_text()}",
             force=True,
         )
         write_json(self.output / "status.json", self.snapshot())
@@ -1366,10 +1400,11 @@ class ResearchCallback(BaseCallback):
         if self.stage_validation and not self.pending_stage_validation:
             return False
         milestone = self.pending_stage_validation
+        unit = progress_unit(progress_phase(self.model))
         self.progress.phase(
             Phase.VALIDATING,
-            f"Validation at {progress_value(self.cfg, self.model):,} {'games' if uses_games(self.cfg) else 'decisions'}"
-            + (f" after {milestone['stage']} mastery" if milestone else ""),
+            f"{progress_value(self.cfg, self.model):,} {unit}s"
+            + (f"  {milestone['stage']}" if milestone else ""),
         )
         write_json(self.output / "status.json", self.snapshot())
         try:
@@ -1725,7 +1760,9 @@ def train(
             "adam_epsilon": 1e-8,
             "batch_size": cfg["training"]["batch_size"],
             "normal_fitting": "joint",
-            "passes_per_cohort": cfg["training"]["n_epochs"],
+            "passes_per_cohort": {
+                stage: stage_epochs(cfg, stage) for stage in SELECTABLE_STAGES
+            },
             "shared_encoder": True,
             "runtime_dtype": "bf16",
             "master_dtype": "fp32",
@@ -1744,76 +1781,67 @@ def train(
         if unlimited
         else f"{budget_target(cfg) if game_budget else effective_steps:,} {'games' if game_budget else 'decisions'}"
     )
-    progress.emit(
-        f"Shared {condition} {cfg['policy']['kind']} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
-        f"{cohort_envs(cfg, 'peashooter')} Peashooter lanes, {cohort_envs(cfg)} normal lanes, "
-        f"{cohort_envs(cfg, 'cherry_bomb')} Cherry Bomb lanes, "
-        f"{cfg['training'].get('tile_scenarios', {}).get('attacker', {}).get('n_envs', 0)} attacker-pre lanes, "
-        f"{(prediction_settings(cfg) or {}).get('n_envs', 0)} prediction lanes, "
-        f"{(attacker_mix(cfg) or {}).get('n_envs', 0)} mixed attacker lanes; simulator {simulator(cfg)}; "
-        "one complete game per environment per cohort; "
-        f"{budget_label}; "
-        f"family {family}; output {output.resolve()}",
-        force=True,
-    )
-    progress.emit(f"Data transport: {runtime_settings(cfg)}", force=True)
-    preparation = cfg["training"].get("performance", {})
-    progress.emit(
-        f"Cherry preparation: {preparation.get('cherry_prepare_workers', 0)} requested CPU workers; "
-        f"{preparation.get('cherry_oracle', 'cpu')} oracle; "
-        f"CUDA warmup {preparation.get('cherry_cuda_warmup', False)}; "
-        f"prefetch {preparation.get('cherry_prefetch', False)}; workers/scratch respect RAM/VRAM limits",
-        force=True,
-    )
-    target_kind = (
-        "unweighted categorical fitting of post-action forecasts"
-        if selected_stage(cfg) == "prediction"
-        else "successful-set placement supervision with absolute action outcomes"
-        if is_placement_skill(selected_stage(cfg))
-        else "n-step Q targets with absolute action outcomes"
-    )
-    progress.emit(
-        f"Policy: {cfg.get('policy', {'kind': 'flat'})}; {target_kind}; "
-        "joint normal cohorts; supervised preliminary cohorts; "
-        f"{cfg['training']['n_epochs']} passes per cohort; "
-        f"minibatch {cfg['training']['batch_size']}",
-        force=True,
-    )
-    progress.emit(f"Reward settings: {cfg['reward']}", force=True)
-    if cfg["training"].get("peashooter_rules"):
+    stage = selected_stage(cfg)
+    if stage:
+        noun = progress_unit(stage) + "s"
+        lanes = cohort_envs(cfg, stage)
+        if unlimited:
+            limit = "until mastery"
+        elif game_budget:
+            limit = f"{budget_target(cfg):,} {noun}"
+        else:
+            limit = f"{effective_steps:,} decisions"
         progress.emit(
-            "Peashooter: prioritized visible-lane oracle targets; column-decaying cross-entropy; "
-            "greedy main actions",
+            f"{stage}  {lanes}  {lanes} {noun}/cohort  {stage_epochs(cfg, stage)} passes  {limit}  "
+            f"{cfg['training']['device']}  {output.resolve()}",
             force=True,
         )
-    progress.emit(
-        f"Committed plant/tile exploration {cfg['training']['exploration']}; "
-        "normal branches greedy; accepted planting can commit to another species; "
-        "Rraw/Rtrain are completed-cohort means (~ provisional)",
-        force=True,
-    )
-    if validation_after_stage(cfg, family):
-        probe_key = "probe_interval_games" if game_budget else "probe_interval"
+        if stage == "peashooter" and cfg["training"].get("peashooter_rules"):
+            progress.emit("peashooter  prioritized lanes", force=True)
+    else:
         progress.emit(
-            f"Mastery checks every {cfg['curriculum'][probe_key]:,} "
-            f"{'completed games' if game_budget else 'decisions'}; "
-            "normal easy/standard/hard validation only after each stage passes",
+            f"Shared {condition} {cfg['policy']['kind']} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
+            f"{cohort_envs(cfg, 'peashooter')} Peashooter lanes, {cohort_envs(cfg)} normal lanes, "
+            f"{cohort_envs(cfg, 'cherry_bomb')} Cherry Bomb lanes, "
+            f"{cfg['training'].get('tile_scenarios', {}).get('attacker', {}).get('n_envs', 0)} attacker-pre lanes, "
+            f"{(prediction_settings(cfg) or {}).get('n_envs', 0)} prediction lanes, "
+            f"{(attacker_mix(cfg) or {}).get('n_envs', 0)} mixed attacker lanes; simulator {simulator(cfg)}; "
+            "one complete game per environment per cohort; "
+            f"{budget_label}; "
+            f"family {family}; output {output.resolve()}",
             force=True,
         )
-    if selected_stage(cfg):
+        progress.emit(f"Data transport: {runtime_settings(cfg)}", force=True)
+        preparation = cfg["training"].get("performance", {})
         progress.emit(
-            f"Single stage: {selected_stage(cfg)}; no automatic promotion; "
-            + ("stop only at mastery" if unlimited else "stop at mastery or budget")
-            + ", save final.zip for the next stage",
+            f"Cherry preparation: {preparation.get('cherry_prepare_workers', 0)} requested CPU workers; "
+            f"{preparation.get('cherry_oracle', 'cpu')} oracle; "
+            f"CUDA warmup {preparation.get('cherry_cuda_warmup', False)}; "
+            f"prefetch {preparation.get('cherry_prefetch', False)}; workers/scratch respect RAM/VRAM limits",
             force=True,
         )
-    progress.emit(
-        f"Agent cadence: {cfg['environment'].get('action_frequency_hz', 'derived')} Hz; "
-        f"{cfg['environment']['decision_ticks']} simulator ticks per decision; "
-        f"accounting discount {cfg['training']['gamma']} per simulation tick; "
-        "TD uses the saved forecast half-life schedule",
-        force=True,
-    )
+        passes = " ".join(f"{name} {stage_epochs(cfg, name)}" for name in SELECTABLE_STAGES)
+        progress.emit(
+            f"Policy: {cfg.get('policy', {'kind': 'flat'})}; "
+            f"passes {passes}; "
+            f"minibatch {cfg['training']['batch_size']}",
+            force=True,
+        )
+        if cfg["training"].get("peashooter_rules"):
+            progress.emit("peashooter  prioritized lanes", force=True)
+        if validation_after_stage(cfg, family):
+            probe_key = "probe_interval_games" if game_budget else "probe_interval"
+            progress.emit(
+                f"mastery every {cfg['curriculum'][probe_key]:,} "
+                f"{'games' if game_budget else 'decisions'}",
+                force=True,
+            )
+        progress.emit(
+            f"{cfg['environment'].get('action_frequency_hz', 'derived')} Hz  "
+            f"{cfg['environment']['decision_ticks']} ticks  "
+            f"discount {cfg['training']['gamma']}",
+            force=True,
+        )
     training_complete = False
     retain_weights = False
     wall_budget = RunBudget(cfg, elapsed=prior_time, started=started)
@@ -1886,20 +1914,15 @@ def train(
                 for skill in model.tile_skills.validation_skills
             }
             progress.emit(
-                f"Tile stage: {model.tile_skills.phase}; validate "
-                f"{', '.join(model.tile_skills.validation_skills)} every "
-                f"{validation_interval_games(cfg, model.tile_skills.validation_domain):,} "
-                "stage episodes at a fitted "
-                "cohort boundary; require "
-                + ", ".join(
-                    f"{skill} {wins}/{tile_validation_count(cfg, skill)}"
+                f"{model.tile_skills.phase}  "
+                f"every {validation_interval_games(cfg, model.tile_skills.validation_domain):,}  "
+                + "  ".join(
+                    (
+                        f"fully correct {wins}/{tile_validation_count(cfg, skill)}"
+                        if skill == "prediction"
+                        else f"{skill} {wins}/{tile_validation_count(cfg, skill)}"
+                    )
                     for skill, wins in requirements.items()
-                )
-                + "; "
-                + (
-                    "scenario episodes count toward the selected tile stage budget"
-                    if pre_stage(cfg)
-                    else "normal game budget remains separate"
                 ),
                 force=True,
             )

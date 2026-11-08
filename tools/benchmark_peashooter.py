@@ -1,4 +1,4 @@
-"""Frozen-policy Peashooter cohort timing, including oracle and four fitting passes."""
+"""Frozen-policy Peashooter cohort timing, including oracle and configured fitting passes."""
 
 import argparse
 import cProfile
@@ -389,7 +389,7 @@ def main():
     import psutil
     import torch
 
-    from pvz_rl.config import digest, load_config
+    from pvz_rl.config import digest, load_config, stage_epochs
     from pvz_rl.provenance import file_hash
 
     for p in psutil.process_iter(["cmdline"]):
@@ -442,7 +442,7 @@ def main():
         ]
     result = dict(
         protocol="peashooter_full_cohort_benchmark_v1",
-        optimizer_passes=0 if args.collect_only else cfg["training"]["n_epochs"],
+        optimizer_passes=0 if args.collect_only else stage_epochs(cfg, "peashooter"),
         implementation="hybrid_exact_simulation_v1",
         gpu_profile=profile_name,
         automatic_layout=args.automatic_layout,

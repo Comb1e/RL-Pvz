@@ -13,19 +13,24 @@ If the user has not declared it in advance. Ignore the existing runs by default.
 - `src/pvz_rl/data/train.toml` is the single parameter source for training and demo
   overlays. Preserve user tuning. Group stage settings under `training.cherry_bomb`,
   `cherry_bomb_obstacle`, `attacker_pre`, `prediction`, `attacker`, `peashooter` and `normal`; resolve once
-  into the runtime layout. Shared scenario sampling attempts live in `tile_scenarios`.
+  into the runtime layout. `prediction`, `cherry_bomb`, `cherry_bomb_obstacle`, `attacker_pre`,
+  `attacker`, `peashooter`, `easy`, `standard`, and `shared` each own `n_epochs`.
+  Shared scenario sampling attempts live in `tile_scenarios`.
 - Fresh policy inputs are public board facts: entity records and 18 globals.
-  The next decision also receives the previous decision's detached effect-head
-  class decisions as five encoder tokens, one per lane. A reset or a first
-  decision masks those tokens. Simulated field/probe outcomes are private
-  auxiliary targets, never observations.
+  Simulated field/probe outcomes are private auxiliary targets, never observations.
   Future spawns are suppressed inside forks; IDs, schedules, seeds and snapshots stay private.
-- Encode once per decision/fitting call: shared encoder, ten-query action decoder,
-  ten-way action head, and the action-conditioned 45-query tile decoder. The action
-  decoder reads the full board memory on every decision. Wait and an excluded
-  branch skip tile decoding. The effect head reads the played action vector, the
-  chosen tile-decoder cell, and the full board memory. An explicit Wait uses
-  action vector 0 and the learned empty tile vector. Illegal cards and cells are
+- Encode once per decision/fitting call. Prediction runs the shared encoder, the
+  effect head, and the forecast-input embeddings, then submits Wait. Placement and
+  Peashooter add the tile decoder and tile head for the supplied card. Easy,
+  standard, and shared also run the ten-query action decoder and the action head.
+  A Wait or excluded branch still skips the tile decoder.
+  Encoder memory is the global token and the entities. The effect head cross-attends
+  that memory with five learned lane queries and emits field depth, breach bin, and
+  probe depth before the action is chosen. It does not see the action, the tile, or
+  its own tokens. Detached class ids become five lane tokens placed after the global
+  token on the memory the decoders read. Nothing from this prediction is written
+  back into the encoder or kept for the next decision. Wait and an excluded
+  branch skip tile decoding. Illegal cards and cells are
   excluded by setting that score to -inf on a selection copy. The choice is not
   rewritten into Wait. Preserve the proposal for Q and teacher fitting. Later
   stages retain valid Wait references. Every tile is still scored. A plant cell
@@ -35,10 +40,11 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   the lawn is full. Cache memory within one forward only.
 - All models are outcome-only. Factual prediction heads, horizon/snapshot labels,
   losses, summaries, storage and legacy resumes are removed. Early stages use
-  `placement_outcomes`: exactly one post-proposal field/probe job per exercise,
-  including rejections; no null/Wait target or alternatives. Keep placement teachers
-  and stage weights. Train the tile decoder, tile head, and outcome head; freeze
-  the shared encoder, action decoder, action-type head, and their EMA. Early tile scores
+  `placement_outcomes`: exactly one pre-action field/probe job per exercise,
+  including rejections. The fork is action 0 on the pre-mutation root. Keep placement teachers
+  and stage weights. Train the tile decoder and tile head. Freeze the shared
+  encoder, effect head, forecast-input embeddings, action decoder, action head,
+  and their EMA. Early tile scores
   receive no outcome-summary injection.
   Reserve no Wait boundary buffers for placement exercises; charge only their
   occupied proposal packets and admitted workers to auxiliary VRAM.
@@ -60,9 +66,9 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   queued shots finish, moving mowers stop and surviving Chompers are ready.
   The real game is unchanged.
   Inference and ordinary gameplay validation compute no field/probe simulations.
-  Prediction validation computes exact private targets after the greedy proposal. Learned
-  outcome summaries retain detached tile-Q injection and its schedule.
-- `absolute-wait-trajectory-v5` follows real Waits/rejections and records guarded per-tick
+  Prediction validation compares the action-free head with one untouched fork of the
+  current frame. The greedy proposal is not an input. There is no tile-Q injection.
+- `absolute-wait-trajectory-v6` follows real Waits/rejections and records guarded per-tick
   field observations. One semantic probe belongs to each owned interval, anchored
   at the first fully settled tick after zombie clearance. Keep capturing the
   first zombie-clearance state and finish settling privately. Accepted
@@ -70,9 +76,10 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   Capture pre-spawn full-tick states before physical/RNG changes, including spawns
   that die within one decision. Finish interrupted fields from those owned roots;
   never replay borrowed prefixes. Rebase breach times and exclude penetration
-  before each decision, including within the preceding tick. A successful action's
-  target belongs to its new post-action interval. Unexecuted alternatives need
-  isolated forks. Cache entries remain exact, bounded and disposable; pending roots,
+  before each decision, including within the preceding tick. Each decision's effect
+  target is that rebased untouched interval. The post-action interval is still
+  simulated so the next decision has a baseline, and it does not supervise this head.
+  No alternative forks are submitted. Cache entries remain exact, bounded and disposable; pending roots,
   choices, row references, anchors and partial jobs survive recovery. Queue closed
   intervals independently; publish exact labels before fitting. Resource failures
   retain work. Charge capture/roots/workers/cache against the shared fork VRAM cap
@@ -108,29 +115,27 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   and in-flight refills, and commit queue ownership only after copy admission.
   Vectorized outcome gathers retain valid null/token/root loss weights.
   Collection decoder row padding never adds an action or removes a public entity.
-- Legal non-Wait proposals always receive outcome supervision. Effective Waits
-  sample alternatives with the configured probability. Two slots hold a legal
-  branch runner-up (ties by action ID) and a uniform remaining legal action;
-  keep five-slot storage with unused slots invalid. Fresh Peashooter uses zero
-  alternatives, retaining its teacher and actual-action targets. Normal stages
-  retain shared sampling.
+- Every decision receives the untouched-board outcome, including legal non-Wait
+  proposals and effective Waits. Five-slot tickets stay, and only slot 0 is valid.
+  Fresh Peashooter keeps its teacher and that same untouched target. Normal stages
+  use the same target. `extra_actions` stays 2 in configuration and is not sampled.
 - Normal cohorts jointly fit frozen-cohort n-step Double-Q targets and auxiliaries.
   Preserve economic conversion, tick discounting, rejection compaction/weighting,
-  species exploration, greedy tiles, four passes, BF16 and FP32 masters. No
-  counterfactual followers or tile-max species consistency. Forecast injection
-  is detached; potential shaping starts disabled. There is no separate private
+  species exploration, greedy tiles, that stage's `n_epochs`, BF16 and FP32 masters. No
+  counterfactual followers or tile-max species consistency. Outcome injection into
+  the tile head is removed. `injection_after_games` and `injected_n_step` stay in
+  train.toml and are not read. `n_step` and the initial discount half-life stay
+  fixed. Potential shaping starts disabled. There is no separate private
   forecast pretraining phase, sampler, graph, configuration or recovery state.
 - Main-game guarded CUDA field traces record per-tick depth before defeat and
   actual home entries after mower resolution. They contain no factual horizons or
   bite-contact targets. Resource failures preserve exact work without creating labels.
-- Preliminary stages retain automatic placement objectives. Prediction keeps
-  every parameter eligible. Later stages freeze the shared encoder. Easy also
-  trains the action decoder. Standard and shared freeze it. Placement and
-  Peashooter train the tile decoder, tile head, and outcome head. Joint stages
-  also train the
-  action head. Forecast-input embeddings stay eligible on every stage, including
-  after the shared encoder is frozen. Update EMA only for each phase's trained
-  groups and copy frozen weights onto the teacher. Demo initialization has no auxiliary loss.
+- Preliminary stages retain automatic placement objectives. Prediction trains the
+  shared encoder, the effect head, and the forecast-input embeddings. Later stages
+  freeze those three. Placement and Peashooter train the tile decoder and tile
+  head. Easy, standard, and shared train the action decoder, action head, tile
+  decoder, and tile head. Update EMA only for each phase's trained groups and
+  copy frozen weights onto the teacher. Demo initialization has no auxiliary loss.
 - Bomb/attacker stages use successful-set cross-entropy over all 45 outputs,
   including occupied cells. Stage temperature follows completed-cohort accuracy,
   fixed across passes. Peashooter uses prioritized visible-lane engine labels and
@@ -140,7 +145,7 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   Preserve existing user datasets/recordings. Retain human recording, replay
   verification and demo initialization with their demonstration objectives and
   no auxiliary supervision.
-- Only `shared_public_outcomes_q_v10` checkpoints are supported. Reject every older
+- Only `shared_public_outcomes_q_v11` checkpoints are supported. Reject every older
   checkpoint before environment/CUDA preparation for inference, resume and
   initialization; no conversions or legacy execution. New-version recovery retains
   optimizer/counters, owned roots/rows/choices, partial jobs, unpublished results
@@ -185,15 +190,18 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   requires all 200 wins and reuses the saved panel on retry. Weights-only stage
   transfers use `--init-from`; recovery retains the saved stage order.
 - Prediction uses 640 seeded, engine-validated current frames per cohort and one
-  exact target for each greedy proposal. Average all 15 known
+  exact untouched-board target per scene. Average all 15 known
   outcome terms per scene and weight scenes equally. Train the forecast path
-  without warmup, Q, or teachers. Every parameter stays eligible. Plant and dig
-  forecasts also train the tile decoder through the chosen cell. This is the
-  only stage that updates the shared encoder. Easy is the later stage that also
-  updates the action decoder. Check a
+  without warmup, Q, or teachers. Eligible parameters are the shared encoder, the
+  effect head, and the forecast-input embeddings. That forward does not call the
+  action decoder, action head, tile decoder, or tile head. Detached class ids give
+  the decoders and forecast-input no gradient from that loss. This is the only stage
+  that updates the shared encoder and the effect head. Easy, standard, and shared
+  update the action decoder. Check a
   saved 200-scene validation panel every 10,000 completed scenes after a full
   fitted cohort. Each scene passes only when every lane's field depth, breach
-  bin, and probe depth match. All 200 scenes must pass.
+  bin, and probe depth match. All 200 scenes must pass. Progress reports that
+  fully-correct scene rate.
 - Only completed episodes or prediction scenes advance budgets and validation clocks. Check at
   configured intervals after fully fitted cohorts. Entire configured cohorts must
   strictly exceed the qualification threshold for game objectives. Prediction uses
@@ -214,7 +222,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Repository `tools/bootstrap.*`, `tools/stage_game.py`                                                                                                                                   | Verified installation of the pinned engine.                                                                                                                                                                                                                                                |
 | `config.py`, `data/train.toml`, `gpu.py`                                                                                                                                                | Stage tuning, validation panels, model dimensions and device selection.                                                                                                                                                                                                                    |
-| `policy/`                                                                                                                                                                               | Shared public encoder, previous-forecast lane tokens, action decoder, conditional tile decoder, action/tile/outcome readouts, stateless runner and bounded graphs/batching.                                                                                                                 |
+| `policy/`                                                                                                                                                                               | Shared public encoder, pre-action effect head, decoder-only forecast tokens, action decoder, conditional tile decoder, action/tile/outcome readouts, stateless runner and bounded graphs/batching.                                                                                          |
 | `envs/`                                                                                                                                                                                 | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `field_tracking.py` owns guarded per-tick depth and home-entry hooks.                                                                                                                                   |
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py`, `prediction_scenarios.py`                                           | Validated automatic exercises, persistent preparation, bounded oracles, conservative attacker labels and seeded prediction frames.                                                                                                                                                         |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py`                                                                                                                           | Cohort orchestration, collection/fitting, reporting and atomic recovery.                                                                                                                                                                                                                   |
@@ -231,7 +239,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | Repository `tools/benchmark_peashooter.py`, `tools/draw_collection_process.py`                                                                                                          | Seed-matched total-time/latency sweeps, optional real-collection host/CUDA event timing and two chronological CPU/GPU timelines. Collapse loops to start/end markers; identify waits and unavailable device timing explicitly.                                                             |
 | Repository `tools/profile_training_workflow.py`                                                                                                                                         | Bounded actual-CLI startup, collection and recovery audits, or one fully fitted production cohort with CPU/CUDA trace capture. Preserve production cutoff, initialization and presentation; do not equate shortened frozen-policy benchmarks with full training.                           |
 | Repository `tools/profiling_metrics.py`, `tools/report_training_hotspots.py`                                                                                                            | Per-thread exclusive host attribution, GC pauses, calibrated stage events, bounded CUPTI/cProfile windows, per-pass losses and costs per batch/board decision. Tracing must not retain released CUDA scratch; parameter sweeps release each model's graphs before creating the next model. |
-| `presentation/`                                                                                                                                                                         | Demo recording/replay, live cohort subscriptions and retained reports. `outcome_view.py` displays proposed-action field/probe predictions; disabled effects and unknown targets are explicit. Viewers reuse timestamped episode-scoped journal predictions without model calls.            |
+| `presentation/`                                                                                                                                                                         | Demo recording/replay, live cohort subscriptions and retained reports. `outcome_view.py` shows this frame's pre-action field, breach bin, and probe when the journal recorded them; unknown targets stay blank. Viewers reuse timestamped episode-scoped journal predictions without model calls. |
 
 ## Test ownership
 

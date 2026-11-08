@@ -123,13 +123,8 @@ class PeashooterObjective:
             if features is None:
                 values = policy.fitting_tiles(obs, torch.full_like(at, branch), rows=at)
             else:
-                vectors = policy._action_vectors(memory)
-                values = policy.tile_values(
-                    features[at],
-                    action=vectors[at, branch],
-                    wait_action=vectors[at, 0],
-                    memory=(memory[0][at], memory[1][at]),
-                )
+                del memory
+                values = policy.tile_values(features[at])
             losses, correct = column_cross_entropy(
                 values,
                 preferred,

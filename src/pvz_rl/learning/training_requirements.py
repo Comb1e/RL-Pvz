@@ -3,10 +3,16 @@
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 
-from pvz_rl.config import outcome_prediction_weights, research_config, simulator, validate_config
+from pvz_rl.config import (
+    outcome_prediction_weights,
+    research_config,
+    simulator,
+    stage_epochs,
+    validate_config,
+)
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.envs.tile_scenarios import attacker_mix
-from pvz_rl.learning.curriculum import TILE_STAGES, selected_stage
+from pvz_rl.learning.curriculum import STAGES, TILE_STAGES, selected_stage
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 from pvz_rl.provenance import weight_engine_config
 
@@ -28,11 +34,29 @@ class CohortFitSchedule:
         return dict(protocol=FIT_SCHEDULE_PROTOCOL, **asdict(self))
 
 
-def fitting_schedule(cfg, cohort):
+def cohort_epoch_stage(cfg, tile_phase=None, curriculum_state=None):
+    """Stage whose fitting passes apply to this cohort."""
+    if tile_phase in TILE_STAGES:
+        return tile_phase
+    chosen = selected_stage(cfg)
+    if chosen in STAGES:
+        return chosen
+    if isinstance(curriculum_state, dict):
+        index = curriculum_state.get("stage")
+        if type(index) is int and 0 <= index < len(STAGES):
+            return STAGES[index]
+    if chosen in TILE_STAGES:
+        return chosen
+    return "easy"
+
+
+def fitting_schedule(cfg, cohort, stage=None):
     """Choose one fitting stage for an entire one-based collection cohort."""
     if type(cohort) is not int or cohort < 1:
         raise ValueError("Fitting schedule requires a positive integer cohort number")
-    return CohortFitSchedule(cohort, 1, 1, "joint", cfg["training"]["n_epochs"])
+    if stage is None:
+        stage = cohort_epoch_stage(cfg)
+    return CohortFitSchedule(cohort, 1, 1, "joint", stage_epochs(cfg, stage))
 
 
 def current_model_config(cfg):
@@ -46,7 +70,7 @@ def current_model_config(cfg):
         identity
         in {
             (
-                "shared_public_outcomes_q_v10",
+                "shared_public_outcomes_q_v11",
                 "entity_public_v4",
                 CURRENT_OBJECTIVE,
                 CURRENT_OBJECTIVE,

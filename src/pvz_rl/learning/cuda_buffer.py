@@ -30,7 +30,7 @@ from pvz_rl.learning.objective import (
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-outcome-trajectory-v8"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-outcome-trajectory-v9"
 
 
 def trajectory_dtype(cfg=None):
@@ -84,8 +84,6 @@ def trajectory_dtype(cfg=None):
         [
             ("effect_prediction", "<f2", (2, 5, 10)),
             ("effect_prediction_valid", "?"),
-            ("prior_classes", "i1", (5, 3)),
-            ("prior_valid", "?"),
             ("outcome_ready", "?"),
             ("outcome_interval", "<i8"),
         ]

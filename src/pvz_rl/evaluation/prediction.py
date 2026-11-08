@@ -1,4 +1,4 @@
-"""Frozen-policy validation of exact post-action forecasts on a saved scene panel."""
+"""Frozen-policy validation of exact pre-action forecasts on a saved scene panel."""
 
 from contextlib import closing
 from copy import deepcopy
@@ -13,7 +13,7 @@ from pvz_rl.envs.tile_scenarios import prediction_settings
 from pvz_rl.learning.deadline import check_deadline
 from pvz_rl.learning.forecast_labels import outcome_codes, scene_class_matches
 from pvz_rl.learning.forecast_objective import scene_outcome_loss
-from pvz_rl.policy.runner import PolicyRunner
+from pvz_rl.policy.two_stage_transformer import execution_scope_for
 
 
 @torch.no_grad()
@@ -23,8 +23,9 @@ def validate_prediction(cfg, model, seeds, *, deadline=None):
         raise ValueError("Prediction validation requires a complete, distinct scene panel")
     policy = model.policy
     previous_stage = getattr(policy, "forecast_stage", None)
-    previous_injection = policy.injection_enabled
-    policy.forecast_stage, policy.injection_enabled = "prediction", False
+    previous_scope = policy.execution_scope
+    policy.forecast_stage = "prediction"
+    policy.execution_scope = execution_scope_for("prediction")
     results = []
     try:
         local = deepcopy(cfg)
@@ -38,14 +39,11 @@ def validate_prediction(cfg, model, seeds, *, deadline=None):
                 slots, tile_seeds=[namespace_seed("prediction-validation", s) for s in seeds]
             )
             observation = env.features.obs_tensor
-            proposals, _, _, details = PolicyRunner(policy).decide(
-                observation, env.action_masks(), branch_usable=env.branch_availability()
-            )
-            logits = policy.effect_action_logits(proposals, details["board_memory"])
-            policy._effect_decision_cache = None
-            proposed_host = proposals.cpu().tolist()
+            policy.encode_board(observation)
+            logits = policy._effect_logits
+            proposed_host = [0] * len(seeds)
             service = env.fork_service()
-            service.begin(slots, proposals.cpu().numpy())
+            service.begin(slots)
             while True:
                 check_deadline(deadline)
                 if service.advance():
@@ -68,13 +66,13 @@ def validate_prediction(cfg, model, seeds, *, deadline=None):
                     dict(
                         seed=seed,
                         proposal=proposal,
-                        effective_action=int(proposal),
+                        effective_action=0,
                         loss=loss if isfinite(loss) else None,
                         correct_terms=int(terms),
                         win=bool(win),
                     )
                 )
     finally:
-        policy.forecast_stage, policy.injection_enabled = previous_stage, previous_injection
-        policy._effect_decision_cache = None
+        policy.forecast_stage = previous_stage
+        policy.execution_scope = previous_scope
     return results

@@ -107,7 +107,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
 
     @classmethod
     def load(cls, path, *args, **kwargs):
-        if checkpoint_metadata(path)["policy"] not in ("shared_public_outcomes_q_v10",):
+        if checkpoint_metadata(path)["policy"] not in ("shared_public_outcomes_q_v11",):
             raise ValueError("Incompatible checkpoint model family for this loader")
         model = super().load(path, *args, **kwargs)
         model.phase = CohortPhase(model.phase)
@@ -316,6 +316,8 @@ class CudaCohortLifecycle(BaseAlgorithm):
                 games=len(self._pending_episodes),
                 configured_games=cohort_envs(self.cfg, self.tile_skills.phase),
                 wins=sum(bool(item["metrics"]["win"]) for item in self._pending_episodes.values()),
+                fully_correct_scenes=self._stats.get("forecast_fully_correct_scenes"),
+                forecast_scene_count=self._stats.get("forecast_scene_count"),
                 training_steps=self.num_timesteps,
                 optimizer_step=self.optimizer_commits,
             ),
