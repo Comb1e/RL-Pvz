@@ -1,82 +1,21 @@
 """Act-time causal labels. Private fork choices never change main-game behavior."""
 
 import numpy as np
-import torch
 
-from pvz_rl.config import effect_extra_actions
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.envs.outcome_math import ABSOLUTE_SIZES, OUTCOME_SHAPE
 from pvz_rl.envs.tile_scenarios import is_placement_skill, is_single_frame_skill
-from pvz_rl.policy.sequential_q import action_parts
-
-
-def sampling_rng(model, slot, stream):
-    return np.random.default_rng(
-        np.random.SeedSequence(
-            [
-                int(model.seed or 0),
-                int(slot),
-                int(model.env._episode_serial[slot]),
-                int(model._scheduler.decisions[slot]),
-                stream,
-            ]
-        )
-    )
-
-
-def interval_alternatives(action, legal, branch, scores, rng):
-    """Two fixed slots: branch runner-up, then a uniform remaining legal action."""
-    candidates = np.flatnonzero(legal)
-    candidates = candidates[candidates != 0]
-    ranked = sorted(
-        (int(a) for a in candidates if (a - 1) // 45 + 1 == branch),
-        key=lambda a: (-float(scores[(a - 1) % 45]), a),
-    )
-    runner_up = ranked[1] if len(ranked) >= 2 and ranked[1] != action else None
-    remaining = (
-        candidates[(candidates != action) & (candidates != runner_up)]
-        if runner_up is not None
-        else candidates[candidates != action]
-    )
-    random = int(rng.choice(remaining)) if len(remaining) else None
-    return runner_up, random
 
 
 def begin_effects(model, actions, details, issued, legal):
-    env, policy = model.env, model.policy
+    del details, legal
+    env = model.env
     enabled = np.flatnonzero(issued)
     proposed = actions.detach().cpu().numpy()
-    legal = legal.cpu().numpy()
     placement = is_single_frame_skill(model.tile_skills.phase)
-    maximum = effect_extra_actions(model.cfg, model.tile_skills.phase)
+    # The effect head predicts the untouched board, so no action fork is sampled.
     effective_wait = proposed == 0
-    sampled = issued.copy() if maximum else np.zeros_like(issued)
-    if maximum:
-        probability = model.cfg["training"]["forecasts"]["wait_effect_sample_probability"]
-        for slot in enabled[effective_wait[enabled]]:
-            sampled[slot] = sampling_rng(model, slot, 0xEFF0).random() < probability
-    if sampled.any():
-        tables = details["tile_q"].float().clone()
-        branches, _ = action_parts(actions)
-        branch_legal = torch.as_tensor(
-            legal[:, 1:].reshape(-1, 9, 45).any(-1), device=policy.device
-        )
-        # An explicit Wait needs a proposal branch for near-Q alternatives.
-        # Batch that decoder work over the already encoded memory; no second encoder.
-        best_branch = (
-            details["branch_q"][:, 1:].masked_fill(~branch_legal, -torch.inf).argmax(-1) + 1
-        )
-        replacement = branches == 0
-        at = torch.nonzero(
-            replacement & branch_legal.any(-1) & torch.as_tensor(sampled, device=policy.device),
-            as_tuple=False,
-        ).flatten()
-        if len(at):
-            tables[at] = policy.conditional_tiles(
-                details["observations"], best_branch[at], rows=at, memory=details["board_memory"]
-            ).float()
-        near_branch = torch.where(replacement, best_branch, branches).cpu().numpy()
-        scores = tables.cpu().numpy()
+    sampled = np.zeros_like(issued)
     commands = np.zeros((env.num_envs, 5), np.uint16)
     valid = np.zeros((env.num_envs, 5), bool)
     jobs, shortages = [], 0
@@ -84,21 +23,7 @@ def begin_effects(model, actions, details, issued, legal):
         action = int(proposed[slot])
         if is_placement_skill(model.tile_skills.phase) and action == 0:
             raise RuntimeError("A placement exercise cannot propose Wait")
-        selected = [action, None, None]
-        if sampled[slot]:
-            selected[1:] = interval_alternatives(
-                action,
-                legal[slot],
-                int(near_branch[slot]),
-                scores[slot],
-                sampling_rng(model, slot, 0xEFFE),
-            )
-        shortages += sum(a is None for a in selected[1:]) if sampled[slot] else 0
-        for token, candidate in enumerate(selected):
-            if candidate is not None:
-                commands[slot, token], valid[slot, token] = candidate, True
-                if token and candidate and legal[slot, candidate]:
-                    jobs.append((int(slot), token))
+        commands[slot, 0], valid[slot, 0] = action, True
     from pvz_rl.envs.cuda_snapshots import download_snapshots
 
     need = (

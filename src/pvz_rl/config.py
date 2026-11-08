@@ -155,6 +155,8 @@ for _stage, _fields in _STAGE_PARAMETERS.items():
         _fields[f"{_outcome}_prediction_weight"] = (
             f"training.stage_outcome_weights.{_stage}.{_outcome}"
         )
+    if _stage != "normal":
+        _fields["n_epochs"] = f"training.stage_epochs.{_stage}"
 
 
 def absolute_outcomes(cfg):
@@ -226,6 +228,24 @@ def _resolve_training_sections(cfg):
             if path[-1] in target:
                 raise ValueError(f"Duplicate setting: training.{name}.{key} and {fields[key]}")
             target[path[-1]] = value
+    _collect_curriculum_epochs(cfg)
+
+
+def _collect_curriculum_epochs(cfg):
+    """Move easy, standard, and shared fitting passes into the stage table."""
+    stages = cfg.get("curriculum", {}).get("stages")
+    if not isinstance(stages, dict):
+        return
+    epochs = cfg.setdefault("training", {}).setdefault("stage_epochs", {})
+    for name in ("easy", "standard", "shared"):
+        stage = stages.get(name)
+        if not isinstance(stage, dict) or "n_epochs" not in stage:
+            continue
+        if name in epochs:
+            raise ValueError(
+                f"Duplicate setting: training.normal.curriculum.stages.{name}.n_epochs"
+            )
+        epochs[name] = stage.pop("n_epochs")
 
 
 def digest(value: object) -> str:
@@ -259,6 +279,25 @@ def research_config(cfg: dict) -> dict:
 
 def runtime_settings(cfg: dict) -> dict:
     return cfg["runtime"]
+
+
+def stage_epochs(cfg, stage):
+    """Fitting passes for one stage. A saved scalar still applies to every stage."""
+    from pvz_rl.learning.curriculum import SELECTABLE_STAGES
+
+    if stage not in SELECTABLE_STAGES:
+        raise ValueError(f"Unknown stage for n_epochs: {stage}")
+    training = cfg["training"]
+    table = training.get("stage_epochs")
+    if isinstance(table, dict) and stage in table:
+        value = table[stage]
+    elif type(training.get("n_epochs")) is int and not isinstance(table, dict):
+        value = training["n_epochs"]
+    else:
+        raise ValueError(f"Missing n_epochs for {stage}")
+    if type(value) is not int or isinstance(value, bool) or value < 1:
+        raise ValueError(f"{stage} n_epochs must be a positive integer")
+    return value
 
 
 def cohort_envs(cfg, skill=None):
@@ -474,7 +513,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
     if (cfg["encoding"]["version"], cfg["policy"]["kind"]) not in {
-        ("entity_public_v4", "shared_public_outcomes_q_v10"),
+        ("entity_public_v4", "shared_public_outcomes_q_v11"),
     }:
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
@@ -581,7 +620,7 @@ def validate_config(cfg: dict) -> None:
         cfg.get("encoding", {}).get("version"),
         cfg.get("policy", {}).get("kind"),
     ) in {
-        ("entity_public_v4", "shared_public_outcomes_q_v10"),
+        ("entity_public_v4", "shared_public_outcomes_q_v11"),
     }
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -1197,7 +1236,7 @@ def validate_config(cfg: dict) -> None:
             raise ValueError(f"Unsupported outcome mode for {stage}; expected {expected}")
     if forecasts.get("effect_objective") != "absolute_outcome_v4":
         raise ValueError("Training requires absolute action outcomes")
-    if forecasts.get("protocol") != "static-fork-action-outcomes-v3":
+    if forecasts.get("protocol") != "static-fork-pre-action-outcomes-v4":
         raise ValueError("Training requires the outcome-only fork protocol")
     if type(forecasts.get("enabled")) is not bool:
         raise ValueError("training.forecasts.enabled must be boolean")
@@ -1460,12 +1499,28 @@ def validate_config(cfg: dict) -> None:
         "total_games" if uses_games(cfg) else "total_steps",
         "n_envs",
         "batch_size",
-        "n_epochs",
         "eval_interval_games" if uses_games(cfg) else "eval_interval",
         "torch_threads",
     ):
         if type(train[key]) is not int or train[key] <= 0:
             raise ValueError(f"{key} must be a positive integer")
+    from pvz_rl.learning.curriculum import SELECTABLE_STAGES
+
+    epochs = train.get("stage_epochs")
+    legacy = train.get("n_epochs")
+    if epochs is None:
+        if type(legacy) is not int or isinstance(legacy, bool) or legacy < 1:
+            raise ValueError("Each stage needs its own positive n_epochs")
+    elif (
+        legacy is not None
+        or not isinstance(epochs, dict)
+        or set(epochs) != set(SELECTABLE_STAGES)
+        or any(
+            type(count) is not int or isinstance(count, bool) or count < 1
+            for count in epochs.values()
+        )
+    ):
+        raise ValueError("Each stage needs its own positive n_epochs")
     if train.get("discount_clock") != "simulation_ticks" or not 0 < train["gamma"] <= 1:
         raise ValueError("Returns require tick-based discounting with 0 < gamma <= 1")
     if train["batch_size"] > 1024:

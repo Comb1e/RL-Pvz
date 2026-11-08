@@ -1,4 +1,4 @@
-"""Shared-forward categorical fitting of exact post-action field/probe outcomes."""
+"""Shared-forward categorical fitting of the pre-action field, breach, and probe."""
 
 import numpy as np
 import torch
@@ -6,12 +6,17 @@ from torch._functorch import config as functorch_config
 
 from pvz_rl.config import forecast_forks_enabled, outcome_prediction_weights
 from pvz_rl.envs.static_fork import reference_tau
-from pvz_rl.learning.forecast_labels import effect_blocks, effect_loss_components, outcome_codes
+from pvz_rl.learning.forecast_labels import (
+    effect_blocks,
+    effect_loss_components,
+    outcome_codes,
+    scene_class_matches,
+)
 from pvz_rl.learning.forecast_metrics import categorical_histogram, reset_calibration
 
 
 def forecast_eligible(rows):
-    return rows["null_target_valid"] | rows["effect_valid"].any(-1)
+    return rows["null_target_valid"]
 
 
 def forecast_auxiliary(
@@ -41,6 +46,7 @@ def forecast_auxiliary(
     if not hasattr(policy, "_forecast_calibration"):
         reset_calibration(policy)
     brier, terms, correct = (loss.new_zeros(()) for _ in range(3))
+    scene_hits, scene_total = (loss.new_zeros(()) for _ in range(2))
     for logits, target in metric_tokens:
         for term, block in enumerate(effect_blocks(logits)):
             label = target[..., term]
@@ -53,8 +59,16 @@ def forecast_auxiliary(
             brier += ((p - expected).square().sum(-1) * known).sum()
             terms += known.sum()
             correct += ((block.argmax(-1) == label) & known).sum()
+        # Same comparison validation uses. The count is a display statistic.
+        matched = scene_class_matches(logits, target)
+        scene_hits = scene_hits + matched.all(-1).all(-1).sum()
+        scene_total = scene_total + matched.new_tensor(float(matched.shape[0]))
     metrics = torch.cat(
-        (torch.stack((loss.detach(), brier, terms, (tokens > 0).sum(), correct)), weighted.detach())
+        (
+            torch.stack((loss.detach(), brier, terms, (tokens > 0).sum(), correct)),
+            weighted.detach(),
+            torch.stack((scene_hits.detach(), scene_total.detach())),
+        )
     ).double()
     return auxiliary, metrics
 
@@ -71,64 +85,29 @@ def scene_outcome_loss(logits, targets):
 
 
 def _effect_objective(policy, observations, rows, memory, features, feature_rows, root_count):
-    """Average known terms, lanes, valid tokens and decision roots equally.
-
-    Each labeled action reads its action-decoder vector and its chosen tile-decoder
-    cell, then cross-attends the full board memory. An explicit Wait uses the
-    learned empty tile vector.
-    """
-    del observations, features, feature_rows
-    device = policy.device
-    per_root = memory[0].new_zeros((len(rows), 2), dtype=torch.float32)
-    has_null = rows["null_target_valid"]
-    null_rows = np.flatnonzero(has_null)
-    root, token = np.nonzero(
-        rows["effect_valid"] & ((rows["effect_actions"] != 0) | ~has_null[:, None])
-    )
-    actions = np.where(
-        token == 0, rows["executed_action"][root], rows["effect_actions"][root, token]
-    )
-    tokens = torch.as_tensor(has_null.astype(np.float32), device=device)
+    """One pre-action forecast per labeled decision, from the encode just run."""
+    del observations, memory, features, feature_rows
+    logits = getattr(policy, "_effect_logits", None)
+    if logits is None or logits.shape[0] != len(rows):
+        raise RuntimeError("Pre-action logits must come from this decision batch")
+    labeled = np.flatnonzero(rows["null_target_valid"])
+    per_root = logits.new_zeros((len(rows), 2), dtype=torch.float32)
+    tokens = logits.new_zeros(len(rows))
     metric_tokens = []
-    if len(null_rows) or len(root):
-        needed = np.unique(np.concatenate((null_rows, root)))
-        at = torch.as_tensor(needed, device=device, dtype=torch.long)
-        subset = (memory[0][at], memory[1][at])
-        vectors = policy.action_vectors(subset)
-        if len(null_rows):
-            pick = torch.as_tensor(np.searchsorted(needed, null_rows), device=device)
-            null_logits = policy.forecast_logits(
-                vectors[pick],
-                torch.zeros(len(null_rows), dtype=torch.long, device=device),
-                (subset[0][pick], subset[1][pick]),
-            )
-            target = torch.as_tensor(
-                outcome_codes(
-                    np.array(rows["baseline_outcomes"][null_rows]),
-                    reference_tau(policy.layout.rules),
-                ),
-                device=device,
-                dtype=torch.long,
-            )
-            per_root = per_root.index_add(
-                0,
-                torch.as_tensor(null_rows, device=device),
-                _token_loss_components(null_logits, target),
-            )
-            metric_tokens.append((null_logits, target))
-        if len(root):
-            labeled = torch.as_tensor(np.asarray(actions, dtype=np.int64), device=device)
-            pick = torch.as_tensor(np.searchsorted(needed, root), device=device)
-            predictions = policy.forecast_logits(
-                vectors[pick], labeled, (subset[0][pick], subset[1][pick])
-            )
-            targets = torch.as_tensor(
-                np.array(rows["effect_labels"][root, token]), device=device, dtype=torch.long
-            )
-            root_at = torch.as_tensor(root, device=device)
-            per_root = per_root.index_add(0, root_at, _token_loss_components(predictions, targets))
-            tokens = tokens.index_add(0, root_at, tokens.new_ones(len(root)))
-            metric_tokens.append((predictions, targets))
+    if len(labeled):
+        at = torch.as_tensor(labeled, device=logits.device, dtype=torch.long)
+        target = torch.as_tensor(
+            outcome_codes(
+                np.array(rows["baseline_outcomes"][labeled]),
+                reference_tau(policy.layout.rules),
+            ),
+            device=logits.device,
+            dtype=torch.long,
+        )
+        chosen = logits.index_select(0, at)
+        per_root = per_root.index_add(0, at, _token_loss_components(chosen, target))
+        tokens = tokens.index_add(0, at, tokens.new_ones(len(labeled)))
+        metric_tokens.append((chosen, target))
     loss = (per_root / tokens.clamp_min(1)[:, None]).sum(0) / max(1, int(root_count))
     return loss, metric_tokens, tokens
 

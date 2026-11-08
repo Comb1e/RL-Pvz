@@ -1,13 +1,14 @@
 # PVZ plant research
 
 Train a sequential Q policy against a pinned Plants vs. Zombies simulator. A
-shared Transformer encodes the public board, an action readout chooses
+shared Transformer encodes the public board. An effect head predicts this frame's
+untouched field, breach, and probe, and five detached lane tokens go to the
+action decoder and the tile decoder. An action readout then chooses
 Wait/species/Dig, and a conditional decoder scores all 45 tiles. Illegal cards
 and cells are excluded before that choice: a plant needs sun, a finished
-cooldown, and an empty cell; Dig needs a cell that already has a plant. The next
-decision reads the previous effect-head classes as five encoder tokens. Exact simulated
-post-action outcomes serve as auxiliary training targets only; validation uses
-the greedy network on the public board and those previous forecast tokens.
+cooldown, and an empty cell; Dig needs a cell that already has a plant. Exact simulated
+pre-action outcomes are auxiliary training targets. Validation uses the greedy
+network on the public board.
 
 ## Requirements
 
@@ -69,21 +70,22 @@ Each stage can start from the previous stage's weights;
   --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
-`prediction` fits the selected action's field and probe forecasts on randomized
-current frames. The live viewer labels completed scenes `scored`. An environment
-passes only when every lane's field depth, breach bin, and probe depth match.
-All 200 validation environments must pass. Prediction keeps every parameter
-eligible. Later stages freeze the shared board encoder. Easy also trains the
-action decoder. Standard and shared keep it fixed. Placement and Peashooter
-train the tile decoder with the tile and outcome heads. Joint stages also
-train the action head. The forecast reads the executed action vector, the
-chosen cell, and the full board memory. Use the prediction `final.zip` to
-initialize `cherry_bomb`.
+`prediction` fits this frame's untouched field, breach, and probe on randomized
+current frames. A scene is fully correct when every lane's field depth, breach
+bin, and probe depth match, and all 200 validation scenes must pass. The terminal
+and the report show that scene rate. The live view draws the three bands and
+hides action scores that were not recorded. Prediction trains the shared board
+encoder, the effect head, and the forecast-input embeddings, and its forward
+stops after those three. Later stages freeze those three and still run them.
+Placement and Peashooter train and run the tile decoder and tile head. Easy,
+standard, and shared also train and run the action decoder and action head. The
+forecast reads the current encoder memory before the action is chosen. Use the
+prediction `final.zip` to initialize `cherry_bomb`.
 
 Across stages, a probe starts once the field clears, queued shots fire and their
 projectiles clear, moving mowers finish, and surviving Chompers are ready. The
 static-field **H** cell is 1 when the predicted field class is home. Start fresh
-with `shared_public_outcomes_q_v10` and use its checkpoints for `--resume` and
+with `shared_public_outcomes_q_v11` and use its checkpoints for `--resume` and
 `--init-from`.
 
 `attacker` mixes the three placement exercises in shuffled 640-board cohorts
@@ -99,8 +101,8 @@ Resume an interrupted stage from its recovery checkpoint:
   --output runs\compact-stages\cherry_bomb_obstacle
 ```
 
-No seed is required; `--seed` optionally fixes initialization. Tune stages,
-loss weights and execution settings in [train.toml](src/pvz_rl/data/train.toml);
+No seed is required; `--seed` optionally fixes initialization. Tune each stage's
+fitting passes, loss weights, and execution settings in [train.toml](src/pvz_rl/data/train.toml);
 each setting is commented there. Validation uses fresh random panels after fully
 fitted cohorts. Completed runs keep portable `final.zip` weights and
 visualizations; unfinished runs keep recovery checkpoints.

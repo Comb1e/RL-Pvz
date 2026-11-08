@@ -168,48 +168,49 @@ def report_charts(segments, cfg, output, save):
             if plot_panels(records, spec, xvalue, xlabel, output, name, save, rate_fields=rates):
                 images.append((f"{title}: {heading}", name + ".png"))
 
-        behavior = [
-            (
-                "rolling_win_rate",
-                "Rolling main-game success rate",
-            ),
-            ("rolling_return", "Episode reward"),
-            ("rolling_seconds", "Episode duration (simulated seconds)"),
-            ("invalid_action_rate", "Invalid-action rate"),
-            ("rolling_agent_actions", "Accepted plant + dig actions / episode"),
-            ("rolling_first_attacker_seconds", "First sustained attacker (seconds)"),
-            ("rolling_maximum_sun", "Maximum sun / episode"),
-        ]
-        if cfg["training"]["gamma"] != 1:
-            behavior.insert(
-                2, ("rolling_discounted_return", "Simulation-time-discounted episode return")
-            )
-        if not pre:
-            behavior += [
-                ("rolling_attacker_purchases", "Sustained attackers purchased / episode"),
-                ("rolling_plant_kills", "Plant kills / episode"),
-                ("rolling_mower_kills", "Mower kills / episode"),
-                ("early_digs_per_planting", "Early digs / accepted planting"),
-            ]
-        behavior_fields = fields(behavior)
-        if pre:
-            # A one-proposal bomb board has supervised fitting, not an episode-return objective.
-            behavior_fields = [
+        if scope != "prediction":
+            behavior = [
                 (
-                    key,
-                    text,
-                    get
-                    if key in ("rolling_win_rate", "invalid_action_rate")
-                    else lambda row, get=get: get(row) if phase(row) == "peashooter" else None,
-                )
-                for key, text, get in behavior_fields
+                    "rolling_win_rate",
+                    "Rolling main-game success rate",
+                ),
+                ("rolling_return", "Episode reward"),
+                ("rolling_seconds", "Episode duration (simulated seconds)"),
+                ("invalid_action_rate", "Invalid-action rate"),
+                ("rolling_agent_actions", "Accepted plant + dig actions / episode"),
+                ("rolling_first_attacker_seconds", "First sustained attacker (seconds)"),
+                ("rolling_maximum_sun", "Maximum sun / episode"),
             ]
-        add(
-            "training",
-            "training behavior",
-            behavior_fields,
-            ("rolling_win_rate", "invalid_action_rate"),
-        )
+            if cfg["training"]["gamma"] != 1:
+                behavior.insert(
+                    2, ("rolling_discounted_return", "Simulation-time-discounted episode return")
+                )
+            if not pre:
+                behavior += [
+                    ("rolling_attacker_purchases", "Sustained attackers purchased / episode"),
+                    ("rolling_plant_kills", "Plant kills / episode"),
+                    ("rolling_mower_kills", "Mower kills / episode"),
+                    ("early_digs_per_planting", "Early digs / accepted planting"),
+                ]
+            behavior_fields = fields(behavior)
+            if pre:
+                # A one-proposal bomb board has supervised fitting, not an episode-return objective.
+                behavior_fields = [
+                    (
+                        key,
+                        text,
+                        get
+                        if key in ("rolling_win_rate", "invalid_action_rate")
+                        else lambda row, get=get: get(row) if phase(row) == "peashooter" else None,
+                    )
+                    for key, text, get in behavior_fields
+                ]
+            add(
+                "training",
+                "training behavior",
+                behavior_fields,
+                ("rolling_win_rate", "invalid_action_rate"),
+            )
 
         fitting = fields(
             [
@@ -241,12 +242,13 @@ def report_charts(segments, cfg, output, save):
         ):
             add(
                 "outcomes",
-                "post-action field and probe",
+                "outcomes",
                 fields(
                     [
+                        ("optimization.forecast_fully_correct", "Fully correct"),
                         ("optimization.effect_loss", "Outcome categorical loss"),
                         ("optimization.effect_brier", "Outcome Brier score"),
-                        ("optimization.effect_accuracy", "Outcome class accuracy"),
+                        ("optimization.effect_accuracy", "Class accuracy"),
                         (
                             "forecast_calibration.effect.classwise_ece",
                             "Outcome class calibration error",
@@ -258,7 +260,7 @@ def report_charts(segments, cfg, output, save):
                         ("optimization.total_loss", "Combined fitting loss"),
                     ]
                 ),
-                ("optimization.effect_accuracy",),
+                ("optimization.forecast_fully_correct", "optimization.effect_accuracy"),
             )
         rule_fields = fields(
             [
@@ -559,7 +561,10 @@ def report_charts(segments, cfg, output, save):
                 validation.append((label, rows))
             spec = fields(
                 [
-                    (skill, skill.replace("_", " ").title() + " validation success")
+                    (
+                        skill,
+                        "Fully correct" if skill == "prediction" else skill.replace("_", " ").title(),
+                    )
                     for skill in (LEGACY_SKILLS if scope == "pre" else (scope,))
                 ]
             )

@@ -30,7 +30,7 @@ class IntervalPhase(StrEnum):
 
 
 class WaitOutcomes:
-    protocol = "absolute-wait-trajectory-v5"
+    protocol = "absolute-wait-trajectory-v6"
 
     def __init__(self, env, buffer, state=None):
         self.env, self.buffer = env, buffer
@@ -264,14 +264,6 @@ class WaitOutcomes:
             rows["outcome_interval"][slot] = actual
             block, offset = divmod(row_index, self.buffer.block_rows)
             self.buffer.blocks[block][offset]["outcome_interval"] = actual
-            for token in np.flatnonzero(request["valid"][slot])[1:]:
-                self._enqueue(
-                    request["pre_states"][slot],
-                    row=row_index,
-                    token=int(token),
-                    action=int(request["actions"][slot, token]),
-                )
-                self.metrics["alternative_jobs"] += 1
             self.metrics["sampled_waits"] += int(
                 request["sampled"][slot] and request["effective_wait"][slot]
             )
@@ -477,39 +469,26 @@ class WaitOutcomes:
             self.auxiliary.seal("outcomes")
         if not self.advance():
             return False
-        tau, grouped = reference_tau(self.env.batch.rules), {}
+        grouped = {}
         for index, record in self.rows.items():
-            grouped.setdefault(record["null"], []).append(
-                (index, 3 if record["null"] == record["actual"] else 1)
-            )
-            if record["actual"] != record["null"]:
-                grouped.setdefault(record["actual"], []).append((index, 2))
-            if any(
-                int(token) not in record["alternatives"]
-                for token in np.flatnonzero(record["valid"])[1:]
-            ):
-                raise RuntimeError("A sampled alternative lost its exact target")
-        for identity, references in grouped.items():
-            indices, roles = np.asarray(references, np.int64).T
+            grouped.setdefault(record["null"], []).append(index)
+        for identity, indices in grouped.items():
+            indices = np.asarray(indices, np.int64)
             records = [self.rows[int(i)] for i in indices]
             targets = self.targets(
                 identity,
                 np.array([r["tick"] for r in records]),
                 np.array([r["initial"] for r in records]),
             )
-            codes = outcome_codes(targets, tau)
             blocks, offsets = np.divmod(indices, self.buffer.block_rows)
             for block in np.unique(blocks):
-                storage = self.buffer.blocks[int(block)]
-                before = (blocks == block) & ((roles & 1) != 0)
-                after = (blocks == block) & ((roles & 2) != 0)
-                storage["baseline_outcomes"][offsets[before]] = targets[before]
-                storage["effect_labels"][offsets[after], 0] = codes[after]
-        for index, record in self.rows.items():
+                chosen = blocks == block
+                self.buffer.blocks[int(block)]["baseline_outcomes"][offsets[chosen]] = targets[
+                    chosen
+                ]
+        for index in self.rows:
             block, offset = divmod(index, self.buffer.block_rows)
             row = self.buffer.blocks[block][offset]
-            for token, label in record["alternatives"].items():
-                row["effect_labels"][token] = label
             row["null_target_valid"] = True
             row["outcome_ready"] = True
         self.metrics["published_rows"] = len(self.rows)

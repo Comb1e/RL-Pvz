@@ -15,12 +15,21 @@ def board_renderer(size):
 def render_context(values=None):
     from pvz_game.rendering import RenderContext
 
+    from pvz_rl.envs.tile_scenarios import is_placement_skill
+
     values = values or {}
     outcome = values.get("outcome")
     message = values.get("message", values.get("action", ""))
-    if values.get("reward") is not None:
+    task = values.get("task")
+    reward = values.get("reward")
+    if (
+        isinstance(reward, (int, float))
+        and outcome != "scored"
+        and task != "prediction"
+        and not is_placement_skill(task)
+    ):
         message = " | ".join(
-            filter(None, (reward_label(values["reward"], values.get("reward_pending")), message))
+            filter(None, (reward_label(reward, values.get("reward_pending")), message))
         )
     return RenderContext(
         policy_id=values.get("policy_id"),
@@ -32,9 +41,10 @@ def render_context(values=None):
 
 
 def reward_label(value, pending=False):
-    """Accumulated training reward; absent on bare public snapshots."""
-    label = f"Reward {value:+.6f}" if value is not None else "Reward —"
-    return label + (" (time pending)" if pending else "")
+    """Bare signed return. Prediction and placement boards omit it."""
+    if value is None:
+        return ""
+    return f"{value:+.1f}{'~' if pending else ''}"
 
 
 def render_observation(obs, *, context=None):

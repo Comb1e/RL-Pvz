@@ -4,7 +4,7 @@ import torch
 
 from pvz_rl.envs.outcome_math import ABSOLUTE_SIZES, OUTCOME_SHAPE
 
-OUTCOME_METRIC_WIDTH = 7  # Raw loss, aggregate calibration (4), weighted field and probe.
+OUTCOME_METRIC_WIDTH = 9  # Loss, calibration (4), weighted field and probe, scene hits and scenes.
 
 
 def reset_calibration(policy):

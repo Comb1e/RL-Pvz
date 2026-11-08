@@ -19,6 +19,7 @@ from time import monotonic
 from pvz_game.config import PLANT_TYPES
 
 from pvz_rl.config import outcome_prediction_weights
+from pvz_rl.learning.curriculum import SELECTABLE_STAGES
 
 PANELS = 4
 RESULT_SECONDS = 1.0
@@ -42,11 +43,11 @@ class Activity(IntEnum):
 
 
 ACTIVITY_TEXT = {
-    Activity.STARTING: "Starting training",
-    Activity.COLLECTING: "Live training collection (sampled actions, including exploration)",
-    Activity.UPDATING: "Learner updating / preparing cohort - training boards unchanged",
-    Activity.VALIDATING: "Validation - training games paused",
-    Activity.REPORTING: "Reporting - training games paused",
+    Activity.STARTING: "Starting",
+    Activity.COLLECTING: "Collecting",
+    Activity.UPDATING: "Updating",
+    Activity.VALIDATING: "Validating",
+    Activity.REPORTING: "Reporting",
 }
 
 
@@ -223,11 +224,20 @@ def learning_settings(cfg):
                     "learning_rate",
                     "max_grad_norm",
                     "batch_size",
-                    "n_epochs",
                     "gamma",
                 )
             )
             + (f"fit_batch_groups={training['performance']['fit_batch_groups']}",),
+        ),
+        (
+            "Passes",
+            tuple(
+                f"{stage}={table[stage]}"
+                for table in (training.get("stage_epochs") or {},)
+                for stage in SELECTABLE_STAGES
+                if stage in table
+            )
+            or ((f"{training['n_epochs']}",) if "n_epochs" in training else ()),
         ),
         (
             "Outcome weights",

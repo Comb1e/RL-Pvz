@@ -133,7 +133,7 @@ def load_torch_snapshot(path):
 
 
 def protocol_for(kind):
-    if kind != "shared_public_outcomes_q_v10":
+    if kind != "shared_public_outcomes_q_v11":
         raise ValueError(
             f"Incompatible checkpoint model family: {kind}; use the bundled public model profile"
         )
@@ -170,10 +170,17 @@ def execution_config(cfg):
         "storage",
         "performance",
         "batch_size",
-        "n_epochs",
         "max_grad_norm",
     ):
         cfg["training"].setdefault(key, copy.deepcopy(defaults["training"][key]))
+    if "stage_epochs" not in cfg["training"]:
+        legacy = cfg["training"].get("n_epochs")
+        table = defaults["training"]["stage_epochs"]
+        if type(legacy) is int and not isinstance(legacy, bool) and legacy >= 1:
+            cfg["training"]["stage_epochs"] = dict.fromkeys(table, legacy)
+        else:
+            cfg["training"]["stage_epochs"] = copy.deepcopy(table)
+    cfg["training"].pop("n_epochs", None)
     for key, value in defaults["training"]["performance"].items():
         cfg["training"]["performance"].setdefault(key, copy.deepcopy(value))
     return cfg
@@ -422,7 +429,7 @@ def _inspect_completed_weights(path, *, weights_only):
 
 
 def model_class(cfg):
-    if cfg["policy"]["kind"] != "shared_public_outcomes_q_v10":
+    if cfg["policy"]["kind"] != "shared_public_outcomes_q_v11":
         raise ValueError("Retired model; use the bundled public model profile")
     from pvz_rl.learning.sequential_training import CudaSequentialQ
 

@@ -39,7 +39,7 @@ def test_cpu_agent_inference():
             species = policy.species_values(board)
             tiles = policy.conditional_tiles(board, [1])
             actions, details = policy.decide(board)
-            effect = policy.effect_action_logits(actions, details["board_memory"])
+            effect = details["effect_logits"]
         assert not hasattr(policy, "threat_head")
         assert effect.shape == (1, 5, 56) and torch.isfinite(effect).all()
         assert species.shape == (1, len(cfg["environment"]["plants"]) + 2)
@@ -71,9 +71,9 @@ def test_cuda_learning_and_checkpoint(tmp_path):
         cfg["training"]["forecasts"]["enabled"] = False
         cfg["environment"]["cutoff_seconds"] = 1
         cfg["training"].update(
-            n_envs=2, total_games=2, n_epochs=1,
-            batch_size=32, max_minutes=2
+            n_envs=2, total_games=2, batch_size=32, max_minutes=2
         )
+        cfg["training"]["stage_epochs"] = dict.fromkeys(cfg["training"]["stage_epochs"], 1)
         cfg["training"]["performance"].update(
             compile_collection=False, compile_fitting=False
         )

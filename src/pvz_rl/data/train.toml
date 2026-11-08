@@ -92,7 +92,6 @@ device = "cuda"
 max_minutes = 120
 finalization_minutes = 15
 batch_size = 1024
-n_epochs = 4 # Complete fitting passes per cohort, all using that cohort's stage.
 learning_rate = 0.0003
 max_grad_norm = 5 # Shared by autonomous training and demonstration initialization.
 eval_interval = 250000 # Used only by bounded decision-window diagnostics.
@@ -105,8 +104,8 @@ cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (n
 [training.forecasts]
 enabled = true
 supervision_version = 5 # Three outcomes per lane; previous checkpoints are incompatible.
-effect_objective = "absolute_outcome_v4" # Direct post-action outcomes.
-protocol = "static-fork-action-outcomes-v3"
+effect_objective = "absolute_outcome_v4" # Untouched pre-action field, breach, and probe.
+protocol = "static-fork-pre-action-outcomes-v4"
 probe = "conehead" # One reference threat per lane; retain damaged field-phase defenses.
 extra_actions = 2 # Branch runner-up, then one uniformly legal remaining action.
 wait_effect_sample_probability = 0.005
@@ -115,11 +114,11 @@ lanes = 1024 # Upper bound; allocate no more than the current cohort can request
 vram_mib = 1536 # Shared by physical scratch, job storage and the disposable cache.
 chunk_ticks = 1024
 warmup_games = 2048 # Completed main games; auxiliary weight ramps from zero.
-injection_after_games = 4096
+injection_after_games = 4096 # Retained; not read.
 n_step = 5
-injected_n_step = 20
+injected_n_step = 20 # Retained; not read.
 initial_discount_half_life_steps = 60
-discount_half_life_steps = 600 # Longer horizon after injection; 60 simulated seconds at 10 Hz.
+discount_half_life_steps = 600 # Retained; the half-life stays at the initial value.
 shaping_weight = 0.0 # Disabled initially. Do not use network forecasts as rewards.
 shaping_weights = [1.0, 1.0, 0.25] # Field depth, breach urgency, probe depth.
 measure_gradient_norms = true # First fitted microbatch per cohort only.
@@ -129,11 +128,12 @@ enabled = true # Automatic preliminary stages; selected normal stages skip them.
 sampling_max_attempts = 100
 
 [training.cherry_bomb]
-forecast_mode = "placement_outcomes" # Placement teacher plus one post-action field/probe target.
+n_epochs = 10 # Fitting passes per cohort. Each stage has its own.
+forecast_mode = "placement_outcomes" # Placement teacher plus one pre-action field/probe target.
 extra_actions = 0
 static_field_prediction_weight = 0.5 # Scales field depth and breach time.
 probe_prediction_weight = 0.2 # Scales probe depth; retain the shared known-term average.
-# Shared by both bomb stages except temperature and validation mastery; no exploration or search.
+# Shared by both bomb stages except temperature, mastery, and fitting passes; no exploration or search.
 n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
 probe_interval_games = 10000 # Independent clock for each bomb stage; pending probes retry first.
 validation_success_threshold = 0.95 # Cherry Bomb only: strictly exceed this rate (96/100).
@@ -152,6 +152,7 @@ oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
+n_epochs = 10
 forecast_mode = "placement_outcomes"
 extra_actions = 0
 static_field_prediction_weight = 0.5
@@ -159,6 +160,7 @@ probe_prediction_weight = 0.2
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.attacker_pre]
+n_epochs = 10
 forecast_mode = "placement_outcomes"
 extra_actions = 0
 static_field_prediction_weight = 0.5
@@ -180,6 +182,7 @@ oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown 
 oracle_vram_mib = 1024
 
 [training.prediction]
+n_epochs = 10
 forecast_mode = "prediction_only"
 extra_actions = 0
 n_envs = 640
@@ -193,6 +196,7 @@ sun = [0, 500]
 ready_probability = 0.5 # Applied independently to each card slot and mower.
 
 [training.attacker]
+n_epochs = 10
 forecast_mode = "placement_outcomes"
 extra_actions = 0
 static_field_prediction_weight = 0.5
@@ -203,11 +207,12 @@ ratios = [0.1, 0.4, 0.5] # Cherry Bomb, Cherry Bomb Obstacle, Attacker Pre.
 probe_interval_games = 10000
 
 [training.peashooter]
-forecast_mode = "action_outcomes" # Teacher plus field/probe targets.
+n_epochs = 10
+forecast_mode = "action_outcomes" # Teacher plus the untouched pre-action field/probe target.
 extra_actions = 0 # The placement teacher supplies targets; retain actual-action effects only.
 static_field_prediction_weight = 0.5
 probe_prediction_weight = 0.2
-# Independent cohort/preparation sizing; shared optimizer and fitting passes.
+# Independent cohort size, preparation, and fitting passes.
 n_envs = 128
 sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
 probe_interval_games = 2000
@@ -222,7 +227,7 @@ oracle_vram_mib = 4096 # Upper bound; actual lanes shrink to preserve profile he
 oracle_chunk_ticks = 4096
 
 [training.normal]
-forecast_mode = "action_outcomes" # Post-action field/probe targets only.
+forecast_mode = "action_outcomes" # Untouched pre-action field/probe targets.
 n_envs = 128
 static_field_prediction_weight = 0.5
 probe_prediction_weight = 0.2
@@ -247,16 +252,19 @@ intermediate_weights = [0.5, 0.5, 0.0]
 final_weights = [0.2, 0.4, 0.4]
 
 [training.normal.curriculum.stages.easy]
+n_epochs = 4 # Fitting passes per easy cohort.
 tasks = ["easy"]
 weights = [1.0]
 requirements = {easy = 100}
 
 [training.normal.curriculum.stages.standard]
+n_epochs = 4
 tasks = ["easy", "standard"]
 weights = [0.5, 0.5]
 requirements = {easy = 100, standard = 100}
 
 [training.normal.curriculum.stages.shared]
+n_epochs = 4
 tasks = ["easy", "standard", "hard"]
 weights = [0.2, 0.4, 0.4]
 requirements = {easy = 100, standard = 100, hard = 100}
@@ -336,7 +344,7 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "shared_public_outcomes_q_v10"
+kind = "shared_public_outcomes_q_v11"
 action_distribution = "sequential_q_unmasked_tiles_v2"
 shared_width = 192
 encoder_blocks = 4

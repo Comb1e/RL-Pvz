@@ -58,7 +58,6 @@ def batch_loss(
 ):
     """One encoder pass; attempted-branch Q calibration and optional exact outcome fitting."""
     from pvz_rl.learning.forecast_objective import forecast_auxiliary
-    from pvz_rl.policy.forecast_input import prior_from_rows
     from pvz_rl.policy.sequential_q import action_groups
 
     device = policy.device
@@ -66,7 +65,6 @@ def batch_loss(
     active = np.flatnonzero(rows["active"])
     if len(active) != len(rows):
         rows, observations = rows[active], observations[torch.as_tensor(active, device=device)]
-    forecast_prior = prior_from_rows(rows, device)
     plan = route_indices(rows)
     actions = torch.as_tensor(np.array(rows["action"]), device=device, dtype=torch.long)
     accepted = torch.as_tensor(np.array(rows["accepted"]), device=device, dtype=torch.bool)
@@ -84,7 +82,7 @@ def batch_loss(
     dense_species = torch.zeros((n, 10), device=device, dtype=torch.bfloat16)
     dense_tiles = torch.zeros((n, 45), device=device, dtype=torch.bfloat16)
     features = None
-    with policy.board_context(observations, prior=forecast_prior) as memory:
+    with policy.board_context(observations) as memory:
         if len(species_rows):
             # The complete board batch was encoded once, including tile-only routes.
             species = policy.action_values(memory, rows=species_rows)
@@ -105,13 +103,7 @@ def batch_loss(
             features = policy.tile_features(
                 observations, branches[tile_rows], rows=tile_rows, memory=memory
             )
-            vectors = policy._action_vectors(memory)
-            tables = policy.tile_values(
-                features,
-                action=vectors[tile_rows, branches[tile_rows]],
-                wait_action=vectors[tile_rows, 0],
-                memory=(memory[0][tile_rows], memory[1][tile_rows]),
-            )
+            tables = policy.tile_values(features)
             dense_tiles = dense_tiles.index_copy(0, tile_rows, tables)
             prediction = tables.float().gather(1, positions[tile_rows, None]).flatten()
             expected = selected_action_targets(

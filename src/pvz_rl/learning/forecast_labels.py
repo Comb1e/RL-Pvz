@@ -7,7 +7,7 @@ from torch.nn import functional as F
 from pvz_rl.envs.outcome_math import ABSOLUTE_SIZES, time_bin
 from pvz_rl.envs.outcome_math import depth_code as depth_code
 
-FORECAST_PROTOCOL = "static-fork-action-outcomes-v3"
+FORECAST_PROTOCOL = "static-fork-pre-action-outcomes-v4"
 DEPTH_CLASSES = 11
 TIME_CLASSES = 6
 EFFECT_WIDTH = 56
@@ -70,7 +70,7 @@ def depth_indicators(classes):
 
 
 def effect_forecast(logits):
-    """Post-action field/probe depth steps, in home and left-to-right column order."""
+    """Pre-action field/probe depth steps, in home and left-to-right column order."""
     field, _, probe = effect_blocks(logits)
     return torch.stack(
         (
