@@ -153,7 +153,12 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   A setup failure before any issued decision may rebuild an empty scheduler from
   the saved boards. Missing tickets after collection starts remain invalid.
 - Preserve CPU/CUDA cadence, legality, physical trajectories, reward conversion and
-  attribution agreement. Viewers/diagnostics must not affect learning.
+  attribution agreement. Viewers and diagnostics must not affect actions, rewards,
+  or any other learning value. The live gradient scale is the exception: it multiplies
+  the eligible master gradients before `max_grad_norm` and latches at the next cohort
+  begin. A checkpoint that omits the scale resumes at 1. The cohort line prints each
+  pass's unscaled gradient norm before that clip. A checkpoint that omits those norms
+  resumes and records the passes that finish after recovery.
 - Fitting encoders compile once per shape and keep that cache across cohorts and
   validation; releases free CUDA captures only. Recompile only for shape-changing
   pass fallbacks; per-cohort recompilation leaks compiler objects and slows fitting.

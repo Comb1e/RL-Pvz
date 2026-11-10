@@ -28,11 +28,9 @@ class ActionDecoder(nn.Module):
         from pvz_rl.policy.cudagraph_backend import CollectionGraphCache
 
         self.layout, self.stage = layout, "action"
-        self.width, self.token_overhead = spec["shared_width"], A.plant_types + 2
-        self.microbatch, self.token_budget = (
-            spec["encoder_microbatch"],
-            spec["encoder_token_budget"],
-        )
+        action, execution = spec["action"], spec["execution"]
+        self.width, self.token_overhead = action["width"], A.plant_types + 2
+        self.microbatch, self.token_budget = execution["microbatch"], execution["token_budget"]
         self.activation_checkpointing = self.fitting = False
         self._compiled_encode = self._fitting_backend = None
         self._compiled_shapes = {}
@@ -44,18 +42,19 @@ class ActionDecoder(nn.Module):
             None,
         )
         self.configure_collection(layout.cfg["training"]["performance"])
-        if spec["shared_width"] % spec["action_decoder_heads"]:
-            raise ValueError("shared_width must be divisible by action_decoder_heads")
+        if self.width % action["heads"]:
+            raise ValueError("policy.action.width must be divisible by policy.action.heads")
         self.action_queries = nn.Embedding(self.token_overhead, self.width)
         self.layers = nn.ModuleList(
             [
                 DecoderBlock(
                     self.width,
-                    spec["action_decoder_heads"],
-                    spec["feedforward_width"],
-                    spec["attention_query_chunk"],
+                    action["heads"],
+                    action["feedforward"],
+                    execution["query_chunk"],
+                    spec["board"]["width"],
                 )
-                for _ in range(spec["action_decoder_blocks"])
+                for _ in range(action["blocks"])
             ]
         )
         self.norm = nn.LayerNorm(self.width)

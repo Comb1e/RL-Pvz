@@ -101,7 +101,12 @@ Resume an interrupted stage from its recovery checkpoint:
   --output runs\compact-stages\cherry_bomb_obstacle
 ```
 
-No seed is required; `--seed` optionally fixes initialization. Tune each stage's
+No seed is required; `--seed` optionally fixes initialization. Start a new run:
+each width is that group's heads times `head_dim`, and a previous flat policy does
+not transfer. The live view's gradient field scales the next cohort's update and
+still clips at `max_grad_norm`. The cohort line prints each pass's gradient norm
+before that clip. A checkpoint of this model that omits the scale or those norms
+stays at 1 and records later passes. Tune each stage's
 fitting passes, loss weights, and execution settings in [train.toml](src/pvz_rl/data/train.toml);
 each setting is commented there. Validation uses fresh random panels after fully
 fitted cohorts. Completed runs keep portable `final.zip` weights and

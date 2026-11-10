@@ -96,9 +96,10 @@ class SpatialTransformer(nn.Module):
         self.layout = layout
         self.stage = stage
         self.token_overhead = 1
-        self.width = width = spec["shared_width"]
-        self.microbatch = spec["encoder_microbatch"]
-        self.token_budget = spec["encoder_token_budget"]
+        board, execution = spec["board"], spec["execution"]
+        self.width = width = board["width"]
+        self.microbatch = execution["microbatch"]
+        self.token_budget = execution["token_budget"]
         self.activation_checkpointing = False
         self.fitting = False
         self._fitting_inference_cache = CollectionGraphCache(6, 1024)
@@ -154,11 +155,11 @@ class SpatialTransformer(nn.Module):
             [
                 AttentionBlock(
                     width,
-                    spec["attention_heads"],
-                    spec["feedforward_width"],
-                    spec["attention_query_chunk"],
+                    board["heads"],
+                    board["feedforward"],
+                    execution["query_chunk"],
                 )
-                for _ in range(spec["encoder_blocks"])
+                for _ in range(board["blocks"])
             ]
         )
         self.norm = nn.LayerNorm(width)

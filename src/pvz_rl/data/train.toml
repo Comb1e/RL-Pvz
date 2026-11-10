@@ -128,7 +128,7 @@ enabled = true # Automatic preliminary stages; selected normal stages skip them.
 sampling_max_attempts = 100
 
 [training.cherry_bomb]
-n_epochs = 10 # Fitting passes per cohort. Each stage has its own.
+n_epochs = 4 # Fitting passes per cohort. Each stage has its own.
 forecast_mode = "placement_outcomes" # Placement teacher plus one pre-action field/probe target.
 extra_actions = 0
 static_field_prediction_weight = 0.5 # Scales field depth and breach time.
@@ -152,7 +152,7 @@ oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
-n_epochs = 10
+n_epochs = 6
 forecast_mode = "placement_outcomes"
 extra_actions = 0
 static_field_prediction_weight = 0.5
@@ -160,7 +160,7 @@ probe_prediction_weight = 0.2
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.attacker_pre]
-n_epochs = 10
+n_epochs =2
 forecast_mode = "placement_outcomes"
 extra_actions = 0
 static_field_prediction_weight = 0.5
@@ -182,7 +182,7 @@ oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown 
 oracle_vram_mib = 1024
 
 [training.prediction]
-n_epochs = 10
+n_epochs = 4
 forecast_mode = "prediction_only"
 extra_actions = 0
 n_envs = 640
@@ -196,7 +196,7 @@ sun = [0, 500]
 ready_probability = 0.5 # Applied independently to each card slot and mower.
 
 [training.attacker]
-n_epochs = 10
+n_epochs =2
 forecast_mode = "placement_outcomes"
 extra_actions = 0
 static_field_prediction_weight = 0.5
@@ -207,7 +207,7 @@ ratios = [0.1, 0.4, 0.5] # Cherry Bomb, Cherry Bomb Obstacle, Attacker Pre.
 probe_interval_games = 10000
 
 [training.peashooter]
-n_epochs = 10
+n_epochs = 8
 forecast_mode = "action_outcomes" # Teacher plus the untouched pre-action field/probe target.
 extra_actions = 0 # The placement teacher supplies targets; retain actual-action effects only.
 static_field_prediction_weight = 0.5
@@ -346,16 +346,27 @@ hybrid = false
 [policy]
 kind = "shared_public_outcomes_q_v11"
 action_distribution = "sequential_q_unmasked_tiles_v2"
-shared_width = 192
-encoder_blocks = 4
-tile_decoder_blocks = 2
-attention_heads = 12
-action_decoder_blocks = 2
-action_decoder_heads = 8
-feedforward_width = 768
-encoder_microbatch = 128
-attention_query_chunk = 64
-encoder_token_budget = 65536
+head_dim = 64
+
+[policy.board]
+blocks = 18
+heads = 12
+
+[policy.action]
+blocks = 9
+heads = 6
+
+[policy.tile]
+blocks = 9
+heads = 6
+
+[policy.effect]
+heads = 8
+
+[policy.execution]
+microbatch = 128
+query_chunk = 64
+token_budget = 65536
 
 [training.demo]
 passes = 40

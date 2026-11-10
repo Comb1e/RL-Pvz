@@ -118,11 +118,6 @@ def run_segments(run):
             used = recorded.setdefault(name, set())
             series[name] = [row for key, row in unique.items() if key not in used]
             used.update(unique)
-        series["hardware"] = [
-            row
-            for row in read_series(current / "hardware-metrics.jsonl", tolerate_partial_tail=True)
-            if cutoff is None or row.get("training_steps", 0) <= cutoff
-        ]
         boundary = meta.get("resume_steps")
         if (
             meta.get("resume")
@@ -161,122 +156,6 @@ def _save(fig, output, name):
         plt.close(fig)
 
 
-def _empty(ax, message="Not recorded yet"):
-    ax.text(0.5, 0.5, message, ha="center", va="center", transform=ax.transAxes)
-
-
-def hardware_panels(segments, output):
-    """Raw wall-time samples only; never infer hardware utilization from timings."""
-    rows = [
-        dict(row, session=f"{label}/{row.get('session', 'unknown')}")
-        for label, series in segments
-        for row in series["hardware"]
-    ]
-    for row in rows:
-        if row.get("fit_seconds") is None:
-            row["fit_seconds"] = row.get("update_seconds")
-    panels = (
-        (
-            "CPU load",
-            "% (process: one core = 100%)",
-            (
-                ("system_cpu_percent", "System"),
-                ("busiest_cpu_percent", "Busiest logical CPU"),
-                ("process_cpu_percent", "Training process"),
-            ),
-        ),
-        (
-            "Device-wide GPU activity",
-            "% of sampling period",
-            (("gpu_percent", "GPU busy"), ("gpu_memory_percent", "Memory-controller busy")),
-        ),
-        (
-            "Memory capacity used",
-            "MiB",
-            (("process_ram_mib", "Process RAM"), ("gpu_memory_mib", "Device VRAM")),
-        ),
-        (
-            "Device power / temperature",
-            "W / °C",
-            (("gpu_watts", "Power (W)"), ("gpu_temperature_c", "Temperature (°C)")),
-        ),
-        (
-            "Latest completed cohort",
-            "Transitions / second",
-            (("transitions_per_second", "Throughput"),),
-        ),
-        (
-            "Latest completed cohort timings",
-            "Seconds",
-            (
-                ("collection_seconds", "Collection"),
-                ("fit_seconds", "Q fitting"),
-                ("window_seconds", "Critical path"),
-            ),
-        ),
-    )
-    panels = [
-        panel
-        for panel in panels
-        if any(row.get(key) is not None for row in rows for key, _ in panel[2])
-    ]
-    if not panels:
-        return None
-    count = (len(panels) + 1) // 2
-    fig, axes = plt.subplots(count, 2, figsize=(14, count * 3.6), sharex=True, squeeze=False)
-    sessions = list(dict.fromkeys(r.get("session", "unknown") for r in rows))
-    for ax, (title, unit, fields) in zip(axes.flat, panels):
-        plotted = False
-        for session in sessions:
-            data = [r for r in rows if r.get("session", "unknown") == session]
-            x = [r["seconds"] / 60 for r in data]
-            for key, label in fields:
-                if any(r.get(key) is not None for r in data):
-                    ax.plot(
-                        x,
-                        [r.get(key) if r.get(key) is not None else float("nan") for r in data],
-                        label=label + (f" ({session[:6]})" if len(sessions) > 1 else ""),
-                        linewidth=1,
-                    )
-                    plotted = True
-            # Background spans identify training phases and evaluation periods.
-            spans = []
-            for i, row in enumerate(data):
-                phase = (
-                    row.get("activity") if row.get("activity") != "training" else row.get("phase")
-                )
-                if not spans or spans[-1][2] != phase:
-                    spans.append([x[i], x[i], phase])
-                spans[-1][1] = x[i + 1] if i + 1 < len(x) else x[i]
-            for start, end, phase in spans:
-                color = {
-                    "warmup": "#d8e8f6",
-                    "collect": "#d8e8f6",
-                    "fit": "#e2f0df",
-                    "formal": "#e2f0df",
-                    "validation": "#ffe3a5",
-                    "reporting": "#eaddef",
-                }.get(phase)
-                if color:
-                    ax.axvspan(start, end, color=color, alpha=0.3, linewidth=0)
-        if plotted:
-            ax.legend(fontsize=8)
-        else:
-            _empty(
-                ax, "Hardware samples unavailable; historical utilization cannot be reconstructed"
-            )
-        ax.set(title=title, ylabel=unit, xlabel="Elapsed wall time within session (minutes)")
-        ax.grid(alpha=0.2)
-    fig.suptitle(
-        "Hardware telemetry • blue: collection • green: fitting • purple: reporting • amber: validation",
-        fontsize=11,
-    )
-    for ax in list(axes.flat)[len(panels) :]:
-        ax.set_visible(False)
-    _save(fig, output, "hardware")
-    return ("Hardware utilization (device-wide GPU)", "hardware.png")
-
-
 def build_run_report(run, cfg=None):
     run = Path(run).resolve()
     meta = read_json(run / "metadata.json", {})
@@ -285,10 +164,6 @@ def build_run_report(run, cfg=None):
     output.mkdir(parents=True, exist_ok=True)
     segments = run_segments(run)
     images = report_charts(segments, cfg, output, _save)
-    if any(series["hardware"] for _, series in segments):
-        hardware = hardware_panels(segments, output)
-        if hardware:
-            images.append(hardware)
     metrics = [row for _, series in segments for row in series["training-metrics"]]
 
     status = {**(metrics[-1] if metrics else {}), **read_json(run / "status.json", {})}

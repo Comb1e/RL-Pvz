@@ -8,12 +8,12 @@ from pvz_rl.policy.entity_attention import AttentionBlock, SpatialTransformer, s
 
 
 class DecoderBlock(nn.Module):
-    def __init__(self, width, heads, feedforward, query_chunk):
+    def __init__(self, width, heads, feedforward, query_chunk, memory_width):
         super().__init__()
         self.self_attention = AttentionBlock(width, heads, feedforward, query_chunk)
-        self.query_norm, self.memory_norm = nn.LayerNorm(width), nn.LayerNorm(width)
+        self.query_norm, self.memory_norm = nn.LayerNorm(width), nn.LayerNorm(memory_width)
         self.query = nn.Linear(width, width)
-        self.key_value = nn.Linear(width, width * 2)
+        self.key_value = nn.Linear(memory_width, width * 2)
         self.output = nn.Linear(width, width)
         self.heads = heads
 
@@ -84,11 +84,9 @@ class TileDecoder(nn.Module):
         from pvz_rl.policy.cudagraph_backend import CollectionGraphCache
 
         self.layout, self.stage = layout, "tile"
-        self.width, self.token_overhead = spec["shared_width"], 45
-        self.microbatch, self.token_budget = (
-            spec["encoder_microbatch"],
-            spec["encoder_token_budget"],
-        )
+        tile, execution = spec["tile"], spec["execution"]
+        self.width, self.token_overhead = tile["width"], 45
+        self.microbatch, self.token_budget = execution["microbatch"], execution["token_budget"]
         self.activation_checkpointing = self.fitting = False
         self._compiled_encode = self._fitting_backend = None
         self._compiled_shapes = {}
@@ -122,11 +120,12 @@ class TileDecoder(nn.Module):
             [
                 DecoderBlock(
                     self.width,
-                    spec["attention_heads"],
-                    spec["feedforward_width"],
-                    spec["attention_query_chunk"],
+                    tile["heads"],
+                    tile["feedforward"],
+                    execution["query_chunk"],
+                    spec["board"]["width"],
                 )
-                for _ in range(spec["tile_decoder_blocks"])
+                for _ in range(tile["blocks"])
             ]
         )
         self.norm = nn.LayerNorm(self.width)

@@ -229,18 +229,12 @@ def transfer_protocol(cfg, condition="masked"):
             )
         },
         "policy": {
-            k: p[k]
-            for k in (
-                "kind",
-                "shared_width",
-                "encoder_blocks",
-                "tile_decoder_blocks",
-                "attention_heads",
-                "action_decoder_blocks",
-                "action_decoder_heads",
-                "feedforward_width",
-            )
-            if k in p
+            "kind": p["kind"],
+            "head_dim": p["head_dim"],
+            "board": dict(p["board"]),
+            "action": dict(p["action"]),
+            "tile": dict(p["tile"]),
+            "effect": dict(p["effect"]),
         },
         "method": cfg["training"]["method"],
         "return": [cfg["training"]["gamma"], cfg["training"]["discount_clock"]],

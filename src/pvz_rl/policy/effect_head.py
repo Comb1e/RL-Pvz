@@ -13,18 +13,21 @@ class EffectHead(nn.Module):
     chosen cell, or these outputs.
     """
 
-    def __init__(self, width, effect_width, heads, query_chunk):
+    def __init__(self, query_width, memory_width, effect_width, heads, query_chunk):
         super().__init__()
-        if width % heads:
-            raise ValueError("shared_width must be divisible by effect attention heads")
+        if query_width % heads:
+            raise ValueError("policy.effect.width must be divisible by policy.effect.heads")
         self.heads, self.query_chunk = heads, query_chunk
         self.effect_width = effect_width
-        self.lane_queries = nn.Embedding(5, width)
-        self.query_norm, self.memory_norm = nn.LayerNorm(width), nn.LayerNorm(width)
-        self.query = nn.Linear(width, width)
-        self.key_value = nn.Linear(width, width * 2)
-        self.output = nn.Linear(width, width)
-        self.mlp = nn.Sequential(nn.Linear(width, width), nn.GELU(), nn.Linear(width, effect_width))
+        self.lane_queries = nn.Embedding(5, query_width)
+        self.query_norm = nn.LayerNorm(query_width)
+        self.memory_norm = nn.LayerNorm(memory_width)
+        self.query = nn.Linear(query_width, query_width)
+        self.key_value = nn.Linear(memory_width, query_width * 2)
+        self.output = nn.Linear(query_width, query_width)
+        self.mlp = nn.Sequential(
+            nn.Linear(query_width, query_width), nn.GELU(), nn.Linear(query_width, effect_width)
+        )
 
     def forward(self, memory, valid):
         if memory.ndim != 3 or valid.shape != memory.shape[:2]:

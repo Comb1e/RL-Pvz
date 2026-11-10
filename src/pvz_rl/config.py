@@ -754,39 +754,53 @@ def validate_config(cfg: dict) -> None:
     if type(cfg["encoding"].get("max_entities")) is not int or cfg["encoding"]["max_entities"] < 5:
         raise ValueError("encoding.max_entities must be an integer of at least 5")
     policy = cfg["policy"]
-    model_settings = {
-        "shared_width",
-        "encoder_blocks",
-        "tile_decoder_blocks",
-        "attention_heads",
-        "action_decoder_blocks",
-        "action_decoder_heads",
-        "feedforward_width",
+    required = {
+        "board": ("blocks", "heads"),
+        "action": ("blocks", "heads"),
+        "tile": ("blocks", "heads"),
+        "effect": ("heads",),
+        "execution": ("microbatch", "query_chunk", "token_budget"),
     }
-    execution_settings = (
-        "encoder_microbatch",
-        "attention_query_chunk",
-        "encoder_token_budget",
-    )
-    if set(policy) != set(model_settings) | set(execution_settings) | {
-        "kind",
-        "action_distribution",
-    }:
+    optional = {
+        "board": {"feedforward", "width"},
+        "action": {"feedforward", "width"},
+        "tile": {"feedforward", "width"},
+        "effect": {"width"},
+        "execution": set(),
+    }
+    if set(policy) != {"kind", "action_distribution", "head_dim", *required}:
         raise ValueError(
             "policy must contain only the stateless two-stage model and execution settings"
         )
     if policy["action_distribution"] != "sequential_q_unmasked_tiles_v2":
         raise ValueError("Unsupported sequential action-value distribution")
-    for key in (
-        *model_settings,
-        *execution_settings,
-    ):
-        if type(policy.get(key)) is not int or policy[key] < 1:
-            raise ValueError(f"policy.{key} must be a positive integer")
-    if policy["shared_width"] % policy["attention_heads"]:
-        raise ValueError("shared_width must be divisible by attention_heads")
-    if policy["shared_width"] % policy["action_decoder_heads"]:
-        raise ValueError("shared_width must be divisible by action_decoder_heads")
+    head_dim = policy.get("head_dim")
+    if type(head_dim) is not int or head_dim < 1:
+        raise ValueError("policy.head_dim must be a positive integer")
+    for name, keys in required.items():
+        group = policy[name]
+        allowed = set(keys) | optional[name]
+        if not isinstance(group, dict) or not set(keys) <= set(group) <= allowed:
+            listed = ", ".join(keys)
+            if optional[name]:
+                listed += ", and optional " + ", ".join(sorted(optional[name]))
+            raise ValueError(f"policy.{name} must contain only {listed}")
+        for key in keys:
+            if type(group[key]) is not int or group[key] < 1:
+                raise ValueError(f"policy.{name}.{key} must be a positive integer")
+        if name == "execution":
+            continue
+        if "feedforward" in group:
+            if type(group["feedforward"]) is not int or group["feedforward"] < 1:
+                raise ValueError(f"policy.{name}.feedforward must be a positive integer")
+        elif name != "effect":
+            group["feedforward"] = 4 * head_dim
+        width = group["heads"] * head_dim
+        if "width" in group and (type(group["width"]) is not int or group["width"] != width):
+            raise ValueError(
+                f"policy.{name}.width must equal policy.{name}.heads * policy.head_dim"
+            )
+        group["width"] = width
     optional = {"attacker": attacker_mix(cfg), "prediction": prediction_settings(cfg)}
     stages = tuple(
         stage for stage in _STAGE_PARAMETERS if stage not in optional or optional[stage] is not None
