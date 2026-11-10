@@ -2,7 +2,7 @@
 
 import copy
 
-ENCODER_SETTINGS = ("encoder_microbatch", "encoder_token_budget", "attention_query_chunk")
+POLICY_EXECUTION_GROUP = "execution"
 PERFORMANCE_SETTINGS = (
     "interval_backend",
     "auxiliary_hybrid",
@@ -56,8 +56,9 @@ PERFORMANCE_SETTINGS = (
 
 def refresh_performance(cfg, current):
     result = copy.deepcopy(cfg)
-    for key in ENCODER_SETTINGS:
-        result["policy"][key] = current["policy"][key]
+    result["policy"][POLICY_EXECUTION_GROUP] = copy.deepcopy(
+        current["policy"][POLICY_EXECUTION_GROUP]
+    )
     target = result["training"].setdefault("performance", {})
     for key in PERFORMANCE_SETTINGS:
         if key == "interval_backend" and key not in target:
@@ -72,8 +73,7 @@ def refresh_performance(cfg, current):
 
 def without_performance(cfg):
     result = copy.deepcopy(cfg)
-    for key in ENCODER_SETTINGS:
-        result["policy"].pop(key, None)
+    result["policy"].pop(POLICY_EXECUTION_GROUP, None)
     result["training"].pop("performance", None)
     return result
 

@@ -1,7 +1,8 @@
 """Bounded, CPU-only presentation of selected live training games.
 
 Viewer code owns no model or simulator; it renders public snapshots. Selection
-uses a private RNG; commands change subscriptions, never game state.
+uses a private RNG. Commands change subscriptions, never game state. The
+gradient-scale shares are the one training value the view can write.
 """
 
 from __future__ import annotations
@@ -184,6 +185,82 @@ class Selection:
                     panel.frame = dict(frame, reward=reward, reward_pending=False)
 
 
+def accept_grad_scale(value):
+    """Finite positive coefficient. Booleans and other types stay rejected."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    value = float(value)
+    if not isfinite(value) or value <= 0.0:
+        return None
+    return value
+
+
+def coerce_grad_scale(value):
+    """Parse a typed field, then apply the same acceptance rule."""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            value = float(text)
+        except ValueError:
+            return None
+    return accept_grad_scale(value)
+
+
+def format_grad_scale(value):
+    accepted = accept_grad_scale(value)
+    return "1" if accepted is None else format(accepted, ".6g")
+
+
+def restored_grad_scale(extra, key):
+    """Missing or rejected recovery fields stay at 1."""
+    if not isinstance(extra, dict):
+        return 1.0
+    accepted = accept_grad_scale(extra.get(key, 1.0))
+    return 1.0 if accepted is None else accepted
+
+
+def pull_shared_grad_scale(requested, current):
+    """Read the view's pending coefficient without changing the active scale."""
+    with requested.get_lock():
+        accepted = accept_grad_scale(requested.value)
+        if accepted is None:
+            requested.value = float(current)
+            return float(current)
+        return accepted
+
+
+def latch_shared_grad_scale(requested, active, current):
+    """Copy the pending coefficient onto the scale this cohort will use."""
+    with requested.get_lock():
+        accepted = accept_grad_scale(requested.value)
+        if accepted is None:
+            accepted = float(current)
+            requested.value = accepted
+        active.value = float(accepted)
+        return accepted
+
+
+def publish_shared_grad_scale(requested, active, requested_value, active_value):
+    """Restore both shares from checkpoint state."""
+    with requested.get_lock():
+        requested.value = float(requested_value)
+        active.value = float(active_value)
+
+
+def read_shared_grad_scale(requested, active):
+    """Pending coefficient, then the scale already in force."""
+    if requested is None and active is None:
+        return 1.0, 1.0
+    if requested is None:
+        return 1.0, float(active.value)
+    with requested.get_lock():
+        pending = float(requested.value)
+        current = float(active.value) if active is not None else 1.0
+        return pending, current
+
+
 def offer_latest(queue, item):
     """Never wait for a slow renderer. Terminal panels also persist in the sender."""
     try:
@@ -286,6 +363,8 @@ class LiveSession:
         self.closed = ctx.Event()
         self.ready = ctx.Event()
         self.activity = ctx.Value("i", int(Activity.STARTING))
+        self.grad_scale_requested = ctx.Value("d", 1.0)
+        self.grad_scale_active = ctx.Value("d", 1.0)
         # A requested nonzero port is retained until the web child binds. A
         # zero value preserves the existing ephemeral-port behavior.
         self.web_port = ctx.Value("i", int(settings.get("viewer_port", 0)))
@@ -311,6 +390,8 @@ class LiveSession:
                 count,
                 learning_settings(cfg) if cfg is not None else (),
                 self.web_port,
+                self.grad_scale_requested,
+                self.grad_scale_active,
             ),
             name="pvz-live-view",
             daemon=True,
@@ -366,6 +447,19 @@ class LiveSession:
             else:
                 changed = self.selection.switch(*command) or changed
         return changed
+
+    def pull_grad_scale(self, current):
+        return pull_shared_grad_scale(self.grad_scale_requested, current)
+
+    def latch_grad_scale(self, current):
+        return latch_shared_grad_scale(
+            self.grad_scale_requested, self.grad_scale_active, current
+        )
+
+    def publish_grad_scale(self, requested, active):
+        publish_shared_grad_scale(
+            self.grad_scale_requested, self.grad_scale_active, requested, active
+        )
 
     def publish(self, *, force=False):
         if not self.enabled or not self.ready.is_set():

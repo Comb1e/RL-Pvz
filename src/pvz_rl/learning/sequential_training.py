@@ -1,6 +1,7 @@
 """Stateless two-stage fitting on the shared CUDA cohort lifecycle."""
 
 import copy
+import math
 from contextlib import closing
 from dataclasses import replace
 from time import perf_counter
@@ -75,6 +76,34 @@ from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
 from pvz_rl.policy.runner import PolicyRunner
 from pvz_rl.policy.sequential_q import action_parts
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy, execution_scope_for
+from pvz_rl.presentation.live_view import restored_grad_scale
+
+
+def scale_then_clip(parameters, scale, max_norm):
+    """Multiply master gradients, then clip. Scale 1 leaves the clip unchanged."""
+    parameters = list(parameters)
+    scale = float(scale)
+    if scale != 1.0:
+        for parameter in parameters:
+            gradient = parameter.grad
+            if gradient is not None:
+                gradient.mul_(scale)
+    return torch.nn.utils.clip_grad_norm_(parameters, max_norm, error_if_nonfinite=True)
+
+
+def restored_grad_norms(extra):
+    """Pass norms already measured. A checkpoint without them starts empty."""
+    saved = extra.get("grad_norms_before_clip") if isinstance(extra, dict) else None
+    if not isinstance(saved, (list, tuple)):
+        return []
+    norms = []
+    for item in saved:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            continue
+        number = float(item)
+        if math.isfinite(number):
+            norms.append(number)
+    return norms
 
 
 def joint_fitting_stage(cfg, curriculum_state):
@@ -144,6 +173,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._passivity_requested = passivity_settings(self.cfg)
         if not hasattr(self, "_passivity_active"):
             self._passivity_active = None
+        if not hasattr(self, "_grad_scale_requested"):
+            self._grad_scale_requested = 1.0
+        if not hasattr(self, "_grad_scale_active"):
+            self._grad_scale_active = 1.0
+        if not hasattr(self, "_pass_grad_norms"):
+            self._pass_grad_norms = []
 
     def refresh_passivity(self, cfg):
         """Apply only the requested residual-sun settings at a cohort boundary."""
@@ -245,7 +280,44 @@ class CudaSequentialQ(CudaCohortLifecycle):
             return False
         return True
 
+    def _grad_scale_session(self):
+        viewer = getattr(getattr(self, "env", None), "live_view", None)
+        session = getattr(viewer, "session", None)
+        if session is None or not hasattr(session, "grad_scale_requested"):
+            return None
+        return session
+
+    def _pull_grad_scale(self):
+        """Update the pending coefficient. The open cohort keeps its latched scale."""
+        session = self._grad_scale_session()
+        if session is not None:
+            self._grad_scale_requested = session.pull_grad_scale(self._grad_scale_requested)
+
+    def _latch_grad_scale(self):
+        session = self._grad_scale_session()
+        if session is None:
+            self._grad_scale_active = self._grad_scale_requested
+            return
+        self._grad_scale_requested = session.latch_grad_scale(self._grad_scale_requested)
+        self._grad_scale_active = self._grad_scale_requested
+
+    def _publish_grad_scale(self):
+        session = self._grad_scale_session()
+        if session is not None:
+            session.publish_grad_scale(self._grad_scale_requested, self._grad_scale_active)
+
+    def publish_restored_grad_scale(self):
+        """Write a completed restore into the view. A fresh run leaves the shares alone."""
+        if not getattr(self, "_grad_scale_restored", False):
+            return
+        self._publish_grad_scale()
+        self._grad_scale_restored = False
+
     def _begin(self, callback):
+        # The cohort that is about to open takes the pending scale. An open
+        # cohort never reaches this copy.
+        self._latch_grad_scale()
+        self._pass_grad_norms = []
         # A restored cohort keeps the buffer configuration it was collected
         # with. New buffers receive the current requested reward settings.
         self.cfg["reward"]["passivity"] = copy.deepcopy(self._passivity_requested)
@@ -268,8 +340,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             for encoder in self._teacher.encoders:
                 encoder.release_fitting()
         for encoder in self.policy.encoders:
-            encoder.microbatch = self.cfg["policy"]["encoder_microbatch"]
-            encoder.token_budget = self.cfg["policy"]["encoder_token_budget"]
+            encoder.microbatch = self.cfg["policy"]["execution"]["microbatch"]
+            encoder.token_budget = self.cfg["policy"]["execution"]["token_budget"]
             encoder.activation_checkpointing = False
         torch.cuda.empty_cache()
         self.env.cp.get_default_memory_pool().free_all_blocks()
@@ -300,6 +372,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             wait_exploration_commitments=0,
             passivity_requested=copy.deepcopy(self._passivity_requested),
             passivity_active=copy.deepcopy(self._passivity_active),
+            grad_scale_requested=self._grad_scale_requested,
+            grad_scale_active=self._grad_scale_active,
             **exploration_status(self),
         )
         self._buffer.exploration = dict(
@@ -991,23 +1065,25 @@ class CudaSequentialQ(CudaCohortLifecycle):
             getattr(self, "execution_state", {}).get("requested_precision")
             != cfg["training"]["performance"].get("fit_precision", "bf16_master")
             or previous["training"].get("performance") != cfg["training"].get("performance")
-            or previous["policy"]["encoder_microbatch"] != cfg["policy"]["encoder_microbatch"]
-            or previous["policy"]["encoder_token_budget"] != cfg["policy"]["encoder_token_budget"]
+            or previous["policy"]["execution"]["microbatch"]
+            != cfg["policy"]["execution"]["microbatch"]
+            or previous["policy"]["execution"]["token_budget"]
+            != cfg["policy"]["execution"]["token_budget"]
             or previous["training"].get("performance", {}).get("fit_batch_groups", 1)
             != cfg["training"].get("performance", {}).get("fit_batch_groups", 1)
         ):
             self._reset_execution()
         for encoder in self.policy.encoders:
-            encoder.token_budget = cfg["policy"]["encoder_token_budget"]
+            encoder.token_budget = cfg["policy"]["execution"]["token_budget"]
             if self.phase != CohortPhase.FIT:
-                encoder.microbatch = cfg["policy"]["encoder_microbatch"]
+                encoder.microbatch = cfg["policy"]["execution"]["microbatch"]
             encoder.configure_collection(self.cfg["training"]["performance"])
         if getattr(self, "_teacher", None) is not None:
             for encoder in self._teacher.encoders:
                 encoder.configure_collection(self.cfg["training"]["performance"])
         for encoder in self.policy.encoders:
             for layer in encoder.layers:
-                layer.query_chunk = cfg["policy"]["attention_query_chunk"]
+                layer.query_chunk = cfg["policy"]["execution"]["query_chunk"]
 
     def _drain(self):
         iterator = getattr(self, "_batch_iterator", None)
@@ -1312,6 +1388,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if viewer is not None and viewer.session.enabled:
             viewer.poll()
             viewer.session.publish()
+        self._pull_grad_scale()
         if self._fit_epoch >= self.total_fit_passes:
             self._phase(CohortPhase.SYNCHRONIZE, callback)
             return
@@ -1328,10 +1405,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             if not torch.isfinite(self._pass_metrics).all():
                 raise FloatingPointError("Non-finite two-stage Q loss")
             parameters = self.policy.master_parameters(self.fitting_parameter_stage)
+            scale = float(self._grad_scale_active)
             try:
-                norm = torch.nn.utils.clip_grad_norm_(
-                    parameters, self.max_grad_norm, error_if_nonfinite=True
-                )
+                norm = scale_then_clip(parameters, scale, self.max_grad_norm)
             except RuntimeError as exc:
                 if "non-finite" not in str(exc):
                     raise
@@ -1353,8 +1429,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._stats[f"{phase_key}_fit_examples"] += self._cached_fit_examples
             self._fit_epoch += 1
             self._close_batches()
-            self.logger.record("train/q_grad_norm", float(norm))
-            self._stats["q_grad_norm"] = float(norm)
+            raw_norm = float(norm) if scale == 1.0 else float(norm) / scale
+            self.logger.record("train/q_grad_norm", raw_norm)
+            self.logger.record("train/grad_scale", scale)
+            self._stats["q_grad_norm"] = raw_norm
+            self._stats["grad_scale"] = scale
+            self._pass_grad_norms.append(raw_norm)
         else:
             rows, observations, *metadata = item
             self.policy.set_training_mode(True)
@@ -1443,7 +1523,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         requested = np.flatnonzero(rows["active"] & rows["branch_usable"] & (rows["action"] > 0))
         at = torch.as_tensor(requested, device=self.device)
         features = next(self.policy.parameters()).new_zeros(
-            (len(rows), 45, self.cfg["policy"]["shared_width"])
+            (len(rows), 45, self.cfg["policy"]["tile"]["width"])
         )
         with self.policy.board_context(observations) as memory:
             if len(at):
@@ -1625,6 +1705,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def save(self, *args, **kwargs):
         with atomic_transition():
+            self._pull_grad_scale()
             self._drain()
             if self.phase == CohortPhase.FIT:
                 self._close_batches()
@@ -1651,6 +1732,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
         except BaseException:
             self.runtime_state = original
             raise
+        # training.py publishes after this returns, once the live view exists.
+        self._grad_scale_restored = True
 
     def _restore_runtime_payload(self):
         extra = self.runtime_state
@@ -1768,6 +1851,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             else passivity_settings(self.cfg)
         )
         self._passivity_active = copy.deepcopy(extra.get("passivity_active")) if extra else None
+        self._grad_scale_requested = restored_grad_scale(extra, "grad_scale_requested")
+        self._grad_scale_active = restored_grad_scale(extra, "grad_scale_active")
+        self._pass_grad_norms = restored_grad_norms(extra)
         if self._buffer is not None and self._buffer.cfg != self.cfg:
             from pvz_rl.learning.training_requirements import resume_protocol
 
@@ -1861,8 +1947,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             for network in (self.policy, getattr(self, "_teacher", None)):
                 if network is not None:
                     for encoder in network.encoders:
-                        encoder.microbatch = self.cfg["policy"]["encoder_microbatch"]
-                        encoder.token_budget = self.cfg["policy"]["encoder_token_budget"]
+                        encoder.microbatch = self.cfg["policy"]["execution"]["microbatch"]
+                        encoder.token_budget = self.cfg["policy"]["execution"]["token_budget"]
                         encoder.activation_checkpointing = False
 
     def _extra_runtime(self):
@@ -1905,6 +1991,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
             peashooter_teacher=self._peashooter_teacher.snapshot()
             if getattr(self, "_peashooter_teacher", None)
             else None,
+            grad_scale_requested=float(getattr(self, "_grad_scale_requested", 1.0)),
+            grad_scale_active=float(getattr(self, "_grad_scale_active", 1.0)),
+            grad_norms_before_clip=list(getattr(self, "_pass_grad_norms", ())),
         )
         if getattr(self, "_teacher", None) is None:
             return skills

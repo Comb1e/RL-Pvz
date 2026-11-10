@@ -181,6 +181,90 @@ def _mark(surface, font, origin, color, text, branch_id):
         surface.blit(label, (origin[0] + 16, origin[1]))
 
 
+def open_grad_field(renderers):
+    from .live_view import format_grad_scale, read_shared_grad_scale
+
+    pending, _active = read_shared_grad_scale(
+        renderers.get("grad_requested"), renderers.get("grad_active")
+    )
+    renderers["grad_open"] = True
+    renderers["grad_text"] = format_grad_scale(pending)
+    renderers["grad_invalid"] = False
+
+
+def submit_grad_field(renderers):
+    from .live_view import coerce_grad_scale, format_grad_scale
+
+    share = renderers.get("grad_requested")
+    accepted = coerce_grad_scale(renderers.get("grad_text", ""))
+    if accepted is None or share is None:
+        renderers["grad_invalid"] = True
+        return
+    with share.get_lock():
+        share.value = accepted
+    renderers["grad_open"] = False
+    renderers["grad_invalid"] = False
+    renderers["grad_text"] = format_grad_scale(accepted)
+
+
+def edit_grad_field(renderers, event):
+    import pygame
+
+    if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+        submit_grad_field(renderers)
+        return
+    if event.key == pygame.K_ESCAPE:
+        renderers["grad_open"] = False
+        renderers["grad_invalid"] = False
+        return
+    text = renderers.get("grad_text", "")
+    if event.key == pygame.K_BACKSPACE:
+        renderers["grad_text"] = text[:-1]
+        renderers["grad_invalid"] = False
+        return
+    character = event.unicode
+    if character.isdigit() or (character == "." and "." not in text):
+        renderers["grad_text"] = text + character
+        renderers["grad_invalid"] = False
+
+
+def draw_grad_scale(surface, font, renderers, origin):
+    """Field, accepted next value, then the scale in force."""
+    import pygame
+
+    from .live_view import format_grad_scale, read_shared_grad_scale
+
+    pending, current = read_shared_grad_scale(
+        renderers.get("grad_requested"), renderers.get("grad_active")
+    )
+    buttons = []
+    x, y = origin
+    glyph = font.render(
+        "g", True, (232, 214, 140) if renderers.get("grad_open") else (216, 226, 212)
+    )
+    rect = glyph.get_rect(topleft=(x, y))
+    surface.blit(glyph, rect)
+    buttons.append((rect.inflate(8, 6), None, ("grad", None)))
+    x = rect.right + 10
+    if renderers.get("grad_open"):
+        box = pygame.Rect(x, y - 2, 76, font.get_height() + 4)
+        color = (176, 92, 84) if renderers.get("grad_invalid") else (214, 222, 214)
+        pygame.draw.rect(surface, (18, 32, 28), box)
+        pygame.draw.rect(surface, color, box, 1)
+        shown = font.render(renderers.get("grad_text", ""), True, (232, 237, 226))
+        clip = surface.get_clip()
+        surface.set_clip(box.inflate(-4, -2))
+        surface.blit(shown, (box.x + 4, box.y + 1))
+        surface.set_clip(clip)
+        x = box.right + 8
+    pending_label = font.render(format_grad_scale(pending), True, (232, 237, 226))
+    surface.blit(pending_label, (x, y))
+    x += pending_label.get_width() + 10
+    active_label = font.render(format_grad_scale(current), True, (138, 163, 146))
+    surface.blit(active_label, (x, y))
+    return buttons
+
+
 def draw_view(surface, packets, activity, *, renderers, boards, pending=(), count=128):
     import pygame
     from pvz_game.rendering import BoardRenderer
@@ -208,8 +292,12 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
         if key not in valid:
             del browse[key]
     buttons = []
-    surface.blit(
-        small.render(ACTIVITY_TEXT[Activity(activity)], True, (225, 237, 226)), (12, 8)
+    activity_label = small.render(ACTIVITY_TEXT[Activity(activity)], True, (225, 237, 226))
+    surface.blit(activity_label, (12, 8))
+    buttons.extend(
+        draw_grad_scale(
+            surface, small, renderers, (12 + activity_label.get_width() + 16, 8)
+        )
     )
     if renderers.get("learning_settings"):
         mark = "v" if renderers.get("show_settings") else ">"
@@ -408,10 +496,12 @@ def viewer_main(
     count,
     settings=(),
     port_value=None,
+    grad_requested=None,
+    grad_active=None,
 ):
     import pygame
 
-    from .live_view import RESULT_SECONDS, UI_FPS
+    from .live_view import RESULT_SECONDS, UI_FPS, read_shared_grad_scale
 
     try:
         pygame.display.init()
@@ -424,6 +514,8 @@ def viewer_main(
         clock = pygame.time.Clock()
         packets, buttons, renderers, boards, pending, results = [], [], {}, {}, {}, {}
         renderers["learning_settings"] = settings
+        renderers["grad_requested"] = grad_requested
+        renderers["grad_active"] = grad_active
         fullscreen = False
         dirty, displayed_activity = True, None
 
@@ -452,8 +544,12 @@ def viewer_main(
                     boards.clear()
                     dirty = True
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
+                    if renderers.get("grad_open"):
+                        edit_grad_field(renderers, event)
+                    elif event.key == pygame.K_ESCAPE:
                         renderers["focus"] = None
+                    elif event.key == pygame.K_g:
+                        open_grad_field(renderers)
                     elif event.key == pygame.K_F11:
                         fullscreen = not fullscreen
                         screen = pygame.display.set_mode(
@@ -503,6 +599,14 @@ def viewer_main(
                         if not rect.collidepoint(event.pos):
                             continue
                         operation, generation, *extra = target
+                        if operation == "grad":
+                            if renderers.get("grad_open"):
+                                renderers["grad_open"] = False
+                                renderers["grad_invalid"] = False
+                            else:
+                                open_grad_field(renderers)
+                            dirty = True
+                            break
                         if operation == "settings":
                             renderers["show_settings"] = not renderers.get("show_settings", False)
                             dirty = True
@@ -574,6 +678,12 @@ def viewer_main(
                         state.sent = monotonic()
                     except Full:
                         pass
+            shown = read_shared_grad_scale(
+                renderers.get("grad_requested"), renderers.get("grad_active")
+            )
+            if renderers.get("grad_shown") != shown:
+                renderers["grad_shown"] = shown
+                dirty = True
             if dirty or activity.value != displayed_activity:
                 buttons = draw_view(
                     screen,

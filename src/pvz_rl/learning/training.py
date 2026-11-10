@@ -160,6 +160,37 @@ def seconds_text(value):
     return "n/a" if value is None or not math.isfinite(value) else f"{value:.0f}s"
 
 
+def grad_norm_text(values):
+    """Format unscaled master-gradient norms from before the clip."""
+    if isinstance(values, bool) or not isinstance(values, (int, float, list, tuple)):
+        return ""
+    if isinstance(values, (int, float)):
+        values = (values,)
+    parts = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        number = float(value)
+        if math.isfinite(number):
+            parts.append(format(number, ".4g"))
+    return f"grad {' '.join(parts)}" if parts else ""
+
+
+def current_grad_norms(model):
+    """Norms for the open cohort, or the last fitted cohort when none are open."""
+    values = getattr(model, "_pass_grad_norms", None)
+    if values:
+        return list(values)
+    metrics = getattr(model, "cohort_metrics", None) or {}
+    saved = metrics.get("grad_norms_before_clip")
+    if isinstance(saved, (list, tuple)) and saved:
+        return list(saved)
+    scalar = metrics.get("q_grad_norm")
+    if scalar is None:
+        scalar = (getattr(model, "_stats", None) or {}).get("q_grad_norm")
+    return [] if scalar is None else [scalar]
+
+
 def progress_unit(phase):
     """Collection noun for one environment: a scene, a board, or a game."""
     if phase == "prediction":
@@ -635,6 +666,7 @@ class ResearchCallback(BaseCallback):
         if row["target_games"] is not None:
             budget += f"/{row['target_games']:,}"
         step = optimizer_step(model)
+        norms = current_grad_norms(model)
         parts = [
             f"{skill} {self.model.tile_skills.progress:,} {unit}s"
             if self.model.tile_skills.active
@@ -652,6 +684,7 @@ class ResearchCallback(BaseCallback):
             + " fit "
             + seconds_text(row["last_optimization_seconds"]),
             f"step {step:,}",
+            grad_norm_text(norms[-1] if norms else None),
         ]
         change = (
             phase,
@@ -815,6 +848,8 @@ class ResearchCallback(BaseCallback):
             self.sync_curriculum()
         self.progress.phase(Phase.COLLECTING)
         self.log_progress(force=True)
+        if hasattr(self.model, "publish_restored_grad_scale"):
+            self.model.publish_restored_grad_scale()
 
     def _on_step(self):
         self.observe_collection_progress()
@@ -1379,11 +1414,21 @@ class ResearchCallback(BaseCallback):
         tile_only = cohort.get("tile_only_optimizer_steps", 0)
         joint = cohort.get("joint_optimizer_steps", 0)
         split = f"  {tile_only} tile-only  {joint} joint" if tile_only or joint else ""
+        grad = grad_norm_text(current_grad_norms(self.model))
         self.progress.emit(
-            f"cohort {self.model._n_updates}  {cohort.get('q_optimizer_steps', 0)} passes{split}  "
-            f"fit {cohort['fit_seconds']:.1f}s  collect {cohort['collection_seconds']:.1f}s  "
-            f"{cohort['transitions_per_second']:,.0f}/s  "
-            f"step {optimizer_step(self.model):,}  {self.cohort_text()}",
+            "  ".join(
+                part
+                for part in (
+                    f"cohort {self.model._n_updates}  "
+                    f"{cohort.get('q_optimizer_steps', 0)} passes{split}",
+                    grad,
+                    f"fit {cohort['fit_seconds']:.1f}s  collect {cohort['collection_seconds']:.1f}s",
+                    f"{cohort['transitions_per_second']:,.0f}/s",
+                    f"step {optimizer_step(self.model):,}",
+                    self.cohort_text(),
+                )
+                if part
+            ),
             force=True,
         )
         write_json(self.output / "status.json", self.snapshot())
@@ -1987,6 +2032,8 @@ def train(
             # Recover an interrupted final evaluation without collecting extra data.
             if model.runtime_state:
                 model._restore_runtime()
+            if hasattr(model, "publish_restored_grad_scale"):
+                model.publish_restored_grad_scale()
             callback.init_callback(model)
             callback.last_updates = model._n_updates
             callback.initial_steps = model.num_timesteps

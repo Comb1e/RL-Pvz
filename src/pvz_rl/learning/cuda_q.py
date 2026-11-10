@@ -345,6 +345,9 @@ class CudaCohortLifecycle(BaseAlgorithm):
             "transitions_per_second": transitions / max(elapsed, 1e-9),
             "transitions": transitions,
             "peak_cuda_memory_bytes": torch.cuda.max_memory_allocated(self.device),
+            "grad_norms_before_clip": [
+                float(value) for value in (getattr(self, "_pass_grad_norms", ()) or ())
+            ],
         }
         for key, value in self._stats.items():
             self.logger.record("train/" + key, value)

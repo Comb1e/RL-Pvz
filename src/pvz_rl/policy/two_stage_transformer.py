@@ -61,16 +61,21 @@ class TwoStageTransformerPolicy(nn.Module):
         self.board_encoder = SpatialTransformer(self.layout, spec, "board")
         self.tile_decoder = TileDecoder(self.layout, spec)
         self.action_decoder = ActionDecoder(self.layout, spec)
-        width = spec["shared_width"]
-        self.forecast_input = ForecastInput(width)
-        self.species_head = nn.Sequential(nn.Linear(width, 128), nn.ReLU(), nn.Linear(128, 1))
+        board_width = spec["board"]["width"]
+        action_width = spec["action"]["width"]
+        tile_width = spec["tile"]["width"]
+        self.forecast_input = ForecastInput(board_width)
+        self.species_head = nn.Sequential(
+            nn.Linear(action_width, 128), nn.ReLU(), nn.Linear(128, 1)
+        )
         self.species_bias = nn.Parameter(torch.zeros(self.action_decoder.token_overhead))
-        self.tile_head = nn.Sequential(nn.Linear(width, 128), nn.ReLU(), nn.Linear(128, 1))
+        self.tile_head = nn.Sequential(nn.Linear(tile_width, 128), nn.ReLU(), nn.Linear(128, 1))
         self.effect_head = EffectHead(
-            width,
+            spec["effect"]["width"],
+            board_width,
             self.effect_width,
-            spec["action_decoder_heads"],
-            spec["attention_query_chunk"],
+            spec["effect"]["heads"],
+            spec["execution"]["query_chunk"],
         )
         self._master_parameters = []
         self._master_names = []

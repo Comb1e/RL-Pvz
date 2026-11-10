@@ -13,7 +13,7 @@ from zipfile import ZipFile
 import torch
 
 from pvz_rl.config import digest, load_config, training_env_capacity, validate_config
-from pvz_rl.learning.performance import ENCODER_SETTINGS, refresh_performance
+from pvz_rl.learning.performance import POLICY_EXECUTION_GROUP, refresh_performance
 from pvz_rl.learning.training_requirements import (
     FIT_SCHEDULE_PROTOCOL,
     current_model_config,
@@ -162,8 +162,9 @@ def execution_config(cfg):
     """Fill optional execution settings; never replace recorded protocol parameters."""
     cfg = copy.deepcopy(cfg)
     defaults = load_config()
-    for key in ENCODER_SETTINGS:
-        cfg["policy"].setdefault(key, copy.deepcopy(defaults["policy"][key]))
+    cfg["policy"].setdefault(
+        POLICY_EXECUTION_GROUP, copy.deepcopy(defaults["policy"][POLICY_EXECUTION_GROUP])
+    )
     for key in ("logging", "visualization", "runtime", "simulation"):
         cfg.setdefault(key, copy.deepcopy(defaults[key]))
     for key in (

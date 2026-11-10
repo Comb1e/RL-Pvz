@@ -30,11 +30,9 @@ class ActiveBatchPlan:
         if microbatch is None or token_budget is None:
             from pvz_rl.config import load_config
 
-            settings = load_config()["policy"]
-            microbatch = settings["encoder_microbatch"] if microbatch is None else microbatch
-            token_budget = (
-                settings["encoder_token_budget"] if token_budget is None else token_budget
-            )
+            settings = load_config()["policy"]["execution"]
+            microbatch = settings["microbatch"] if microbatch is None else microbatch
+            token_budget = settings["token_budget"] if token_budget is None else token_budget
         active = np.asarray(active, dtype=bool)
         counts = np.asarray(counts, dtype=np.int64)
         if active.ndim != 1 or counts.shape != active.shape or np.any(counts < 0):

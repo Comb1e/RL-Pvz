@@ -51,9 +51,9 @@ def apply_gpu_profile(cfg, name="auto", *, device=None, path=None):
     allowed = {"device_names", "status", "policy", "performance", "torch_threads"}
     if set(profile) - allowed:
         raise ValueError("GPU profiles may contain only execution settings and match metadata")
-    from pvz_rl.learning.performance import ENCODER_SETTINGS, PERFORMANCE_SETTINGS
+    from pvz_rl.learning.performance import PERFORMANCE_SETTINGS, POLICY_EXECUTION_GROUP
 
-    if set(profile.get("policy", {})) - set(ENCODER_SETTINGS):
+    if set(profile.get("policy", {})) - {POLICY_EXECUTION_GROUP}:
         raise ValueError("GPU profile cannot change the model architecture")
     if set(profile.get("performance", {})) - set(PERFORMANCE_SETTINGS):
         raise ValueError("GPU profile contains unsupported execution settings")
