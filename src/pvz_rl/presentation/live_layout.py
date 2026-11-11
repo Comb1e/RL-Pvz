@@ -262,7 +262,34 @@ def draw_grad_scale(surface, font, renderers, origin):
     x += pending_label.get_width() + 10
     active_label = font.render(format_grad_scale(current), True, (138, 163, 146))
     surface.blit(active_label, (x, y))
-    return buttons
+    return buttons, x + active_label.get_width()
+
+
+def toggle_lr_restart(renderers):
+    from .live_view import toggle_shared_lr_restart
+
+    share = renderers.get("lr_requested")
+    if share is not None:
+        toggle_shared_lr_restart(share)
+
+
+def draw_lr_restart(surface, font, renderers, origin):
+    """One mark: dim idle, bright armed, gold while the high rate is in force."""
+    from .live_view import read_shared_lr_restart
+
+    requested, active = read_shared_lr_restart(
+        renderers.get("lr_requested"), renderers.get("lr_active")
+    )
+    if active:
+        color = (232, 196, 96)
+    elif requested:
+        color = (232, 237, 226)
+    else:
+        color = (120, 132, 124)
+    glyph = font.render("3×", True, color)
+    rect = glyph.get_rect(topleft=origin)
+    surface.blit(glyph, rect)
+    return [(rect.inflate(8, 6), None, ("restart", None))]
 
 
 def draw_view(surface, packets, activity, *, renderers, boards, pending=(), count=128):
@@ -294,11 +321,11 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
     buttons = []
     activity_label = small.render(ACTIVITY_TEXT[Activity(activity)], True, (225, 237, 226))
     surface.blit(activity_label, (12, 8))
-    buttons.extend(
-        draw_grad_scale(
-            surface, small, renderers, (12 + activity_label.get_width() + 16, 8)
-        )
+    grad_buttons, grad_right = draw_grad_scale(
+        surface, small, renderers, (12 + activity_label.get_width() + 16, 8)
     )
+    buttons.extend(grad_buttons)
+    buttons.extend(draw_lr_restart(surface, small, renderers, (grad_right + 16, 8)))
     if renderers.get("learning_settings"):
         mark = "v" if renderers.get("show_settings") else ">"
         glyph = small.render(mark, True, (216, 226, 212))
@@ -498,10 +525,17 @@ def viewer_main(
     port_value=None,
     grad_requested=None,
     grad_active=None,
+    lr_requested=None,
+    lr_active=None,
 ):
     import pygame
 
-    from .live_view import RESULT_SECONDS, UI_FPS, read_shared_grad_scale
+    from .live_view import (
+        RESULT_SECONDS,
+        UI_FPS,
+        read_shared_grad_scale,
+        read_shared_lr_restart,
+    )
 
     try:
         pygame.display.init()
@@ -516,6 +550,8 @@ def viewer_main(
         renderers["learning_settings"] = settings
         renderers["grad_requested"] = grad_requested
         renderers["grad_active"] = grad_active
+        renderers["lr_requested"] = lr_requested
+        renderers["lr_active"] = lr_active
         fullscreen = False
         dirty, displayed_activity = True, None
 
@@ -550,6 +586,8 @@ def viewer_main(
                         renderers["focus"] = None
                     elif event.key == pygame.K_g:
                         open_grad_field(renderers)
+                    elif event.key == pygame.K_r:
+                        toggle_lr_restart(renderers)
                     elif event.key == pygame.K_F11:
                         fullscreen = not fullscreen
                         screen = pygame.display.set_mode(
@@ -605,6 +643,10 @@ def viewer_main(
                                 renderers["grad_invalid"] = False
                             else:
                                 open_grad_field(renderers)
+                            dirty = True
+                            break
+                        if operation == "restart":
+                            toggle_lr_restart(renderers)
                             dirty = True
                             break
                         if operation == "settings":
@@ -683,6 +725,12 @@ def viewer_main(
             )
             if renderers.get("grad_shown") != shown:
                 renderers["grad_shown"] = shown
+                dirty = True
+            restart = read_shared_lr_restart(
+                renderers.get("lr_requested"), renderers.get("lr_active")
+            )
+            if renderers.get("lr_shown") != restart:
+                renderers["lr_shown"] = restart
                 dirty = True
             if dirty or activity.value != displayed_activity:
                 buttons = draw_view(

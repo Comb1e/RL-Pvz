@@ -12,6 +12,7 @@ from time import sleep
 
 import numpy as np
 
+from pvz_rl.jsonl_log import jsonl_series
 from pvz_rl.learning.objective import COMPONENTS, raw_rewards, training_rewards
 
 LABELS = ("Terminal + time", "Asset changes/losses", "Damage", "Blocking", "Produced sun", "Mowers")
@@ -28,8 +29,13 @@ def read_json(path):
             sleep(0.05 * (attempt + 1))
 
 
-def snapshot_lines(path, notes):
-    """Bound reads to the opened file's initial size; ignore an unfinished tail."""
+def snapshot_lines(path, notes, *, partial="note"):
+    """Bound reads to the opened file's initial size.
+
+    ``partial="note"`` ignores an unfinished final line. ``partial="raise"``
+    rejects one in a closed JSONL part.
+    """
+    path = Path(path)
     if not path.exists():
         notes.append(f"{path.name} is not available yet.")
         return
@@ -40,6 +46,10 @@ def snapshot_lines(path, notes):
             line = stream.readline(limit - stream.tell())
             line_number += 1
             if not line.endswith(b"\n"):
+                if partial == "raise":
+                    raise ValueError(
+                        f"Unfinished line in closed JSONL part {path.name}:{line_number}"
+                    )
                 notes.append(f"Ignored unfinished final line in {path.name}:{line_number}.")
                 break
             if line.strip():
@@ -47,14 +57,24 @@ def snapshot_lines(path, notes):
 
 
 def snapshot_rows(path, notes):
-    for number, line in snapshot_lines(path, notes):
-        try:
-            row = json.loads(line)
-        except (ValueError, UnicodeDecodeError) as exc:
-            raise ValueError(f"Invalid complete JSON record at {path}:{number}") from exc
-        if not isinstance(row, dict):
-            raise ValueError(f"Expected a JSON object at {path}:{number}")
-        yield number, row
+    parts = jsonl_series(path)
+    if not parts:
+        notes.append(f"{Path(path).name} is not available yet.")
+        return
+    last = parts[-1]
+    for part in parts:
+        mode = "note" if part == last else "raise"
+        for number, line in snapshot_lines(part, notes, partial=mode):
+            try:
+                row = json.loads(line)
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise ValueError(f"Invalid complete JSON record at {part}:{number}") from exc
+            if not isinstance(row, dict):
+                raise ValueError(f"Expected a JSON object at {part}:{number}")
+            label = part.name
+            if part.parent.name != Path(path).parent.name:
+                label = f"{part.parent.name}/{part.name}"
+            yield f"{label}:{number}", row
 
 
 def metric_cohort(row):
@@ -63,7 +83,7 @@ def metric_cohort(row):
 
 def select_records(folder, cohort, notes):
     metric, metric_line, recent = None, None, deque(maxlen=5)
-    for number, row in snapshot_rows(folder / "training-metrics.jsonl", notes):
+    for label, row in snapshot_rows(folder / "training-metrics.jsonl", notes):
         identity = metric_cohort(row)
         if not isinstance(identity, int) or identity > cohort:
             continue
@@ -71,12 +91,12 @@ def select_records(folder, cohort, notes):
             recent.pop()
         recent.append(row)
         if identity == cohort:
-            metric, metric_line = row, number
+            metric, metric_line = row, label
     episodes, duplicate_count = {}, 0
-    for number, row in snapshot_rows(folder / "training-episodes.jsonl", notes):
+    for label, row in snapshot_rows(folder / "training-episodes.jsonl", notes):
         match = re.fullmatch(r"cohort:(\d+):slot:(\d+)", str(row.get("record_id", "")))
         if match is None:
-            raise ValueError(f"Unrecognized episode record_id at training-episodes.jsonl:{number}")
+            raise ValueError(f"Unrecognized episode record_id at {label}")
         # Episode IDs use the pre-commit, zero-based cohort counter.
         if int(match[1]) + 1 != cohort:
             continue
@@ -191,7 +211,7 @@ def build_report(folder, cohort):
     status_path = folder / "status.json"
     status = read_json(status_path) if status_path.exists() else {}
     summary = metric.get("cohort", {}) if metric else {}
-    source = f"training-metrics.jsonl:{metric_line}" if metric else None
+    source = metric_line if metric else None
     if not metric and metric_cohort(status) == cohort:
         summary, source = status["cohort"], "status.json (matching cohort summary)"
     if not episodes and not summary:

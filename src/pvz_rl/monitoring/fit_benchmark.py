@@ -14,7 +14,7 @@ from pvz_rl.learning.action_routing import classify_actions, workload_counts
 from pvz_rl.learning.batch_transport import BatchPrefetch, FittingSpool
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
 from pvz_rl.learning.flat_q import CohortCoefficients, batch_loss
-from pvz_rl.learning.training_requirements import fitting_schedule
+from pvz_rl.learning.training_requirements import fitting_schedule, fixed_passes
 from pvz_rl.monitoring.entity_benchmark import observation
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
@@ -164,7 +164,7 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None,
                     "cuda",
                     cfg["training"]["objective"]["accepted_outcome_share"],
                 )
-                total_passes = schedule.passes
+                total_passes = fixed_passes(schedule)
 
                 def passes():
                     for _ in range(total_passes):

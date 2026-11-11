@@ -16,6 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
+from pvz_rl.jsonl_log import jsonl_series, read_jsonl_series
+
 
 def reference_class(revision):
     code = subprocess.check_output(
@@ -248,14 +250,14 @@ def cohort(args):
 
                 def capture(path, **kwargs):
                     captured["status"] = json.loads((path / "status.json").read_text())
-                    captured["cohorts"] = [
-                        json.loads(s)
-                        for s in (path / "training-metrics.jsonl").read_text().splitlines()
-                    ]
-                    captured["episodes"] = [
-                        json.loads(s)
-                        for s in (path / "training-episodes.jsonl").read_text().splitlines()
-                    ]
+                    metrics = path / "training-metrics.jsonl"
+                    episodes = path / "training-episodes.jsonl"
+                    if not jsonl_series(metrics):
+                        raise FileNotFoundError(metrics)
+                    if not jsonl_series(episodes):
+                        raise FileNotFoundError(episodes)
+                    captured["cohorts"] = read_jsonl_series(metrics)
+                    captured["episodes"] = read_jsonl_series(episodes)
                     with zipfile.ZipFile(path / "final.zip") as archive:
                         weights = torch.load(
                             io.BytesIO(archive.read("policy.pth")),

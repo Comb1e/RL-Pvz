@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 
 from pvz_rl.config import output_settings
 from pvz_rl.evaluation.runner import evaluate
+from pvz_rl.jsonl_log import read_jsonl_series
 from pvz_rl.learning.curriculum import TILE_STAGES, pre_stage
 from pvz_rl.learning.deadline import BudgetExpired, check_deadline
 from pvz_rl.learning.tile_curriculum import required_validation_wins, tile_validation_count
@@ -56,21 +57,7 @@ def read_json(path, default=None):
 
 
 def read_series(path, *, tolerate_partial_tail=False):
-    path = Path(path)
-    if not path.exists():
-        return []
-    with path.open(encoding="utf-8") as stream:
-        lines = stream.readlines()
-    rows = []
-    for index, line in enumerate(lines):
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError:
-            if not (tolerate_partial_tail and index == len(lines) - 1 and not line.endswith("\n")):
-                raise
-    return rows
+    return read_jsonl_series(path, tolerate_partial_tail=tolerate_partial_tail)
 
 
 def run_segments(run):

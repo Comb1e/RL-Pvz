@@ -7,6 +7,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from pvz_rl.config import digest
+from pvz_rl.jsonl_log import series_dir
 
 WEIGHTS_PROTOCOL = "pvz-rl/autonomous-weights-v1"
 AUTONOMOUS_OUTPUTS = (
@@ -93,4 +94,12 @@ def finish_autonomous_run(output):
         temporary.replace(final)
     finally:
         temporary.unlink(missing_ok=True)
-    retain_files(output, [final], candidates=[output / name for name in AUTONOMOUS_OUTPUTS])
+    candidates = []
+    for name in AUTONOMOUS_OUTPUTS:
+        path = output / name
+        if name.endswith(".jsonl"):
+            folder = series_dir(path)
+            if folder.is_dir() or folder.is_symlink():
+                candidates.append(folder)
+        candidates.append(path)
+    retain_files(output, [final], candidates=candidates)

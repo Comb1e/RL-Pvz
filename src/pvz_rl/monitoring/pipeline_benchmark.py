@@ -20,6 +20,7 @@ from stable_baselines3.common.logger import configure
 
 from pvz_rl.config import digest, load_config
 from pvz_rl.gpu import apply_gpu_profile, select_gpu
+from pvz_rl.jsonl_log import jsonl_series
 from pvz_rl.learning.cohort import CohortPhase, atomic_transition
 from pvz_rl.learning.training import build_model, initial_weights, vector_env
 from pvz_rl.monitoring.collection_benchmark import release_benchmark_model
@@ -34,15 +35,21 @@ class PipelineCallback(BaseCallback):
 
 def hardware_summary(path, total_mib):
     """Streaming whole-device headroom and host peaks; no CUDA polling in collection."""
+    parts = jsonl_series(path)
+    if not parts:
+        raise FileNotFoundError(path)
     peak_gpu = peak_rss = 0.0
     samples = 0
-    with Path(path).open(encoding="utf-8") as stream:
-        for line in stream:
-            row = json.loads(line)
-            if row.get("gpu_memory_mib") is not None:
-                peak_gpu = max(peak_gpu, row["gpu_memory_mib"])
-                samples += 1
-            peak_rss = max(peak_rss, row.get("process_ram_mib") or 0)
+    for part in parts:
+        with part.open(encoding="utf-8") as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if row.get("gpu_memory_mib") is not None:
+                    peak_gpu = max(peak_gpu, row["gpu_memory_mib"])
+                    samples += 1
+                peak_rss = max(peak_rss, row.get("process_ram_mib") or 0)
     return dict(
         sampled_peak_gpu_mib=peak_gpu if samples else None,
         sampled_peak_rss_mib=peak_rss,

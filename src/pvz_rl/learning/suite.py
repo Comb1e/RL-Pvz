@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pvz_rl.config import digest, research_config, seed_values
 from pvz_rl.evaluation.runner import BASELINES, evaluate
+from pvz_rl.jsonl_log import jsonl_series
 from pvz_rl.learning.training import load_policy, train
 from pvz_rl.learning.training_requirements import TRAINING_CONDITIONS, require_cuda_training
 from pvz_rl.presentation.reporting import make_report
@@ -148,7 +149,7 @@ def run_suite(cfg, output, *, resume=False):
         curves = [
             Path(attempts[-1]) / "learning-curve.jsonl"
             for attempts in journal["jobs"].values()
-            if (Path(attempts[-1]) / "learning-curve.jsonl").exists()
+            if jsonl_series(Path(attempts[-1]) / "learning-curve.jsonl")
         ]
         reports = journal.setdefault("reports", [])
         report_dir = output / f"report-{len(reports) + 1}"

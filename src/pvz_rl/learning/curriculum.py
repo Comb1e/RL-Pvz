@@ -14,6 +14,18 @@ TILE_STAGES = (
     "peashooter",
 )
 SELECTABLE_STAGES = (*TILE_STAGES, *STAGES)
+# These five score every cohort, then take one fitting pass. A saved
+# cohorts_per_epoch still selects its memorized cohort. Peashooter and the
+# three normal stages keep a fixed pass count. Ten full cohorts on the stage
+# bar leave the stage.
+COHORT_PERFECT_STAGES = (
+    "prediction",
+    "cherry_bomb",
+    "cherry_bomb_obstacle",
+    "attacker_pre",
+    "attacker",
+)
+FIXED_EPOCH_STAGES = ("peashooter", *STAGES)
 
 
 def pre_stage(cfg):
@@ -54,6 +66,11 @@ class CurriculumState:
     last_probe_games: int = 0
     completed_stage_games: int = 0
     mastered: bool = False
+    cohort_streak: int = 0
+
+    def __post_init__(self):
+        if type(self.cohort_streak) is not int or self.cohort_streak < 0:
+            raise ValueError("Invalid curriculum cohort streak")
 
     def completed_episode(self, episode_stage):
         if episode_stage == self.stage:
@@ -123,6 +140,25 @@ class CurriculumState:
             self.completed_stage_games = 0
             return True
         return False
+
+    def note_full_cohort(self, passed):
+        """Count one finished full cohort. A short cohort does not call this."""
+        if self.mastered:
+            return
+        self.cohort_streak = self.cohort_streak + 1 if passed else 0
+
+    def advance_after_streak(self, limit, *, advance=True):
+        """Leave this stage once ``note_full_cohort`` has reached ``limit``."""
+        if self.mastered or type(self.cohort_streak) is not int or self.cohort_streak < limit:
+            return False
+        self.cohort_streak = 0
+        if not advance or self.stage == len(STAGES) - 1:
+            self.mastered = True
+            return False
+        self.stage += 1
+        self.consecutive_passes = 0
+        self.completed_stage_games = 0
+        return True
 
 
 def stage_distribution(cfg, stage):

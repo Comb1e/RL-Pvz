@@ -17,6 +17,7 @@ from pvz_rl.config import (
     forecast_forks_enabled,
     forecast_mode,
     forecast_version,
+    learning_rate_restart,
     outcome_prediction_weights,
     passivity_settings,
     plant_wait_check_ticks,
@@ -47,9 +48,16 @@ from pvz_rl.learning.bomb_objective import (
     bomb_set_cross_entropy,
 )
 from pvz_rl.learning.cohort import CohortPhase, atomic_transition, check_transition_interruption
+from pvz_rl.learning.cohort_accuracy import (
+    before_fit_counts,
+    before_fit_rate,
+    cohort_perfect,
+    legal_tile_hits,
+    scene_hits,
+)
 from pvz_rl.learning.collection_scheduler import CollectionScheduler, unissued_collection
 from pvz_rl.learning.cuda_q import CudaCohortLifecycle
-from pvz_rl.learning.curriculum import STAGES, selected_stage
+from pvz_rl.learning.curriculum import COHORT_PERFECT_STAGES, STAGES, selected_stage
 from pvz_rl.learning.exploration import (
     CommittedPlantExploration,
     configure_exploration,
@@ -70,13 +78,14 @@ from pvz_rl.learning.training_requirements import (
     FIT_SCHEDULE_PROTOCOL,
     cohort_epoch_stage,
     fitting_schedule,
+    fixed_passes,
 )
 from pvz_rl.policy.active_batch import ActiveBatchPlan
 from pvz_rl.policy.cudagraph_backend import EncoderCompilationError
 from pvz_rl.policy.runner import PolicyRunner
 from pvz_rl.policy.sequential_q import action_parts
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy, execution_scope_for
-from pvz_rl.presentation.live_view import restored_grad_scale
+from pvz_rl.presentation.live_view import restored_grad_scale, restored_lr_restart
 
 
 def scale_then_clip(parameters, scale, max_norm):
@@ -138,13 +147,23 @@ class CudaSequentialQ(CudaCohortLifecycle):
     policy_protocol = "shared_public_outcomes_q_v11"
     optimizer_version = FIT_SCHEDULE_PROTOCOL
 
+    def _open_cohort_number(self):
+        """Printed cohort index. Tile stages leave ``normal_updates`` unchanged."""
+        cohort = getattr(self, "cohort_number", None)
+        if type(cohort) is int and cohort >= 1:
+            return cohort
+        return self._n_updates + 1
+
     @property
     def fit_schedule(self):
         stage_name = cohort_epoch_stage(
             self.cfg, self.tile_skills.phase, getattr(self, "curriculum_state", None)
         )
-        schedule = fitting_schedule(self.cfg, self.normal_updates + 1, stage_name)
-        self.n_epochs = schedule.passes
+        schedule = fitting_schedule(self.cfg, self._open_cohort_number(), stage_name)
+        if getattr(self, "_lr_restart_active", 0):
+            schedule = replace(schedule, passes=1, until_cohort_perfect=False)
+        if schedule.passes is not None:
+            self.n_epochs = schedule.passes
         return replace(schedule, stage="tile_only") if self.tile_skills.active else schedule
 
     @property
@@ -153,7 +172,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     @property
     def total_fit_passes(self):
-        return self.fit_schedule.passes
+        return fixed_passes(self.fit_schedule)
 
     @property
     def fit_stage(self):
@@ -177,6 +196,20 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._grad_scale_requested = 1.0
         if not hasattr(self, "_grad_scale_active"):
             self._grad_scale_active = 1.0
+        if not hasattr(self, "_lr_restart_requested"):
+            self._lr_restart_requested = 0
+        if not hasattr(self, "_lr_restart_active"):
+            self._lr_restart_active = 0
+        if not hasattr(self, "_overfit_phase"):
+            self._overfit_phase = "check"
+        if not hasattr(self, "_cohort_correct"):
+            self._cohort_correct = None
+        if not hasattr(self, "_cohort_scored"):
+            self._cohort_scored = None
+        if not hasattr(self, "_before_fit_correct"):
+            self._before_fit_correct = None
+        if not hasattr(self, "_before_fit_scored"):
+            self._before_fit_scored = None
         if not hasattr(self, "_pass_grad_norms"):
             self._pass_grad_norms = []
 
@@ -311,13 +344,61 @@ class CudaSequentialQ(CudaCohortLifecycle):
         if not getattr(self, "_grad_scale_restored", False):
             return
         self._publish_grad_scale()
+        self._publish_lr_restart()
         self._grad_scale_restored = False
 
+    def _pull_lr_restart(self):
+        """Read an armed request. The open cohort keeps the rate it latched."""
+        session = self._grad_scale_session()
+        if session is not None:
+            self._lr_restart_requested = session.pull_lr_restart(self._lr_restart_requested)
+
+    def _latch_lr_restart(self):
+        """Arm this cohort from the pending request, then clear that request."""
+        session = self._grad_scale_session()
+        if session is None:
+            self._lr_restart_active = 1 if self._lr_restart_requested else 0
+            self._lr_restart_requested = 0
+        else:
+            self._lr_restart_active = session.latch_lr_restart()
+            self._lr_restart_requested = 0
+        self._apply_learning_rate()
+
+    def _publish_lr_restart(self):
+        session = self._grad_scale_session()
+        if session is not None:
+            session.publish_lr_restart(self._lr_restart_requested, self._lr_restart_active)
+
+    def _apply_learning_rate(self):
+        """Set Adam's rate from the toml base. The multiplier never compounds."""
+        optimizer = getattr(getattr(self, "policy", None), "optimizer", None)
+        if optimizer is None:
+            return
+        base = float(self.cfg["training"]["learning_rate"])
+        multiplier = learning_rate_restart(self.cfg) if self._lr_restart_active else 1.0
+        optimizer.param_groups[0]["lr"] = base * multiplier
+
+    def _release_lr_restart(self):
+        """Return the following cohort to the configured rate. Adam moments stay."""
+        if not getattr(self, "_lr_restart_active", 0):
+            return
+        self._lr_restart_active = 0
+        self._apply_learning_rate()
+        session = self._grad_scale_session()
+        if session is not None:
+            session.clear_lr_restart_active()
+
     def _begin(self, callback):
-        # The cohort that is about to open takes the pending scale. An open
-        # cohort never reaches this copy.
+        # The cohort that is about to open takes the pending scale and restart.
+        # An open cohort never reaches this copy.
         self._latch_grad_scale()
+        self._latch_lr_restart()
         self._pass_grad_norms = []
+        self._overfit_phase = "check"
+        self._cohort_correct = None
+        self._cohort_scored = None
+        self._before_fit_correct = None
+        self._before_fit_scored = None
         # A restored cohort keeps the buffer configuration it was collected
         # with. New buffers receive the current requested reward settings.
         self.cfg["reward"]["passivity"] = copy.deepcopy(self._passivity_requested)
@@ -374,6 +455,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             passivity_active=copy.deepcopy(self._passivity_active),
             grad_scale_requested=self._grad_scale_requested,
             grad_scale_active=self._grad_scale_active,
+            lr_restart_requested=self._lr_restart_requested,
+            lr_restart_active=self._lr_restart_active,
             **exploration_status(self),
         )
         self._buffer.exploration = dict(
@@ -400,7 +483,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         for network in (self.policy, self._teacher):
             network.forecast_stage = self.tile_skills.phase
             network.auxiliary_scale = self._resolved_forecast_schedule["auxiliary_scale"]
-            network.execution_scope = execution_scope_for(self.tile_skills.phase)
+            network.execution_scope = execution_scope_for(self._execution_phase())
         self._stats["forecast_schedule"] = dict(self._resolved_forecast_schedule)
         self._stats["forecast_mode"] = forecast_mode(self.cfg, self.tile_skills.phase)
         if self.tile_skills.phase == "prediction":
@@ -450,8 +533,14 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._fitting_spool = None
         self._reset_execution()
 
+    def _execution_phase(self):
+        """Tile lesson, or the normal stage once those lessons are finished."""
+        return cohort_epoch_stage(
+            self.cfg, self.tile_skills.phase, getattr(self, "curriculum_state", None)
+        )
+
     def _apply_execution_scope(self):
-        scope = execution_scope_for(self.tile_skills.phase)
+        scope = execution_scope_for(self._execution_phase())
         for network in (self.policy, getattr(self, "_teacher", None)):
             if network is not None:
                 network.execution_scope = scope
@@ -1235,7 +1324,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 ),
             )
             encoder.token_budget = self.execution_state["token_budget"]
-        groups = self.execution_state["fit_batch_groups"]
         if getattr(self, "_fitting_spool", None) is None:
             self._fitting_spool = FittingSpool(self._buffer)
         if self.peashooter_rule_training:
@@ -1274,9 +1362,15 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._fit_coefficients = self._fitting_spool.coefficients
         if self._fit_kind == "tile_only":
             self._fit_coefficients = self._fitting_spool.tile_coefficients
-        args = self._buffer, self.batch_size * groups, self._fitting_spool
         self._fit_pass_start = torch.cuda.Event(enable_timing=True)
         self._fit_pass_start.record()
+        self._open_batch_iterator()
+
+    def _open_batch_iterator(self):
+        if getattr(self, "_fitting_spool", None) is None:
+            self._fitting_spool = FittingSpool(self._buffer)
+        groups = self.execution_state["fit_batch_groups"]
+        args = self._buffer, self.batch_size * groups, self._fitting_spool
         if self.cfg["training"].get("performance", {}).get(
             "prefetch", False
         ) and not self.execution_state.get("prefetch_disabled"):
@@ -1292,6 +1386,112 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 self._batch_iterator = iter(flat_batches(*args))
         else:
             self._batch_iterator = iter(flat_batches(*args))
+
+    def _start_check(self):
+        """One no-gradient pass over the cohort. It does not step the optimizer."""
+        self.policy.set_training_mode(False)
+        for encoder in self.policy.encoders:
+            encoder.fitting = False
+            encoder.activation_checkpointing = False
+            encoder.microbatch = self.cfg["policy"]["execution"]["microbatch"]
+        self._check_hits = torch.zeros((), device=self.device, dtype=torch.float64)
+        self._check_total = torch.zeros((), device=self.device, dtype=torch.float64)
+        self._open_batch_iterator()
+
+    def _score_check_batch(self, rows, observations):
+        from pvz_rl.envs.encoding import collate_observations
+        from pvz_rl.envs.static_fork import reference_tau
+        from pvz_rl.learning.forecast_labels import outcome_codes
+        from pvz_rl.policy.sequential_q import occupied_cells
+
+        observations = collate_observations(observations, self.device)
+        with torch.no_grad():
+            if self.tile_skills.phase == "prediction":
+                with self.policy.board_context(observations):
+                    logits = self.policy._effect_logits
+                labeled = np.flatnonzero(rows["null_target_valid"])
+                hits = logits.new_zeros(())
+                if len(labeled):
+                    at = torch.as_tensor(labeled, device=self.device, dtype=torch.long)
+                    target = torch.as_tensor(
+                        outcome_codes(
+                            np.array(rows["baseline_outcomes"][labeled]),
+                            reference_tau(self.policy.layout.rules),
+                        ),
+                        device=self.device,
+                        dtype=torch.long,
+                    )
+                    hits = scene_hits(logits.index_select(0, at), target)
+            else:
+                labels = [self.env.tile_boards[int(index)] for index in rows["env"]]
+                stage = self.tile_skills.phase
+                sources = [placement_source(stage, label) for label in labels]
+                branches = torch.tensor(
+                    [
+                        self.cfg["environment"]["plants"].index(skill_plant(source, label)) + 1
+                        for source, label in zip(sources, labels, strict=True)
+                    ],
+                    device=self.device,
+                    dtype=torch.long,
+                )
+                values = self.policy.fitting_tiles(
+                    observations,
+                    branches,
+                    rows=torch.arange(len(rows), device=self.device),
+                )
+                layout = self.policy.layout
+                occupied = occupied_cells(
+                    observations.entities,
+                    observations.entity_mask,
+                    rows=layout.rows,
+                    cols=layout.cols,
+                    units_per_tile=layout.rules.game["units_per_tile"],
+                )
+                hits = legal_tile_hits(
+                    values, occupied, branches, [label["feasible_tiles"] for label in labels]
+                )
+            self._check_hits += hits.detach().double()
+            self._check_total += torch.tensor(
+                len(rows), device=self._check_total.device, dtype=torch.float64
+            )
+
+    def _finish_check(self, callback):
+        hits, total = (
+            int(value)
+            for value in torch.stack((self._check_hits, self._check_total)).tolist()
+        )
+        self._cohort_correct = hits
+        self._cohort_scored = total
+        self._stats["cohort_correct"] = hits
+        self._stats["cohort_scored"] = total
+        # Later checks replace the live score. The report keeps the first one.
+        if self._fit_epoch == 0 and self._before_fit_scored is None and total >= 1:
+            self._before_fit_correct = hits
+            self._before_fit_scored = total
+        self._close_batches()
+        # A one-pass cohort still fits once when this check is already perfect.
+        if self._awaiting_one_pass_check():
+            self._overfit_phase = "pass"
+            return
+        if cohort_perfect(hits, total, self.cohort_games):
+            self._overfit_phase = "done"
+            self._phase(CohortPhase.SYNCHRONIZE, callback)
+            return
+        self._overfit_phase = "pass"
+
+    def _awaiting_one_pass_check(self):
+        """True while a one-pass cohort still owes its pre-pass accuracy check."""
+        schedule = self.fit_schedule
+        stage = cohort_epoch_stage(
+            self.cfg, self.tile_skills.phase, getattr(self, "curriculum_state", None)
+        )
+        return (
+            stage in COHORT_PERFECT_STAGES
+            and schedule.passes == 1
+            and not schedule.until_cohort_perfect
+            and self._fit_epoch == 0
+            and self._overfit_phase == "check"
+        )
 
     def _publish_fit_metrics(self, *, final=False):
         if final:
@@ -1389,12 +1589,26 @@ class CudaSequentialQ(CudaCohortLifecycle):
             viewer.poll()
             viewer.session.publish()
         self._pull_grad_scale()
-        if self._fit_epoch >= self.total_fit_passes:
+        self._pull_lr_restart()
+        memorizing = self.fit_schedule.until_cohort_perfect
+        if memorizing and self._overfit_phase == "done":
             self._phase(CohortPhase.SYNCHRONIZE, callback)
             return
+        if not memorizing and self._fit_epoch >= self.total_fit_passes:
+            self._phase(CohortPhase.SYNCHRONIZE, callback)
+            return
+        checking = (memorizing and self._overfit_phase == "check") or (
+            self._awaiting_one_pass_check()
+        )
         if getattr(self, "_batch_iterator", None) is None:
-            self._start_pass()
+            if checking:
+                self._start_check()
+            else:
+                self._start_pass()
         item = next(self._batch_iterator, None)
+        if item is None and checking:
+            self._finish_check(callback)
+            return
         if item is None:
             if self._fit_pass_start is not None:
                 end = torch.cuda.Event(enable_timing=True)
@@ -1435,6 +1649,11 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._stats["q_grad_norm"] = raw_norm
             self._stats["grad_scale"] = scale
             self._pass_grad_norms.append(raw_norm)
+            if memorizing:
+                self._overfit_phase = "check"
+        elif checking:
+            rows, observations, *_metadata = item
+            self._score_check_batch(rows, observations)
         else:
             rows, observations, *metadata = item
             self.policy.set_training_mode(True)
@@ -1680,6 +1899,9 @@ class CudaSequentialQ(CudaCohortLifecycle):
                         ]
                     )
                 }
+        rate = before_fit_rate(self._before_fit_correct, self._before_fit_scored)
+        if rate is not None:
+            self._stats["accuracy_before_fit"] = rate
         self._stats["fit_schedule"] = self.fit_schedule.summary()
         self._stats["fitting_spool_rows"] = len(getattr(self, "_fitting_spool", None) or ())
         spool = getattr(self, "_fitting_spool", None)
@@ -1702,10 +1924,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._fitting_spool = None
         self._peashooter_objective = None
         super()._synchronize(callback)
+        self._release_lr_restart()
 
     def save(self, *args, **kwargs):
         with atomic_transition():
             self._pull_grad_scale()
+            self._pull_lr_restart()
             self._drain()
             if self.phase == CohortPhase.FIT:
                 self._close_batches()
@@ -1853,6 +2077,10 @@ class CudaSequentialQ(CudaCohortLifecycle):
         self._passivity_active = copy.deepcopy(extra.get("passivity_active")) if extra else None
         self._grad_scale_requested = restored_grad_scale(extra, "grad_scale_requested")
         self._grad_scale_active = restored_grad_scale(extra, "grad_scale_active")
+        self._lr_restart_requested = restored_lr_restart(extra, "lr_restart_requested")
+        self._lr_restart_active = restored_lr_restart(extra, "lr_restart_active")
+        if self._lr_restart_active:
+            self._apply_learning_rate()
         self._pass_grad_norms = restored_grad_norms(extra)
         if self._buffer is not None and self._buffer.cfg != self.cfg:
             from pvz_rl.learning.training_requirements import resume_protocol
@@ -1926,7 +2154,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             for network in (self.policy, self._teacher):
                 network.forecast_stage = self.tile_skills.phase
                 network.auxiliary_scale = self._resolved_forecast_schedule["auxiliary_scale"]
-                network.execution_scope = execution_scope_for(self.tile_skills.phase)
+                network.execution_scope = execution_scope_for(self._execution_phase())
         self._apply_execution_scope()
         self._td_builder = None
         if extra and extra.get("td_preparation"):
@@ -1935,6 +2163,26 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self._td_builder = TDTargetBuilder(self, extra["td_preparation"])
         self.policy.zero_grad(set_to_none=True)
         self._batch_iterator = None
+        if extra and extra.get("overfit_phase") in ("check", "pass", "done"):
+            self._overfit_phase = extra["overfit_phase"]
+        restored_correct = extra.get("cohort_correct") if extra else None
+        restored_scored = extra.get("cohort_scored") if extra else None
+        if (
+            type(restored_correct) is int
+            and type(restored_scored) is int
+            and restored_scored >= 0
+            and 0 <= restored_correct <= restored_scored
+        ):
+            self._cohort_correct = restored_correct
+            self._cohort_scored = restored_scored
+        self._before_fit_correct, self._before_fit_scored = before_fit_counts(
+            extra.get("before_fit_correct") if extra else None,
+            extra.get("before_fit_scored") if extra else None,
+            getattr(self, "_fit_epoch", 0),
+            extra.get("overfit_phase") if extra else None,
+            restored_correct,
+            restored_scored,
+        )
         if not getattr(self, "execution_state", None):
             self._reset_execution()
         self._device_events = []
@@ -1993,7 +2241,14 @@ class CudaSequentialQ(CudaCohortLifecycle):
             else None,
             grad_scale_requested=float(getattr(self, "_grad_scale_requested", 1.0)),
             grad_scale_active=float(getattr(self, "_grad_scale_active", 1.0)),
+            lr_restart_requested=int(getattr(self, "_lr_restart_requested", 0) or 0),
+            lr_restart_active=int(getattr(self, "_lr_restart_active", 0) or 0),
             grad_norms_before_clip=list(getattr(self, "_pass_grad_norms", ())),
+            overfit_phase=getattr(self, "_overfit_phase", "check"),
+            cohort_correct=getattr(self, "_cohort_correct", None),
+            cohort_scored=getattr(self, "_cohort_scored", None),
+            before_fit_correct=getattr(self, "_before_fit_correct", None),
+            before_fit_scored=getattr(self, "_before_fit_scored", None),
         )
         if getattr(self, "_teacher", None) is None:
             return skills

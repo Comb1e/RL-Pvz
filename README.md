@@ -70,13 +70,28 @@ Each stage can start from the previous stage's weights;
   --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
-`prediction` fits this frame's untouched field, breach, and probe on randomized
-current frames. A scene is fully correct when every lane's field depth, breach
-bin, and probe depth match, and all 200 validation scenes must pass. The terminal
-and the report show that scene rate. The live view draws the three bands and
-hides action scores that were not recorded. Prediction trains the shared board
-encoder, the effect head, and the forecast-input embeddings, and its forward
-stops after those three. Later stages freeze those three and still run them.
+`prediction`, cherry bomb, cherry-bomb obstacle, attacker pre, and attacker
+take one fitting pass per cohort. Each cohort is scored once before that pass,
+and the pass still runs when the score is already perfect. The fitting line
+shows that score as an integer ratio, such as `612/640`, and `streak k/10`.
+The report charts the check from before the first fitting pass for these five
+stages, redraws every 10 cohorts and when a stage advances, and does not chart
+exploration for them. A checkpoint that omits that pair still resumes. When the
+open cohort has not committed a pass, the finished first check is that point;
+otherwise the next cohort records it. Changing `ema_decay` or the stage-gate
+settings means the open prediction run does not resume. Prediction counts a
+scene when every lane matches field depth, breach bin, and probe depth. The
+four placement stages count a board when the greedy legal tile is in its
+labeled successful set. A stage advances after 10 consecutive full cohorts meet
+that bar: prediction, obstacle, attacker pre, and attacker at 100%, cherry bomb
+strictly above 0.95. Peashooter uses the same 0.95 rule on games won. Easy,
+standard, and shared require every game of each of their tasks to be won, and
+every required task has to occur. Training does not run a held-out panel. The
+live view draws the three bands and hides action scores that were not recorded.
+Prediction trains the shared board encoder, the effect head, and the
+forecast-input embeddings, and its forward stops after those three. Later
+stages freeze those three and still run them. The teacher on every stage uses
+EMA decay 0.99.
 Placement and Peashooter train and run the tile decoder and tile head. Easy,
 standard, and shared also train and run the action decoder and action head. The
 forecast reads the current encoder memory before the action is chosen. Use the
@@ -89,8 +104,8 @@ with `shared_public_outcomes_q_v11` and use its checkpoints for `--resume` and
 `--init-from`.
 
 `attacker` mixes the three placement exercises in shuffled 640-board cohorts
-(64 Cherry Bomb, 256 Obstacle, 320 Attacker Pre) and requires 200/200 on a fresh
-validation panel with the same proportions. Peashooter can start from
+(64 Cherry Bomb, 256 Obstacle, 320 Attacker Pre). Its stage bar is the same
+labeled-set check as the other placement stages. Peashooter can start from
 `runs\compact-stages\attacker\final.zip`.
 
 Resume an interrupted stage from its recovery checkpoint:
@@ -104,13 +119,19 @@ Resume an interrupted stage from its recovery checkpoint:
 No seed is required; `--seed` optionally fixes initialization. Start a new run:
 each width is that group's heads times `head_dim`, and a previous flat policy does
 not transfer. The live view's gradient field scales the next cohort's update and
-still clips at `max_grad_norm`. The cohort line prints each pass's gradient norm
-before that clip. A checkpoint of this model that omits the scale or those norms
-stays at 1 and records later passes. Tune each stage's
-fitting passes, loss weights, and execution settings in [train.toml](src/pvz_rl/data/train.toml);
-each setting is commented there. Validation uses fresh random panels after fully
-fitted cohorts. Completed runs keep portable `final.zip` weights and
-visualizations; unfinished runs keep recovery checkpoints.
+still clips at `max_grad_norm`. Its `3×` control arms the next cohort at
+`learning_rate_restart` times `learning_rate` for one pass. The cohort line
+prints each pass's gradient norm before that clip. A checkpoint of this model
+that omits the scale, those norms, or the restart flags stays at 1 and idle,
+and records later passes. Peashooter and the three normal stages each have a
+fitting pass count unless that restart is armed. Tune those passes, the loss
+weights, and the execution settings in [train.toml](src/pvz_rl/data/train.toml);
+each setting is commented there. Separate evaluation commands keep their panels.
+Completed runs keep portable `final.zip` weights and visualizations;
+unfinished runs keep recovery checkpoints. A run's JSONL logs roll at 5 MB
+into a folder per log, such as `hardware-metrics/`. On the next open, a file
+already larger than that is moved into the folder and later records go to a
+new file there.
 
 ## Common checks
 

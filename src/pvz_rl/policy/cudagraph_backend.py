@@ -12,6 +12,11 @@ class EncoderCompilationError(RuntimeError):
     """An optional compiled encoder failed before the pass could commit."""
 
 
+# Captures whose side streams may still own a cuBLAS workspace. The clear is
+# process-wide, so it runs only after every one of these graphs has been reset.
+_active_captures = set()
+
+
 def _copy(destination, source):
     # Broadcast views contain repeated addresses. Copy each distinct location
     # once, retaining the stride/alignment expected by SDPA's backward kernel.
@@ -54,6 +59,8 @@ class GraphCapture:
                 with torch.cuda.device(self.device):
                     self.static_inputs = [_owned_tensor(value) for value in inputs]
                     self.stream = torch.cuda.Stream(device=self.device)
+                    # The first linear on this stream allocates a persistent workspace.
+                    _active_captures.add(self)
                     current = torch.cuda.current_stream(self.device)
                     self.stream.wait_stream(current)
                     with torch.cuda.stream(self.stream):
@@ -94,14 +101,24 @@ class GraphCapture:
         if self.graph is not None:
             self.graph.reset()
         self.graph = self.static_inputs = self.outputs = self.stream = self.replay_stream = None
+        _active_captures.discard(self)
 
 
 def _release_captures(captures):
+    """Reset these graphs, then return workspaces once no capture remains.
+
+    Replay uses the workspace allocated by the warmup linear. ``empty_cache``
+    cannot reclaim it while cuBLAS holds the address, and destroying the side
+    stream does not release that hold. The clear covers every device stream, so
+    a capture that is still registered keeps its workspace.
+    """
     devices = {capture.device for capture in captures if capture.device is not None}
     for device in devices:
         torch.cuda.synchronize(device)
     for capture in captures:
         capture.release()
+    if not _active_captures:
+        torch._C._cuda_clearCublasWorkspaces()
 
 
 class CollectionGraphCache:
