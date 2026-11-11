@@ -14,7 +14,13 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   overlays. Preserve user tuning. Group stage settings under `training.cherry_bomb`,
   `cherry_bomb_obstacle`, `attacker_pre`, `prediction`, `attacker`, `peashooter` and `normal`; resolve once
   into the runtime layout. `prediction`, `cherry_bomb`, `cherry_bomb_obstacle`, `attacker_pre`,
-  `attacker`, `peashooter`, `easy`, `standard`, and `shared` each own `n_epochs`.
+  and `attacker` score each cohort once, then take one fitting pass. A saved file that still
+  has `training.cohorts_per_epoch` keeps that file's one-pass block and memorized cohort.
+  `peashooter`, `easy`, `standard`, and `shared` each own `n_epochs`. A live `3×` request
+  trains the next cohort for one pass at `training.learning_rate_restart` times
+  `training.learning_rate`. Teacher EMA uses `training.objective.ema_decay` on every stage.
+  A stage advances after `training.stage_streak` consecutive full cohorts meet that stage's
+  bar. Training does not run a held-out validation panel.
   Shared scenario sampling attempts live in `tile_scenarios`.
 - Fresh policy inputs are public board facts: entity records and 18 globals.
   Simulated field/probe outcomes are private auxiliary targets, never observations.
@@ -156,7 +162,9 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   attribution agreement. Viewers and diagnostics must not affect actions, rewards,
   or any other learning value. The live gradient scale is the exception: it multiplies
   the eligible master gradients before `max_grad_norm` and latches at the next cohort
-  begin. A checkpoint that omits the scale resumes at 1. The cohort line prints each
+  begin. The live `3×` restart latches at that same moment, forces one pass, and then
+  returns to the configured rate. A checkpoint that omits the scale resumes at 1, and one
+  that omits the restart flags stays idle. The cohort line prints each
   pass's unscaled gradient norm before that clip. A checkpoint that omits those norms
   resumes and records the passes that finish after recovery.
 - Fitting encoders compile once per shape and keep that cache across cohorts and
@@ -177,6 +185,9 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   create or refresh reports. Close cohort sidecar owners before the trajectory
   directory owner; recovery archives retain unfinished work independently.
   Leave `docs/` untouched unless explicitly requested.
+- `jsonl_log.py` rolls each run JSONL log at `logging.jsonl_batch_bytes` into a
+  folder named for that log, such as `hardware-metrics/`. An existing file larger
+  than the limit is moved in whole, and later records append to a new file there.
 
 ## Stages and validation
 
@@ -189,10 +200,10 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   correctness separately from attributed kills. Peashooter keeps easy waves,
   disabled mowers, configured sky-sun scaling and saved countdowns without rescaling.
 - Attacker draws exact, shuffled Cherry Bomb/Obstacle/Attacker Pre quotas of
-  64/256/320 for collection and 20/80/100 for validation. Retain source exercise
+  64/256/320 for collection. Retain source exercise
   on each board and use its supplied branch, teacher, temperature and verification.
-  One shared pool and one active CUDA oracle prepare the mixed cohort. Validation
-  requires all 200 wins and reuses the saved panel on retry. Weights-only stage
+  One shared pool and one active CUDA oracle prepare the mixed cohort. The stage
+  bar is the labeled-set check on that collected cohort. Weights-only stage
   transfers use `--init-from`; recovery retains the saved stage order.
 - Prediction uses 640 seeded, engine-validated current frames per cohort and one
   exact untouched-board target per scene. Average all 15 known
@@ -202,22 +213,29 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   action decoder, action head, tile decoder, or tile head. Detached class ids give
   the decoders and forecast-input no gradient from that loss. This is the only stage
   that updates the shared encoder and the effect head. Easy, standard, and shared
-  update the action decoder. Check a
-  saved 200-scene validation panel every 10,000 completed scenes after a full
-  fitted cohort. Each scene passes only when every lane's field depth, breach
-  bin, and probe depth match. All 200 scenes must pass. Progress reports that
-  fully-correct scene rate.
-- Only completed episodes or prediction scenes advance budgets and validation clocks. Check at
-  configured intervals after fully fitted cohorts. Entire configured cohorts must
-  strictly exceed the qualification threshold for game objectives. Prediction uses
-  the fitted cohort size. Shortened cohorts cannot qualify.
-  Skips wait another interval. Cherry Bomb and Peashooter strictly exceed their
-  configured mastery thresholds; other fresh stages require perfect validation.
-- Every validation uses fresh random seeds outside reserved splits. Save panels
-  before execution and retry interruptions against the same weights before fitting.
-  Greedy validation uses public-only inputs with no exploration, auxiliary-label
-  sampling or fitting updates. Only prediction validates against private forks.
-  Release idle scratch/graphs without losing workers or speculative seed state.
+  update the action decoder. The stage bar scores the cohort just collected:
+  every scene passes only when every lane's field depth, breach bin, and probe
+  depth match. Ten consecutive full cohorts at that rate advance the stage.
+  Progress reports that fully-correct scene rate.
+- Cohort fitting and the stage bar use the same collected cohort. Prediction, cherry bomb,
+  cherry-bomb obstacle, attacker pre, and attacker take one fitting pass per cohort.
+  A saved `cohorts_per_epoch` keeps its one-pass block and memorized cohort. Every cohort
+  is scored once before its first pass. A one-pass cohort still takes that pass when the
+  check is already perfect. Only a memorized cohort from a saved count is scored again
+  after each pass. Prediction counts a scene when all five lanes match field depth, breach
+  bin, and probe depth. The four placement stages count a board when its greedy legal tile
+  is inside the labeled successful set; the attacker mix is one cohort, and a kill is not
+  required. Cherry bomb's bar is strictly above 0.95. Obstacle, attacker pre, and attacker
+  require 100%. Peashooter is strictly above 0.95 wins on the games just played. Easy,
+  standard, and shared require every game of each required task to be won, and every
+  required task to occur. A short cohort does not move the streak. Ten consecutive passes
+  advance a full run, or mark a `--stage` run mastered. The report charts before-fit
+  accuracy for the five stages, omits their exploration charts, and redraws every
+  `visualization.report_interval_cohorts` cohorts, on a stage change, and at the end.
+  A checkpoint that omits the before-fit pair or the streak still resumes.
+- Only completed episodes or prediction scenes advance budgets. The passing cohort is
+  fitted before the stage changes. Evaluation commands keep their panels. Release idle
+  scratch/graphs without losing workers or speculative seed state.
 
 ## Code structure
 
@@ -235,7 +253,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | `learning/forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py`                                                                                                           | Absolute field/probe targets, shared-forward categorical losses, hard static/probe indicators, and calibration.                                                                                                            |
 | `learning/auxiliary_service.py`, `auxiliary_settings.py`, `async_teacher.py`, `envs/auxiliary_cpu.py`, `auxiliary_cuda.py`, `snapshot_packet.py`, `teacher_rules.py`, `outcome_math.py` | Shared execution with independent interval/teacher routing, immutable packed device roots, event-polled exact continuations, CPU workers and model-free simulation rules.                                                                                                                  |
 | `learning/effect_collection.py`, `wait_outcomes.py`, `placement_outcomes.py`, `td_targets.py`                                                                                           | Saved candidate tickets, deferred interval and single-placement targets, and frozen-cohort n-step TD.                                                                                                                                                                                      |
-| `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py`                                                                                   | Shared Q fitting/economics, legality attribution and automatic placement losses.                                                                                                                                                                                                           |
+| `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py`, `cohort_accuracy.py`                                                            | Shared Q fitting/economics, legality attribution, automatic placement losses, and the collected-cohort accuracy stop.                                                                                                      |
 | `learning/peashooter_rules.py`, `peashooter_teacher.py`, `envs/lane_preparation.py`, `cuda_lane_oracle.py`                                                                              | Prioritized lane targets and resumable bounded lane oracles.                                                                                                                                                                                                                               |
 | `learning/cuda_buffer.py`, `batch_transport.py`, `collection_scheduler.py`, `exploration.py`                                                                                            | Bounded trajectories/transport, decision tickets and committed species exploration.                                                                                                                                                                                                        |
 | `learning/tile_curriculum.py`, `validation_trigger.py`, `budget.py`, `training_requirements.py`                                                                                         | Stage transitions, validation qualification, budgets and model/objective identities.                                                                                                                                                                                                       |
@@ -244,7 +262,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 | Repository `tools/benchmark_peashooter.py`, `tools/draw_collection_process.py`                                                                                                          | Seed-matched total-time/latency sweeps, optional real-collection host/CUDA event timing and two chronological CPU/GPU timelines. Collapse loops to start/end markers; identify waits and unavailable device timing explicitly.                                                             |
 | Repository `tools/profile_training_workflow.py`                                                                                                                                         | Bounded actual-CLI startup, collection and recovery audits, or one fully fitted production cohort with CPU/CUDA trace capture. Preserve production cutoff, initialization and presentation; do not equate shortened frozen-policy benchmarks with full training.                           |
 | Repository `tools/profiling_metrics.py`, `tools/report_training_hotspots.py`                                                                                                            | Per-thread exclusive host attribution, GC pauses, calibrated stage events, bounded CUPTI/cProfile windows, per-pass losses and costs per batch/board decision. Tracing must not retain released CUDA scratch; parameter sweeps release each model's graphs before creating the next model. |
-| `presentation/`                                                                                                                                                                         | Demo recording/replay, live cohort subscriptions and retained reports. `outcome_view.py` shows this frame's pre-action field, breach bin, and probe when the journal recorded them; unknown targets stay blank. Viewers reuse timestamped episode-scoped journal predictions without model calls. |
+| `presentation/`                                                                                                                                                                         | Demo recording/replay, live cohort subscriptions and retained reports. The five overfit stages chart accuracy before fit and omit exploration. `outcome_view.py` shows this frame's pre-action field, breach bin, and probe when the journal recorded them; unknown targets stay blank. Viewers reuse timestamped episode-scoped journal predictions without model calls. |
 
 ## Test ownership
 

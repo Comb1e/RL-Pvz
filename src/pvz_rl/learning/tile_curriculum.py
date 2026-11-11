@@ -42,6 +42,7 @@ class TileSkillState:
     generation_failures: int = 0
     stage_order: list | None = None
     stage_probes: dict = field(default_factory=dict)
+    streak: int = 0
 
     def __post_init__(self):
         self.episodes = dict(self.episodes)
@@ -69,7 +70,7 @@ class TileSkillState:
             raise ValueError("Invalid tile prerequisite episode counters")
         if any(
             type(value) is not int or value < 0
-            for value in (self.last_probe, self.cohorts, self.generation_failures)
+            for value in (self.last_probe, self.cohorts, self.generation_failures, self.streak)
         ):
             raise ValueError("Invalid tile prerequisite progress")
         if self.last_probe > self.total:
@@ -143,6 +144,25 @@ class TileSkillState:
         elif len(failed) == 1:
             self.phase = failed[0]
         return self.phase
+
+    def note_full_cohort(self, passed):
+        """Count one finished full cohort. A short cohort does not call this."""
+        if not self.active:
+            return
+        self.streak = self.streak + 1 if passed else 0
+
+    def advance_after_streak(self, limit, *, advance=True):
+        """Leave this stage once ``note_full_cohort`` has reached ``limit``."""
+        if not self.active or type(self.streak) is not int or self.streak < limit:
+            return False
+        previous = self.phase
+        self.streak = 0
+        if self.stage_order is None or not advance:
+            self.phase = "complete"
+            return False
+        index = self.stage_order.index(previous) + 1
+        self.phase = self.stage_order[index] if index < len(self.stage_order) else "complete"
+        return self.phase != previous
 
     def to_dict(self):
         return asdict(self)

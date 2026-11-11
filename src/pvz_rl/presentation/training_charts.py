@@ -4,8 +4,8 @@ from math import isfinite
 
 import matplotlib.pyplot as plt
 
-from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, is_bomb_skill, is_placement_skill
-from pvz_rl.learning.curriculum import TILE_STAGES
+from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, is_bomb_skill
+from pvz_rl.learning.curriculum import COHORT_PERFECT_STAGES, TILE_STAGES
 from pvz_rl.learning.peashooter_rules import RULE_OBJECTIVE
 from pvz_rl.learning.training_requirements import CURRENT_OBJECTIVE
 
@@ -167,6 +167,14 @@ def report_charts(segments, cfg, output, save):
             name = f"{scope}-{group}"
             if plot_panels(records, spec, xvalue, xlabel, output, name, save, rate_fields=rates):
                 images.append((f"{title}: {heading}", name + ".png"))
+
+        if scope in COHORT_PERFECT_STAGES:
+            add(
+                "before-fit",
+                "accuracy before fit",
+                fields([("cohort.accuracy_before_fit", "Accuracy before fit")]),
+                ("cohort.accuracy_before_fit",),
+            )
 
         if scope != "prediction":
             behavior = [
@@ -422,27 +430,26 @@ def report_charts(segments, cfg, output, save):
                 for key, text, get in accounting
             ]
         add("accounting", "reward accounting", accounting)
-        add(
-            "exploration",
-            "exploration",
-            []
-            if is_placement_skill(scope)
-            else fields(
-                [
-                    ("tile_exploration_epsilon", "Tile exploration probability"),
-                    ("optimization.tile_exploration_coins", "Tile exploration draws / cohort"),
-                    (
-                        "optimization.exploratory_changes",
-                        "Commands changed by exploration / cohort",
-                    ),
-                ]
-                + (
-                    []
-                    if pre
-                    else [("plant_exploration_epsilon", "Species exploration probability")]
-                )
-            ),
-        )
+        if scope not in COHORT_PERFECT_STAGES:
+            add(
+                "exploration",
+                "exploration",
+                fields(
+                    [
+                        ("tile_exploration_epsilon", "Tile exploration probability"),
+                        ("optimization.tile_exploration_coins", "Tile exploration draws / cohort"),
+                        (
+                            "optimization.exploratory_changes",
+                            "Commands changed by exploration / cohort",
+                        ),
+                    ]
+                    + (
+                        []
+                        if pre
+                        else [("plant_exploration_epsilon", "Species exploration probability")]
+                    )
+                ),
+            )
         if not pre:
             add(
                 "diagnostics",

@@ -13,6 +13,7 @@ progress_seconds = 15
 terminal_progress_seconds = 60
 terminal_mode = "compact"
 hardware_sample_seconds = 1.0
+jsonl_batch_bytes = 5000000 # One open JSONL part, in a folder named for the log. A larger existing file is moved in whole.
 rolling_window = 100
 
 [visualization]
@@ -22,6 +23,7 @@ live_fps = 5
 live_history_ram_mib = 16
 live_window_size = [1600, 1050]
 enabled = true
+report_interval_cohorts = 10 # Redraw after this many completed cohorts, and when a stage advances.
 demos = true
 videos = false
 video_fps = 25
@@ -96,9 +98,11 @@ learning_rate = 0.0003
 max_grad_norm = 5 # Shared by autonomous training and demonstration initialization.
 eval_interval = 250000 # Used only by bounded decision-window diagnostics.
 torch_threads = 1
+learning_rate_restart = 3.0 # Next armed cohort: one pass at this multiple of learning_rate.
+stage_streak = 10 # Consecutive full cohorts that meet the stage bar.
 
 [training.validation_trigger]
-enabled = true # Missing in older checkpoints: retain their original validation workflow.
+enabled = false # Training scores the collected cohort. Evaluation commands keep their panels.
 cohort_success_threshold = 0.9 # Strictly above; full configured cohorts only (normally 116/128).
 
 [training.forecasts]
@@ -128,12 +132,11 @@ enabled = true # Automatic preliminary stages; selected normal stages skip them.
 sampling_max_attempts = 100
 
 [training.cherry_bomb]
-n_epochs = 4 # Fitting passes per cohort. Each stage has its own.
 forecast_mode = "placement_outcomes" # Placement teacher plus one pre-action field/probe target.
 extra_actions = 0
 static_field_prediction_weight = 0.5 # Scales field depth and breach time.
 probe_prediction_weight = 0.2 # Scales probe depth; retain the shared known-term average.
-# Shared by both bomb stages except temperature, mastery, and fitting passes; no exploration or search.
+# Shared by both bomb stages except temperature and mastery; no exploration or search.
 n_envs = 640 # Fastest measured collection time/env with 32 workers and the CUDA oracle.
 probe_interval_games = 10000 # Independent clock for each bomb stage; pending probes retry first.
 validation_success_threshold = 0.95 # Cherry Bomb only: strictly exceed this rate (96/100).
@@ -152,7 +155,6 @@ oracle_lanes = 2048 # Shrinks to fit VRAM without changing labels.
 oracle_vram_mib = 2048
 
 [training.cherry_bomb_obstacle]
-n_epochs = 6
 forecast_mode = "placement_outcomes"
 extra_actions = 0
 static_field_prediction_weight = 0.5
@@ -160,7 +162,6 @@ probe_prediction_weight = 0.2
 softmax_temperature = { zero_success = 1, full_success = 1 } # Independent schedule; mastery still requires 100/100.
 
 [training.attacker_pre]
-n_epochs =2
 forecast_mode = "placement_outcomes"
 extra_actions = 0
 static_field_prediction_weight = 0.5
@@ -182,7 +183,7 @@ oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown 
 oracle_vram_mib = 1024
 
 [training.prediction]
-n_epochs = 4
+# The stage bar is this cohort's pre-pass check. Training does not run the held-out panel.
 forecast_mode = "prediction_only"
 extra_actions = 0
 n_envs = 640
@@ -196,7 +197,6 @@ sun = [0, 500]
 ready_probability = 0.5 # Applied independently to each card slot and mower.
 
 [training.attacker]
-n_epochs =2
 forecast_mode = "placement_outcomes"
 extra_actions = 0
 static_field_prediction_weight = 0.5
@@ -281,7 +281,7 @@ species_consistency_huber_delta = 1.0
 invalid_action_q_offset = -0.1 # Illegal target = detached current head minimum Q + this offset.
 invalid_fit_group_size = 2 # Shared first-of-window size for invalid proposals and waits.
 dense_multiplier = 10.0
-ema_decay = 0.95
+ema_decay = 0.99
 demo_rank_loss_weight = 0.10
 demo_rank_margin = 0.05
 

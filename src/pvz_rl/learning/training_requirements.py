@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from functools import lru_cache
 
 from pvz_rl.config import (
+    cohorts_per_epoch,
     outcome_prediction_weights,
     research_config,
     simulator,
@@ -12,7 +13,12 @@ from pvz_rl.config import (
 )
 from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.envs.tile_scenarios import attacker_mix
-from pvz_rl.learning.curriculum import STAGES, TILE_STAGES, selected_stage
+from pvz_rl.learning.curriculum import (
+    COHORT_PERFECT_STAGES,
+    STAGES,
+    TILE_STAGES,
+    selected_stage,
+)
 from pvz_rl.policy.sequential_q import ACTION_DISTRIBUTION
 from pvz_rl.provenance import weight_engine_config
 
@@ -28,10 +34,38 @@ class CohortFitSchedule:
     cycle_position: int
     cycle_cohorts: int
     stage: str
-    passes: int
+    passes: int | None
+    until_cohort_perfect: bool = False
 
     def summary(self):
         return dict(protocol=FIT_SCHEDULE_PROTOCOL, **asdict(self))
+
+
+def cohort_place(cfg, cohort):
+    """Epoch, place, and whether this one-based cohort is the memorized one.
+
+    Places ``1..cohorts_per_epoch`` take one pass. The next place fits until
+    the cohort is fully correct. ``None`` when the count is absent: those
+    cohorts take one pass.
+    """
+    per = cohorts_per_epoch(cfg)
+    if per is None:
+        return None
+    if type(cohort) is not int or cohort < 1:
+        raise ValueError("Fitting schedule requires a positive integer cohort number")
+    cycle = per + 1
+    place = (cohort - 1) % cycle + 1
+    return (cohort - 1) // cycle + 1, place, place == cycle
+
+
+def fixed_passes(schedule):
+    """Pass count for a stage that still fits a fixed number of epochs."""
+    if schedule.until_cohort_perfect or schedule.passes is None:
+        raise ValueError(
+            "prediction, cherry_bomb, cherry_bomb_obstacle, attacker_pre, and attacker "
+            "fit until the cohort is fully correct"
+        )
+    return schedule.passes
 
 
 def cohort_epoch_stage(cfg, tile_phase=None, curriculum_state=None):
@@ -56,6 +90,15 @@ def fitting_schedule(cfg, cohort, stage=None):
         raise ValueError("Fitting schedule requires a positive integer cohort number")
     if stage is None:
         stage = cohort_epoch_stage(cfg)
+    if stage in COHORT_PERFECT_STAGES:
+        placed = cohort_place(cfg, cohort)
+        if placed is None:
+            return CohortFitSchedule(cohort, 1, 1, "joint", 1, False)
+        _epoch, place, memorized = placed
+        cycle = cohorts_per_epoch(cfg) + 1
+        if memorized:
+            return CohortFitSchedule(cohort, place, cycle, "joint", None, True)
+        return CohortFitSchedule(cohort, place, cycle, "joint", 1, False)
     return CohortFitSchedule(cohort, 1, 1, "joint", stage_epochs(cfg, stage))
 
 

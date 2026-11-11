@@ -15,7 +15,12 @@ from dataclasses import asdict, is_dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from pvz_rl.presentation.live_view import coerce_grad_scale, read_shared_grad_scale
+from pvz_rl.presentation.live_view import (
+    coerce_grad_scale,
+    read_shared_grad_scale,
+    read_shared_lr_restart,
+    toggle_shared_lr_restart,
+)
 from pvz_rl.presentation.web_assets import BOARD_RENDERER_JS
 
 
@@ -38,7 +43,7 @@ HTML = (
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}body{font:14px system-ui;background:#12201a;color:#e4eee5;margin:1rem}
 #top{display:flex;gap:.8rem;align-items:center;margin-bottom:.7rem;flex-wrap:wrap}#activity{color:#d4b85a;margin:0}
-#grad{display:flex;gap:.45rem;align-items:center;margin:0}#grad input{width:4.6rem;background:#182720;color:#e4eee5;border:1px solid #6b8d70;border-radius:4px;padding:.15rem .35rem;font:14px Consolas,monospace}#grad output{font:14px Consolas,monospace}#grad output.now{color:#8aa392}#grad input.bad{border-color:#d85c58}
+#grad{display:flex;gap:.45rem;align-items:center;margin:0}#grad input{width:4.6rem;background:#182720;color:#e4eee5;border:1px solid #6b8d70;border-radius:4px;padding:.15rem .35rem;font:14px Consolas,monospace}#grad output{font:14px Consolas,monospace}#grad output.now{color:#8aa392}#grad input.bad{border-color:#d85c58}#restart.armed{color:#e4eee5;border-color:#e4eee5}#restart.live{color:#e8c46a;border-color:#e8c46a}
 #boards{display:grid;grid-template-columns:repeat(2,minmax(320px,1fr));gap:.7rem}
 article{background:#22352a;border:1px solid #49634f;border-radius:6px;padding:.7rem;min-width:0}
 article.focus{grid-column:1/-1}article.result{border-color:#d4b85a}article.selecting{border-style:dashed}
@@ -58,7 +63,7 @@ canvas.board{display:block;width:100%;height:auto;aspect-ratio:1280/820}
 #settings{margin:0 0 .6rem}#settings summary{list-style:none;cursor:pointer;width:1.2rem}#settings summary::-webkit-details-marker{display:none}#settings summary::before{content:"▸"}#settings[open] summary::before{content:"▾"}.raw{white-space:pre-wrap;max-height:18rem;overflow:auto;color:#d5e4d7;font:12px Consolas,monospace}
 button{margin:.1rem;padding:.3rem .6rem;background:#334e3b;color:white;border:1px solid #6b8d70;border-radius:4px;cursor:pointer}button:hover{background:#496b50}
 @media(max-width:760px){body{margin:.55rem}#boards{grid-template-columns:1fr}article.focus{grid-column:auto}.panel-title{flex-basis:100%}}
-</style><div id=top><div id=activity>…</div><form id=grad onsubmit="submitGrad(event)"><input id=grad-scale value="1" inputmode="decimal" autocomplete=off oninput="this.classList.remove('bad')"><output id=grad-next>1</output><output id=grad-now class=now>1</output></form></div><details id=settings hidden><summary></summary><pre class=raw></pre></details><div id=boards></div>
+</style><div id=top><div id=activity>…</div><form id=grad onsubmit="submitGrad(event)"><input id=grad-scale value="1" inputmode="decimal" autocomplete=off oninput="this.classList.remove('bad')"><output id=grad-next>1</output><output id=grad-now class=now>1</output></form><button id=restart type=button onclick="toggleRestart()">3×</button></div><details id=settings hidden><summary></summary><pre class=raw></pre></details><div id=boards></div>
 <script>"""
     + BOARD_RENDERER_JS
     + r"""
@@ -68,6 +73,8 @@ function setActivity(text){document.querySelector('#activity').textContent=text}
 function formatScale(value){let n=Number(value);return Number.isFinite(n)&&n>0?String(n):'1'}
 function showGrad(d){let input=document.querySelector('#grad-scale');document.querySelector('#grad-next').textContent=formatScale(d.grad_scale_requested);document.querySelector('#grad-now').textContent=formatScale(d.grad_scale_active);if(document.activeElement!==input)input.value=formatScale(d.grad_scale_requested)}
 async function submitGrad(event){event.preventDefault();let input=document.querySelector('#grad-scale');try{let r=await fetch('./api/grad-scale',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({value:input.value})});input.classList.toggle('bad',!r.ok)}catch(e){input.classList.add('bad')}}
+function showRestart(d){let b=document.querySelector('#restart');b.classList.toggle('live',!!d.lr_restart_active);b.classList.toggle('armed',!!d.lr_restart_requested&&!d.lr_restart_active)}
+async function toggleRestart(){try{await fetch('./api/lr-restart',{method:'POST'})}catch(e){}}
 async function command(x){try{await fetch('./api/command',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(x)})}catch(e){setActivity('…')}}
 function pageFor(i,f){let key=[f.generation,f.episode].join(':');return pages[i]&&pages[i].key===key?pages[i].page:(f.history||{start:0,total:0,rows:[]})}
 const cardColors=['#8c948e','#f8cf5e','#7fba56','#c58c4d','#d85c58','#c99c59','#82c9cf','#b495e5','#70b55b','#c4a478'];
@@ -80,7 +87,7 @@ function qValues(d){if(!scoresRecorded(d))return '';let chosen=branchOf(d.action
 function historyTable(h,o,recorded){let rows=objectList(h&&h.rows);if(!rows.length)return '';let rate=Math.max(1,n(o&&o.tick_rate,1));return `<div class="history"><table><tbody>${rows.map(r=>{let bad=r.accepted===false,qs=recorded?list(r.q).map(q=>`<td>${q===null||q===undefined?'':n(q).toFixed(1)}</td>`).join(''):'';return `<tr class="${bad?'bad':''}"><td>${esc(r.sequence)}</td><td>${(n(r.tick)/rate).toFixed(1)}</td><td>${dot(branchOf(r.action))}</td><td>${esc(tileOf(r.action))}</td>${qs}</tr>`}).join('')}</tbody></table></div>`}
 
 function showSettings(d){let box=document.querySelector('#settings'),rows=list(d.learning_settings);if(!rows.length){box.hidden=true;return}box.hidden=false;let text=rows.map(row=>[row[0],...list(row[1])].filter(Boolean).join('  ')).join('\n');let pre=box.querySelector('pre');if(pre.textContent!==text)pre.textContent=text}
-function render(){let d=window.liveState||{},packets=objectList(d.packets);latest=packets;setActivity(phases[d.activity]||d.activity||'');showGrad(d);showSettings(d);document.querySelector('#boards').innerHTML=packets.map((p,i)=>{let f=p.frame&&typeof p.frame==='object'?p.frame:{},h=pageFor(i,f),decision=f.decision&&typeof f.decision==='object'?f.decision:{},recorded=scoresRecorded(decision),state=p.state==='selecting'?'selecting':(f.outcome&&f.outcome!=='running'?'result':''),task=f.task||'',stamp='';if(task==='prediction'&&decision.effect_prediction_valid&&f.observation)stamp=' '+(n(decision.tick)/Math.max(1,n(f.observation.tick_rate,1))).toFixed(1);else if(task!=='prediction'&&!['cherry_bomb','cherry_bomb_obstacle','attacker_pre','attacker'].includes(task)&&typeof f.reward==='number')stamp=' '+(f.reward>=0?'+':'')+n(f.reward).toFixed(2)+(f.reward_pending?'~':'');let chip=decision.action>0&&!recorded?`<div class="chip">${dot(branchOf(decision.action))}${esc(tileOf(decision.action))}</div>`:'';let live=!pages[i];return `<article class="${focused[i]?'focus':''} ${state}"><div class="panel-head"><span class="panel-title">${esc(p.env)} ${esc(task)}${esc(stamp)}</span><button onclick="command([${i},${n(p.generation)}])">&lt;&gt;</button><button onclick="focused[${i}]=!focused[${i}];render()">+</button><button onclick="historyPage(${i},-8)">^</button><button onclick="historyPage(${i},8)" style="${live?'background:#5a7a4e':''}">v</button></div><div class="board-row"><div class="board-wrap"><canvas class="board" id="board-${i}"></canvas></div>${outcomePrediction(f)}</div>${chip}${qValues(decision)}${historyTable(h,f.observation||{},recorded)}</article>`}).join('');packets.forEach((p,i)=>{let c=document.querySelector('#board-'+i);if(c)drawBoard(c,p.frame&&p.frame.observation,p.frame||{})})}
+function render(){let d=window.liveState||{},packets=objectList(d.packets);latest=packets;setActivity(phases[d.activity]||d.activity||'');showGrad(d);showRestart(d);showSettings(d);document.querySelector('#boards').innerHTML=packets.map((p,i)=>{let f=p.frame&&typeof p.frame==='object'?p.frame:{},h=pageFor(i,f),decision=f.decision&&typeof f.decision==='object'?f.decision:{},recorded=scoresRecorded(decision),state=p.state==='selecting'?'selecting':(f.outcome&&f.outcome!=='running'?'result':''),task=f.task||'',stamp='';if(task==='prediction'&&decision.effect_prediction_valid&&f.observation)stamp=' '+(n(decision.tick)/Math.max(1,n(f.observation.tick_rate,1))).toFixed(1);else if(task!=='prediction'&&!['cherry_bomb','cherry_bomb_obstacle','attacker_pre','attacker'].includes(task)&&typeof f.reward==='number')stamp=' '+(f.reward>=0?'+':'')+n(f.reward).toFixed(2)+(f.reward_pending?'~':'');let chip=decision.action>0&&!recorded?`<div class="chip">${dot(branchOf(decision.action))}${esc(tileOf(decision.action))}</div>`:'';let live=!pages[i];return `<article class="${focused[i]?'focus':''} ${state}"><div class="panel-head"><span class="panel-title">${esc(p.env)} ${esc(task)}${esc(stamp)}</span><button onclick="command([${i},${n(p.generation)}])">&lt;&gt;</button><button onclick="focused[${i}]=!focused[${i}];render()">+</button><button onclick="historyPage(${i},-8)">^</button><button onclick="historyPage(${i},8)" style="${live?'background:#5a7a4e':''}">v</button></div><div class="board-row"><div class="board-wrap"><canvas class="board" id="board-${i}"></canvas></div>${outcomePrediction(f)}</div>${chip}${qValues(decision)}${historyTable(h,f.observation||{},recorded)}</article>`}).join('');packets.forEach((p,i)=>{let c=document.querySelector('#board-'+i);if(c)drawBoard(c,p.frame&&p.frame.observation,p.frame||{})})}
 async function historyPage(i,delta){let p=latest[i],f=p&&p.frame||{};if(!p||!f.history)return;let old=pageFor(i,f),total=n(old.total),start=Math.max(0,Math.min(total,n(old.start)+delta));if(delta>0&&start>=total){delete pages[i];render();return}let request=(requests[i]||0)+1;requests[i]=request;let query=new URLSearchParams({panel:i,generation:p.generation,env:p.env,episode:f.episode,start,request});try{let r=await fetch('./api/history?'+query,{cache:'no-store'}),d=await r.json();if(d.request===request&&d.generation===p.generation&&d.episode===f.episode&&d.page){pages[i]={key:[p.generation,f.episode].join(':'),page:d.page};render()}}catch(e){setActivity('History reconnecting: '+e)}}
 async function refresh(){try{let r=await fetch('./api/state',{cache:'no-store'}),d=await r.json();window.liveState=d;render()}catch(e){setActivity('Viewer reconnecting: '+e)}}
 window.addEventListener('resize',()=>{if(window.liveState)render()});setInterval(refresh,500);refresh();
@@ -121,6 +128,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path.rstrip("/")
         if path == "/api/grad-scale":
             return self._submit_grad_scale()
+        if path == "/api/lr-restart":
+            return self._toggle_lr_restart()
         if path != "/api/command":
             return self._reply(404, json.dumps({"error": "not found"}))
         try:
@@ -153,6 +162,12 @@ class _Handler(BaseHTTPRequestHandler):
             return self._reply(400, json.dumps({"error": "invalid gradient scale"}))
         return self._reply(202, json.dumps({"accepted": accepted}))
 
+    def _toggle_lr_restart(self):
+        share = self.server.lr_requested
+        if share is None:
+            return self._reply(400, json.dumps({"error": "restart control is unavailable"}))
+        return self._reply(202, json.dumps({"accepted": toggle_shared_lr_restart(share)}))
+
     def log_message(self, *_args):
         return
 
@@ -169,17 +184,23 @@ class _Server(ThreadingHTTPServer):
         settings=(),
         grad_requested=None,
         grad_active=None,
+        lr_requested=None,
+        lr_active=None,
     ):
         super().__init__(address, _Handler)
         self.commands, self.history_responses = commands, history_responses
         self.activity, self.settings = activity, settings
         self.grad_requested, self.grad_active = grad_requested, grad_active
+        self.lr_requested, self.lr_active = lr_requested, lr_active
         self.packets = []
         self.history_lock = threading.Lock()
         self.pending_history = []
 
     def state(self):
         requested, active = read_shared_grad_scale(self.grad_requested, self.grad_active)
+        restart_requested, restart_active = read_shared_lr_restart(
+            self.lr_requested, self.lr_active
+        )
         return _jsonable(
             {
                 "activity": self.activity.value,
@@ -187,6 +208,8 @@ class _Server(ThreadingHTTPServer):
                 "learning_settings": self.settings,
                 "grad_scale_requested": requested,
                 "grad_scale_active": active,
+                "lr_restart_requested": restart_requested,
+                "lr_restart_active": restart_active,
             }
         )
 
@@ -245,6 +268,8 @@ def web_viewer_main(
     port_value=None,
     grad_requested=None,
     grad_active=None,
+    lr_requested=None,
+    lr_active=None,
 ):
     """Process target; all frame conversion and HTTP work stays on CPU."""
     try:
@@ -257,6 +282,8 @@ def web_viewer_main(
             settings,
             grad_requested,
             grad_active,
+            lr_requested,
+            lr_active,
         )
         if port_value is not None:
             port_value.value = server.server_port

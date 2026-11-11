@@ -14,6 +14,7 @@ from pvz_rl.envs.env import PvZEnv
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 from pvz_rl.envs.scenarios import namespace_seed
 from pvz_rl.evaluation.frozen_baseline import choose_action
+from pvz_rl.jsonl_log import jsonl_series
 from pvz_rl.learning.deadline import BudgetExpired, check_deadline
 from pvz_rl.learning.objective import finalize_episode_metrics
 from pvz_rl.monitoring.progress import Phase, ProgressReporter
@@ -324,6 +325,11 @@ def evaluate(
 def read_rows(paths) -> list[dict]:
     result = []
     for path in paths:
-        with Path(path).open(encoding="utf-8") as stream:
-            result.extend(json.loads(line) for line in stream if line.strip())
+        path = Path(path)
+        parts = jsonl_series(path) if path.suffix == ".jsonl" else [path]
+        if not parts:
+            raise FileNotFoundError(path)
+        for part in parts:
+            with part.open(encoding="utf-8") as stream:
+                result.extend(json.loads(line) for line in stream if line.strip())
     return result

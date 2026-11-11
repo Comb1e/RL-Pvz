@@ -188,7 +188,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
             last = trigger.state["last_check"].get(skills.validation_domain, 0)
             if skills.progress - last >= trigger.interval_for(skills.validation_domain):
                 return
-        elif skills.due(self.cfg):
+        elif trigger is None and skills.due(self.cfg):
             return
         count = cohort_envs(self.cfg, self.tile_skills.phase)
         target = budget_target(self.env.cfg)
@@ -316,8 +316,16 @@ class CudaCohortLifecycle(BaseAlgorithm):
                 games=len(self._pending_episodes),
                 configured_games=cohort_envs(self.cfg, self.tile_skills.phase),
                 wins=sum(bool(item["metrics"]["win"]) for item in self._pending_episodes.values()),
-                fully_correct_scenes=self._stats.get("forecast_fully_correct_scenes"),
-                forecast_scene_count=self._stats.get("forecast_scene_count"),
+                fully_correct_scenes=(
+                    self._cohort_correct
+                    if type(getattr(self, "_cohort_correct", None)) is int
+                    else self._stats.get("forecast_fully_correct_scenes")
+                ),
+                forecast_scene_count=(
+                    self._cohort_scored
+                    if type(getattr(self, "_cohort_scored", None)) is int
+                    else self._stats.get("forecast_scene_count")
+                ),
                 training_steps=self.num_timesteps,
                 optimizer_step=self.optimizer_commits,
             ),

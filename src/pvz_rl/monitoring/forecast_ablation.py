@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from pvz_rl.config import load_config, outcome_prediction_weights
+from pvz_rl.jsonl_log import jsonl_series, read_jsonl_series
 from pvz_rl.learning import training_artifacts
 from pvz_rl.learning.training import train
 from pvz_rl.provenance import write_json
@@ -79,13 +80,11 @@ def main():
                         "status.json",
                     ):
                         source = path / filename
-                        if source.exists():
-                            text = source.read_text(encoding="utf-8")
-                            captured[filename] = (
-                                json.loads(text)
-                                if filename.endswith(".json")
-                                else [json.loads(line) for line in text.splitlines() if line]
-                            )
+                        if filename.endswith(".jsonl"):
+                            if jsonl_series(source):
+                                captured[filename] = read_jsonl_series(source)
+                        elif source.exists():
+                            captured[filename] = json.loads(source.read_text(encoding="utf-8"))
                     write_json(args.output / (name + ".json"), captured)
                     if retain:
                         finish(path)

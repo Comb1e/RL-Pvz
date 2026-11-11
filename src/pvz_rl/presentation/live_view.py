@@ -2,7 +2,7 @@
 
 Viewer code owns no model or simulator; it renders public snapshots. Selection
 uses a private RNG. Commands change subscriptions, never game state. The
-gradient-scale shares are the one training value the view can write.
+gradient-scale shares and the 3× restart flag are the training values the view can write.
 """
 
 from __future__ import annotations
@@ -261,6 +261,71 @@ def read_shared_grad_scale(requested, active):
         return pending, current
 
 
+def accept_lr_restart(value):
+    """Armed is 1 and idle is 0. Every other value stays rejected."""
+    if isinstance(value, bool) or type(value) is not int or value not in (0, 1):
+        return None
+    return value
+
+
+def restored_lr_restart(extra, key):
+    """Missing or rejected recovery fields stay idle."""
+    if not isinstance(extra, dict):
+        return 0
+    accepted = accept_lr_restart(extra.get(key, 0))
+    return 0 if accepted is None else accepted
+
+
+def pull_shared_lr_restart(requested, current):
+    """Read the armed request without starting the open cohort's rate."""
+    with requested.get_lock():
+        accepted = accept_lr_restart(int(requested.value))
+        if accepted is None:
+            requested.value = int(current)
+            return int(current)
+        return accepted
+
+
+def latch_shared_lr_restart(requested, active):
+    """Move an armed request onto this cohort and clear the request."""
+    with requested.get_lock():
+        armed = 1 if accept_lr_restart(int(requested.value)) else 0
+        requested.value = 0
+        active.value = armed
+        return armed
+
+
+def publish_shared_lr_restart(requested, active, requested_value, active_value):
+    """Restore both restart shares from checkpoint state."""
+    with requested.get_lock():
+        requested.value = int(requested_value)
+        active.value = int(active_value)
+
+
+def clear_shared_lr_restart_active(active):
+    """The finished cohort releases its rate. A request for the next one stays."""
+    active.value = 0
+
+
+def read_shared_lr_restart(requested, active):
+    """Armed request, then whether this cohort is already using the high rate."""
+    if requested is None and active is None:
+        return 0, 0
+    if requested is None:
+        return 0, int(active.value)
+    with requested.get_lock():
+        pending = int(requested.value)
+        current = int(active.value) if active is not None else 0
+        return pending, current
+
+
+def toggle_shared_lr_restart(requested):
+    """A second click before the cohort begins cancels the request."""
+    with requested.get_lock():
+        requested.value = 0 if int(requested.value) else 1
+        return int(requested.value)
+
+
 def offer_latest(queue, item):
     """Never wait for a slow renderer. Terminal panels also persist in the sender."""
     try:
@@ -308,13 +373,39 @@ def learning_settings(cfg):
         ),
         (
             "Passes",
-            tuple(
-                f"{stage}={table[stage]}"
-                for table in (training.get("stage_epochs") or {},)
-                for stage in SELECTABLE_STAGES
-                if stage in table
+            (
+                tuple(
+                    f"{stage}={table[stage]}"
+                    for table in (training.get("stage_epochs") or {},)
+                    for stage in SELECTABLE_STAGES
+                    if stage in table
+                )
+                + (
+                    (f"cohorts_per_epoch={training['cohorts_per_epoch']}",)
+                    if type(training.get("cohorts_per_epoch")) is int
+                    and not isinstance(training.get("cohorts_per_epoch"), bool)
+                    else ()
+                )
+                or ((f"{training['n_epochs']}",) if "n_epochs" in training else ())
             )
-            or ((f"{training['n_epochs']}",) if "n_epochs" in training else ()),
+            + tuple(
+                item
+                for item in (
+                    (
+                        f"learning_rate_restart={training['learning_rate_restart']}"
+                        if type(training.get("learning_rate_restart")) in (int, float)
+                        and not isinstance(training.get("learning_rate_restart"), bool)
+                        else None
+                    ),
+                    (
+                        f"stage_streak={training['stage_streak']}"
+                        if type(training.get("stage_streak")) is int
+                        and not isinstance(training.get("stage_streak"), bool)
+                        else None
+                    ),
+                )
+                if item
+            ),
         ),
         (
             "Outcome weights",
@@ -365,6 +456,8 @@ class LiveSession:
         self.activity = ctx.Value("i", int(Activity.STARTING))
         self.grad_scale_requested = ctx.Value("d", 1.0)
         self.grad_scale_active = ctx.Value("d", 1.0)
+        self.lr_restart_requested = ctx.Value("i", 0)
+        self.lr_restart_active = ctx.Value("i", 0)
         # A requested nonzero port is retained until the web child binds. A
         # zero value preserves the existing ephemeral-port behavior.
         self.web_port = ctx.Value("i", int(settings.get("viewer_port", 0)))
@@ -392,6 +485,8 @@ class LiveSession:
                 self.web_port,
                 self.grad_scale_requested,
                 self.grad_scale_active,
+                self.lr_restart_requested,
+                self.lr_restart_active,
             ),
             name="pvz-live-view",
             daemon=True,
@@ -460,6 +555,20 @@ class LiveSession:
         publish_shared_grad_scale(
             self.grad_scale_requested, self.grad_scale_active, requested, active
         )
+
+    def pull_lr_restart(self, current):
+        return pull_shared_lr_restart(self.lr_restart_requested, current)
+
+    def latch_lr_restart(self):
+        return latch_shared_lr_restart(self.lr_restart_requested, self.lr_restart_active)
+
+    def publish_lr_restart(self, requested, active):
+        publish_shared_lr_restart(
+            self.lr_restart_requested, self.lr_restart_active, requested, active
+        )
+
+    def clear_lr_restart_active(self):
+        clear_shared_lr_restart_active(self.lr_restart_active)
 
     def publish(self, *, force=False):
         if not self.enabled or not self.ready.is_set():

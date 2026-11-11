@@ -155,7 +155,7 @@ for _stage, _fields in _STAGE_PARAMETERS.items():
         _fields[f"{_outcome}_prediction_weight"] = (
             f"training.stage_outcome_weights.{_stage}.{_outcome}"
         )
-    if _stage != "normal":
+    if _stage == "peashooter":
         _fields["n_epochs"] = f"training.stage_epochs.{_stage}"
 
 
@@ -264,6 +264,14 @@ def output_settings(cfg: dict) -> dict:
     return {key: cfg[key] for key in ("logging", "visualization")}
 
 
+def jsonl_batch_bytes(cfg) -> int:
+    """Byte limit of one open JSONL part. Absent means 5 MB."""
+    value = cfg.get("logging", {}).get("jsonl_batch_bytes", 5_000_000)
+    if type(value) is not int or isinstance(value, bool) or value < 1:
+        raise ValueError("logging.jsonl_batch_bytes must be a positive integer")
+    return value
+
+
 def research_config(cfg: dict) -> dict:
     """Output and data-transport preferences do not change the research protocol."""
     result = {
@@ -281,11 +289,52 @@ def runtime_settings(cfg: dict) -> dict:
     return cfg["runtime"]
 
 
-def stage_epochs(cfg, stage):
-    """Fitting passes for one stage. A saved scalar still applies to every stage."""
-    from pvz_rl.learning.curriculum import SELECTABLE_STAGES
+def cohorts_per_epoch(cfg):
+    """Saved one-pass block length. Absent means every early cohort takes one pass."""
+    value = cfg.get("training", {}).get("cohorts_per_epoch")
+    if value is None:
+        return None
+    if type(value) is not int or isinstance(value, bool) or value < 1:
+        raise ValueError("training.cohorts_per_epoch must be a positive integer")
+    return value
 
-    if stage not in SELECTABLE_STAGES:
+
+def learning_rate_restart(cfg):
+    """Multiple of ``training.learning_rate`` for one manually armed cohort."""
+    value = cfg.get("training", {}).get("learning_rate_restart", 3.0)
+    if (
+        isinstance(value, bool)
+        or type(value) not in (int, float)
+        or not math.isfinite(float(value))
+        or float(value) <= 0
+    ):
+        raise ValueError("training.learning_rate_restart must be a positive finite number")
+    return float(value)
+
+
+def stage_streak(cfg):
+    """Consecutive full cohorts required to leave a stage."""
+    value = cfg.get("training", {}).get("stage_streak", 10)
+    if type(value) is not int or isinstance(value, bool) or value < 1:
+        raise ValueError("training.stage_streak must be a positive integer")
+    return value
+
+
+def report_interval_cohorts(cfg):
+    """Completed cohorts between report redraws."""
+    value = cfg.get("visualization", {}).get("report_interval_cohorts", 10)
+    if type(value) is not int or isinstance(value, bool) or value < 1:
+        raise ValueError("visualization.report_interval_cohorts must be a positive integer")
+    return value
+
+
+def stage_epochs(cfg, stage):
+    """Fitting passes for one fixed-epoch stage. A saved scalar still applies there."""
+    from pvz_rl.learning.curriculum import COHORT_PERFECT_STAGES, FIXED_EPOCH_STAGES
+
+    if stage in COHORT_PERFECT_STAGES:
+        raise ValueError(f"{stage} has no fixed pass count")
+    if stage not in FIXED_EPOCH_STAGES:
         raise ValueError(f"Unknown stage for n_epochs: {stage}")
     training = cfg["training"]
     table = training.get("stage_epochs")
@@ -298,6 +347,18 @@ def stage_epochs(cfg, stage):
     if type(value) is not int or isinstance(value, bool) or value < 1:
         raise ValueError(f"{stage} n_epochs must be a positive integer")
     return value
+
+
+def stage_pass_text(cfg, stage):
+    """Startup text. The five early stages name their pass count."""
+    from pvz_rl.learning.curriculum import COHORT_PERFECT_STAGES
+
+    if stage in COHORT_PERFECT_STAGES:
+        per = cohorts_per_epoch(cfg)
+        if per is None:
+            return "one pass per cohort"
+        return f"{per} one-pass cohorts, then one cohort until fully correct"
+    return f"{stage_epochs(cfg, stage)} passes"
 
 
 def cohort_envs(cfg, skill=None):
@@ -846,6 +907,7 @@ def validate_config(cfg: dict) -> None:
         or sample_seconds < 0.1
     ):
         raise ValueError("hardware_sample_seconds must be finite and at least 0.1")
+    jsonl_batch_bytes(cfg)
     exploration = cfg["training"]["exploration"]
     plant_wait_check_ticks(cfg)
     legacy_tiles = exploration["objective"] == "committed_plant_tile_epsilon_v1"
@@ -1460,6 +1522,7 @@ def validate_config(cfg: dict) -> None:
         256,
     ]:
         raise ValueError("Fitting buckets must cover 8,16,32,64,128,256 without truncation")
+    report_interval_cohorts(cfg)
     if visual.get("viewer", "auto") not in ("auto", "desktop", "web", "off"):
         raise ValueError("visualization.viewer must be auto, desktop, web or off")
     viewer_port = visual.get("viewer_port", 0)
@@ -1518,23 +1581,39 @@ def validate_config(cfg: dict) -> None:
     ):
         if type(train[key]) is not int or train[key] <= 0:
             raise ValueError(f"{key} must be a positive integer")
-    from pvz_rl.learning.curriculum import SELECTABLE_STAGES
+    from pvz_rl.learning.curriculum import COHORT_PERFECT_STAGES, FIXED_EPOCH_STAGES
 
     epochs = train.get("stage_epochs")
     legacy = train.get("n_epochs")
+    fixed = frozenset(FIXED_EPOCH_STAGES)
+    # A checkpoint saved before cohort-perfect fitting still carries the five
+    # retired pass counts. Resume identity rejects that table; weight transfer
+    # does not.
+    accepted = (fixed, fixed | frozenset(COHORT_PERFECT_STAGES))
     if epochs is None:
         if type(legacy) is not int or isinstance(legacy, bool) or legacy < 1:
-            raise ValueError("Each stage needs its own positive n_epochs")
+            raise ValueError(
+                "peashooter, easy, standard, and shared each need a positive n_epochs"
+            )
     elif (
         legacy is not None
         or not isinstance(epochs, dict)
-        or set(epochs) != set(SELECTABLE_STAGES)
+        or frozenset(epochs) not in accepted
         or any(
             type(count) is not int or isinstance(count, bool) or count < 1
             for count in epochs.values()
         )
     ):
-        raise ValueError("Each stage needs its own positive n_epochs")
+        raise ValueError(
+            "peashooter, easy, standard, and shared each need their own positive n_epochs"
+        )
+    per_epoch = train.get("cohorts_per_epoch")
+    if per_epoch is not None and (
+        type(per_epoch) is not int or isinstance(per_epoch, bool) or per_epoch < 1
+    ):
+        raise ValueError("training.cohorts_per_epoch must be a positive integer")
+    learning_rate_restart(cfg)
+    stage_streak(cfg)
     if train.get("discount_clock") != "simulation_ticks" or not 0 < train["gamma"] <= 1:
         raise ValueError("Returns require tick-based discounting with 0 < gamma <= 1")
     if train["batch_size"] > 1024:

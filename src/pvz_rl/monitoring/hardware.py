@@ -12,6 +12,8 @@ from time import perf_counter
 
 import psutil
 
+from pvz_rl.jsonl_log import DEFAULT_BATCH_BYTES, JsonlAppender
+
 GPU_FIELDS = {
     "gpu_percent": "utilization.gpu",
     "gpu_memory_percent": "utilization.memory",
@@ -79,10 +81,13 @@ class HardwareMonitor:
     No CUDA work is issued by the sampler.
     """
 
-    def __init__(self, path, *, seconds=1.0, device=None, gpu_id=None, sample_details=None):
+    def __init__(
+        self, path, *, seconds=1.0, device=None, gpu_id=None, sample_details=None, batch_bytes=None
+    ):
         if not math.isfinite(seconds) or seconds < 0.1:
             raise ValueError("Hardware sampling interval must be at least 0.1 seconds")
         self.path, self.interval = Path(path), seconds
+        self.batch_bytes = DEFAULT_BATCH_BYTES if batch_bytes is None else batch_bytes
         self.gpu_id = training_gpu_id(device) if gpu_id is None else gpu_id
         self.sample_details = sample_details
         self.session = uuid.uuid4().hex
@@ -142,7 +147,7 @@ class HardwareMonitor:
             psutil.cpu_percent(interval=None)
             psutil.cpu_percent(interval=None, percpu=True)
             process.cpu_percent(interval=None)
-            with self.path.open("a", encoding="utf-8") as stream:
+            with JsonlAppender(self.path, self.batch_bytes) as stream:
                 delay = self.interval
                 while not self.stop.wait(delay):
                     started = perf_counter()
