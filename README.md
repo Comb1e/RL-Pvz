@@ -88,7 +88,7 @@ only zombies already present, suppresses scheduled spawns, then probes the settl
 surviving defenses. Each scene contributes one forecast and one exact target job.
 It trains only the encoder and prediction head; all 15 classes must match for a
 scene to count at its inclusive `env_success_threshold = 1.00`. `prediction`
-keeps its strict threshold and forecasts through the last quiet board.
+keeps its strict threshold and forecasts until first house entry or a quiet board.
 Initialize it from `pre_prediction/final.zip` when chaining stages.
 
 For a capacity check from fresh weights, recollect the same 640 scenes and fit
@@ -117,26 +117,25 @@ cohorts and when a stage advances, and do not chart exploration for them.
 Episode rows are written at that same refresh. A checkpoint that omits the
 before-fit pair or the forecast pair still resumes. When the open cohort has
 not committed a pass, the finished first check is that point; otherwise the next
-cohort records it. This prediction behavior is a new run. A checkpoint from
-the one-shot scene, the peashooter stage, the opening-anchor stop, the
-per-decision fork labels, or a house-entry stop does not resume. `--init-from` of the same architecture still loads. A prediction
-environment keeps playing Wait. Zombies still due are drawn across the five lanes
-and the roster and enter from the right edge. The opening count of zombies on the
-field plus zombies still due follows a discrete exponential, with relative weight
-0.1 at one zombie and 0.01 at ten. It records a forecast every 10 ticks until
-the step that leaves the last quiet board: no zombies, no projectiles, no
-moving mower, no spawn still due, and no plant still resolving. Ready, armed,
-digesting, and recovering plants leave the lawn quiet. An opening that is already
-won and still resolving is set back to running before that decision is recorded,
-and keeps forecasting until that board. An opening that is already won and
-already quiet records that one frame
-and then probes. A house entry stays
-on the live view and keeps forecasting until that board. That decision is the
-last forecast, and that env's transformer stops before the next forward. The
-fight's deepest field codes and breach delays are the static result. One probe
-of that quiet board supplies probe depth, including after a house entry, and
-the policy does not run again. Every forecast in that episode is fit to that
-one result. The cutoff publishes no label. The environment succeeds when
+cohort records it. Both forecast stages now require fresh collection runs;
+same-architecture `--init-from` remains supported. They draw defeated, on-field
+and count-only unspawned zombies. Unspawned zombies affect the public total but
+have no schedule and never enter the field. On-field zombies occupy random
+positions across all five lanes and nine columns. Their remaining body HP plus
+armor follows `zombie_hp_fraction`: a normal distribution centered at 80%, with
+10 percentage-point standard deviation, resampled outside 1–100%. Damage consumes
+armor first. The count of on-field plus unspawned zombies retains the exponential
+weights 0.1 at one and 0.01 at ten.
+
+Prediction records a forecast every 10 ticks until the first actual house entry
+after mower resolution, or the quiet-board stop if no entry occurs. The crossing
+step ends at that exact simulator tick. It retains
+the forecast before the crossing step and makes no further model calls for that
+environment. One exact private continuation completes the remaining fight,
+settles surviving defenses and runs one probe. Every earlier forecast receives
+the full episode's shared static result and probe, including later breaches in
+other lanes. An already quiet opening records one forecast. The cutoff publishes
+no label. The environment succeeds when
 strictly more than 95% of its scored forecasts are fully correct. The cohort
 succeeds when all 640 environments succeed. The four placement stages count a
 board when the greedy legal tile is in its labeled successful set. A stage

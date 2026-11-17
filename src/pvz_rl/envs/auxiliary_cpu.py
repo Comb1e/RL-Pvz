@@ -7,6 +7,7 @@ from pvz_game import Rules, Status
 from pvz_game.config import LevelSpec
 
 from pvz_rl.envs.outcome_math import OUTCOME_SHAPE
+from pvz_rl.envs.prediction_counts import continuation_lifecycle
 from pvz_rl.envs.scratch_game import restored_game
 from pvz_rl.envs.static_fork import StaticFork, apply_action
 
@@ -25,6 +26,10 @@ def validate_continuation(job, state, rules):
     ):
         raise ValueError("Invalid private simulation tick counters")
     if job["family"] == "outcomes":
+        if job.get("individual_breaches") and state.get("lifecycle") != continuation_lifecycle(
+            state["snapshot"], state["phase"]
+        ):
+            raise ValueError("Prediction continuation lifecycle disagrees with its physical state")
         labels = np.asarray(state["labels"])
         if (
             labels.shape != OUTCOME_SHAPE
@@ -112,6 +117,7 @@ class CpuSimulation:
                 action=0 if state else job["action"],
                 probe=job["probe"],
                 sky_sun_rate=job["sky_sun_rate"],
+                individual_breaches=job.get("individual_breaches", False),
             )
             if state:
                 self.fork.phase = state["phase"]
@@ -156,6 +162,7 @@ class CpuSimulation:
                 anchor=self.fork.anchor_tick,
                 labels=self.fork.labels.copy(),
             )
+            state["lifecycle"] = continuation_lifecycle(state["snapshot"], state["phase"])
         return state
 
     def result(self):

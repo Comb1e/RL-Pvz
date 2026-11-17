@@ -5,6 +5,7 @@ from functools import lru_cache
 
 from pvz_rl.config import (
     cohorts_per_epoch,
+    load_config,
     outcome_prediction_weights,
     research_config,
     simulator,
@@ -136,7 +137,24 @@ def inference_config(cfg):
         raise ValueError(
             "Incompatible old model. Old checkpoints are incompatible with the outcome-only architecture; start fresh."
         )
-    return weight_engine_config(cfg)
+    result = weight_engine_config(cfg)
+    # Generation/collection changes do not alter weights. Adapt only this
+    # detached inference/initialization validation view, never recovery config.
+    from pvz_rl.envs.prediction_counts import SCENE_PROTOCOL
+
+    for stage in ("pre_prediction", "prediction"):
+        settings = result["training"].get("tile_scenarios", {}).get(stage)
+        if settings is not None and settings.get("scene_protocol") != SCENE_PROTOCOL:
+            defaults = load_config()["training"]["tile_scenarios"][stage]
+            settings["unspawned_zombies"] = settings.pop(
+                "pending_zombies", defaults["unspawned_zombies"]
+            )
+            settings["zombie_hp_fraction"] = defaults["zombie_hp_fraction"]
+            if settings.get("surviving_curve") is None:
+                settings["surviving_curve"] = defaults["surviving_curve"]
+            settings["scene_protocol"] = SCENE_PROTOCOL
+            settings["stop"] = "one_frame" if stage == "pre_prediction" else "first_house_or_quiet"
+    return result
 
 
 def require_supported_policy(cfg, condition="masked"):

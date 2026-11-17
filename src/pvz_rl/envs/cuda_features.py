@@ -143,6 +143,7 @@ class CudaFeatures:
         self.entities = cp.zeros((rows, self.limit, ENTITY_WIDTH), cp.int32)
         self.entity_mask = cp.zeros((rows, self.limit), cp.bool_)
         self.globals = cp.zeros((rows, global_width(cfg)), cp.float32)
+        self.unspawned = cp.zeros(batch.n, cp.int64)
         # Kept count, then plants/zombies/projectiles omitted by the entity cap.
         self.summary = cp.zeros((rows, 4), cp.int64)
         self.lane_zombies = cp.zeros((rows, 5), cp.int16)
@@ -191,6 +192,7 @@ class CudaFeatures:
             "enabled",
             "reward_tensor",
             "mask_tensor",
+            "unspawned",
         ):
             setattr(view, name, getattr(self, name)[: batch.n])
         return view
@@ -243,6 +245,7 @@ class CudaFeatures:
                 b.projectiles,
                 b.mowers,
                 b.cooldowns,
+                self.unspawned,
                 self.records,
                 self.entities[rows],
                 self.entity_mask[rows],

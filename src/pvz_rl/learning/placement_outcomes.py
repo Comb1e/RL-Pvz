@@ -1,6 +1,7 @@
 """One exact pre-action field/probe target per placement decision.
 
-Prediction records forecasts until the lawn is quiet, then runs one probe.
+Prediction borrows real Wait ticks until first entry or quiet, then privately
+finishes its field suffix and probe without further forecast rows.
 """
 
 import copy
@@ -9,11 +10,13 @@ from time import perf_counter
 import numpy as np
 from pvz_game.cuda.schema import HEADER, STATUSES
 
+from pvz_rl.envs.prediction_counts import COLLECTION_PROTOCOL
 from pvz_rl.envs.prediction_stop import PREDICTION_QUIET
 from pvz_rl.learning.auxiliary_service import root_bytes
 from pvz_rl.learning.prediction_labels import (
     accumulate_static,
     freeze_static,
+    merge_static_suffix,
     prediction_label_action,
     write_episode_target,
 )
@@ -22,14 +25,16 @@ LOST = STATUSES.index("lost")
 
 
 class PlacementOutcomes:
-    protocol = "single-placement-outcomes-v3"
+    protocol = "single-placement-outcomes-v4"
 
     def __init__(self, env, buffer, state=None):
         self.env, self.buffer, self.auxiliary = env, buffer, env.auxiliary
         if self.auxiliary is None:
             raise RuntimeError("Single-frame outcomes require the bounded simulation service")
         self.family = (
-            env.tile_scenario if env.tile_scenario in ("pre_prediction", "prediction") else "placement"
+            env.tile_scenario
+            if env.tile_scenario in ("pre_prediction", "prediction")
+            else "placement"
         )
         self.jobs_metric = f"{self.family}_jobs"
         self.jobs = {}
@@ -50,7 +55,9 @@ class PlacementOutcomes:
             if state.get("protocol") != self.protocol:
                 raise ValueError("Incompatible single-placement outcome recovery")
             if self.family == "prediction" and (
-                "episodes" not in state or state.get("quiet") != PREDICTION_QUIET
+                "episodes" not in state
+                or state.get("quiet") != PREDICTION_QUIET
+                or state.get("collection") != COLLECTION_PROTOCOL
             ):
                 raise ValueError("Prediction outcome recovery predates the idle-plant stop")
             if state.get("stage", env.tile_scenario) != env.tile_scenario:
@@ -93,6 +100,8 @@ class PlacementOutcomes:
                 closed=False,
                 field=None,
                 delay=None,
+                lifecycle="forecasting",
+                first_entry=-1,
             )
             self.episodes[env_index] = episode
         return episode
@@ -100,7 +109,7 @@ class PlacementOutcomes:
     def _observe_prediction(self, rows, receipt):
         timed_out = self.env.last_transition_host[:, 1].astype(bool)
         status = self.env._physical_header[:, HEADER.index("status")]
-        quiet = []
+        finished = []
         for slot, index in zip(receipt.slots, receipt.rows, strict=True):
             env_index = int(rows["env"][slot])
             episode = self._episode(env_index)
@@ -123,24 +132,27 @@ class PlacementOutcomes:
             )
             if action == "drop":
                 episode["closed"] = True
-            elif action == "probe":
-                field, delay = freeze_static(episode["depth"], episode["home"], episode["origin"])
-                episode["field"] = field
-                episode["delay"] = delay
-                quiet.append(env_index)
-        if not quiet:
+                episode["lifecycle"] = "unlabeled"
+            elif action in ("probe", "continue_static"):
+                episode["closed"] = True
+                episode["lifecycle"] = (
+                    "static_continuation" if action == "continue_static" else "settling"
+                )
+                homes = episode["home"][episode["home"] >= 0]
+                episode["first_entry"] = int(homes.min()) if len(homes) else -1
+                finished.append(env_index)
+        if not finished:
             return
         roots = self.auxiliary.capture(
-            self.env.batch, quiet, self.env._physical_header[quiet]
+            self.env.batch, finished, self.env._physical_header[finished]
         )
-        for env_index, root in zip(quiet, roots, strict=True):
+        for env_index, root in zip(finished, roots, strict=True):
             episode = self.episodes[env_index]
             identity = ("outcomes", self.family, env_index)
             self.jobs[identity] = dict(
                 env=env_index,
                 rows=list(episode["rows"]),
-                field=episode["field"],
-                delay=episode["delay"],
+                root_tick=int(self.env._physical_header[env_index, HEADER.index("tick")]),
                 root=root,
                 submitted=False,
             )
@@ -180,10 +192,21 @@ class PlacementOutcomes:
                 job.pop("root")
 
     def _publish_probe(self, job, result):
+        episode = self.episodes[job["env"]]
+        cutoff = (
+            self.env.cfg["environment"]["cutoff_seconds"] * self.env.batch.rules.game["tick_rate"]
+        )
+        if int(result["anchor"]) >= cutoff:
+            episode["lifecycle"] = "unlabeled"
+            return
+        merge_static_suffix(episode["depth"], episode["home"], result["outcome"], job["root_tick"])
+        field, delay = freeze_static(episode["depth"], episode["home"], episode["origin"])
+        episode["field"], episode["delay"] = field, delay
         probe = np.asarray(result["outcome"])[:, 2]
         if probe.shape != (5,) or np.any((probe < 0) | (probe > 10)):
             raise RuntimeError("Prediction probe depths are not five lane classes")
-        write_episode_target(self.buffer, job["rows"], job["field"], job["delay"], probe)
+        write_episode_target(self.buffer, job["rows"], field, delay, probe)
+        episode["lifecycle"] = "ready"
         self.metrics["published_rows"] += len(job["rows"])
 
     def advance(self):
@@ -236,6 +259,7 @@ class PlacementOutcomes:
         )
         if self.family == "prediction":
             saved["quiet"] = PREDICTION_QUIET
+            saved["collection"] = COLLECTION_PROTOCOL
         return copy.deepcopy(saved)
 
     def close(self):

@@ -7,7 +7,7 @@ from time import perf_counter
 
 import numpy as np
 
-PROTOCOL = "fixed-pre-prediction-v1"
+PROTOCOL = "fixed-pre-prediction-v2"
 
 
 def fixed_seeds(cfg):
@@ -30,9 +30,9 @@ def validate_fixed_seeds(settings, stage):
         raise ValueError("Fixed pre_prediction needs one distinct nonnegative scene seed per env")
 
 
-def opening_hash(snapshot, motion):
+def opening_hash(snapshot, motion, unspawned=0):
     value = json.dumps(
-        [snapshot, motion],
+        [snapshot, motion, unspawned],
         sort_keys=True,
         separators=(",", ":"),
         default=lambda item: item.tolist(),

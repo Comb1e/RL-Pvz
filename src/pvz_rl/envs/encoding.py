@@ -20,6 +20,7 @@ from pvz_rl.envs.motion_history import (
     ZOMBIE,
     unknown_history,
 )
+from pvz_rl.envs.prediction_counts import public_counts
 
 ENTITY_FIELDS = (
     "type",
@@ -310,7 +311,9 @@ class ObservationEncoder:
             return unknown_history()
         return motion.channels(category, ident)
 
-    def encode(self, obs: Observation, motion=None):
+    def encode(self, obs: Observation, motion=None, *, unspawned=0):
+        if unspawned:
+            obs = public_counts(obs, unspawned)
         rows = []
         unit = self.rules.game["units_per_tile"]
         try:

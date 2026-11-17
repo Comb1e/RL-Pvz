@@ -8,19 +8,20 @@ from pvz_game.config import InitialPlant
 from pvz_game.engine import _Zombie
 
 from pvz_rl.envs.motion_history import MotionHistory
+from pvz_rl.envs.prediction_counts import SCENE_PROTOCOL
 from pvz_rl.envs.scenarios import namespace_seed
 from pvz_rl.envs.scratch_game import EngineSnapshot, restored_game, scratch_game, set_initial_mowers
 from pvz_rl.envs.tile_scenarios import prediction_settings
 
 
-def _feasible_surviving_totals(live_range, pending_range):
-    """Totals of on-field plus still-due zombies that fit both configured ranges."""
+def _feasible_surviving_totals(live_range, unspawned_range):
+    """Totals of on-field plus count-only zombies that fit both ranges."""
     live_lo, live_hi = live_range
-    pending_lo, pending_hi = pending_range
+    unspawned_lo, unspawned_hi = unspawned_range
     totals = []
-    for total in range(max(live_lo + pending_lo, 1), live_hi + pending_hi + 1):
-        low = max(live_lo, total - pending_hi)
-        high = min(live_hi, total - pending_lo)
+    for total in range(max(live_lo + unspawned_lo, 1), live_hi + unspawned_hi + 1):
+        low = max(live_lo, total - unspawned_hi)
+        high = min(live_hi, total - unspawned_lo)
         if low <= high:
             totals.append(total)
     return totals
@@ -37,8 +38,8 @@ def _surviving_weights(totals, curve):
 
 
 def _draw_surviving_counts(rng, settings):
-    """On-field and still-due counts whose sum follows the surviving curve."""
-    totals = _feasible_surviving_totals(settings["live_zombies"], settings["pending_zombies"])
+    """On-field and count-only counts whose sum follows the surviving curve."""
+    totals = _feasible_surviving_totals(settings["live_zombies"], settings["unspawned_zombies"])
     if not totals:
         raise ValueError("Prediction scenes need a surviving zombie")
     weights = _surviving_weights(totals, settings["surviving_curve"])
@@ -54,32 +55,29 @@ def _draw_surviving_counts(rng, settings):
             chosen = total
             break
     live_lo, live_hi = settings["live_zombies"]
-    pending_lo, pending_hi = settings["pending_zombies"]
-    low = max(live_lo, chosen - pending_hi)
-    high = min(live_hi, chosen - pending_lo)
+    unspawned_lo, unspawned_hi = settings["unspawned_zombies"]
+    low = max(live_lo, chosen - unspawned_hi)
+    high = min(live_hi, chosen - unspawned_lo)
     live = rng.randint(low, high)
     return live, chosen - live
 
 
+def sample_hp_fraction(rng, settings):
+    """Truncate by rejection, rather than concentrating mass at the bounds."""
+    while True:
+        value = rng.gauss(settings["mean"], settings["std"])
+        if settings["min"] <= value <= settings["max"]:
+            return value
+
+
 def prediction_snapshot(cfg, seed, rules, *, skill="prediction"):
     settings = prediction_settings(cfg, skill)
-    rng = Random(namespace_seed("prediction-frame-v1", seed))
+    rng = Random(namespace_seed(SCENE_PROTOCOL, seed))
     g = rules.game
     plant_types, zombie_types = (cfg["environment"][key] for key in ("plants", "zombies"))
     plant_count = rng.randint(*settings["plants"])
-    if settings.get("surviving_curve") is None:
-        # Saved configs from before the curve keep independent uniform counts.
-        live = rng.randint(*settings["live_zombies"])
-        defeated = rng.randint(*settings["defeated_zombies"])
-        pending = rng.randint(*settings["pending_zombies"])
-        if not live and not pending:
-            if settings["pending_zombies"][1]:
-                pending = 1
-            else:
-                live = 1
-    else:
-        defeated = rng.randint(*settings["defeated_zombies"])
-        live, pending = _draw_surviving_counts(rng, settings)
+    defeated = rng.randint(*settings["defeated_zombies"])
+    live, unspawned = _draw_surviving_counts(rng, settings)
     tiles = sorted(rng.sample(range(g["rows"] * g["cols"]), plant_count))
     plants = tuple(InitialPlant(rng.choice(plant_types), *divmod(t, g["cols"])) for t in tiles)
     tick = 1
@@ -89,21 +87,15 @@ def prediction_snapshot(cfg, seed, rules, *, skill="prediction"):
                 tick,
                 rng.choice(zombie_types),
                 rng.randrange(g["rows"]),
-                x=rng.randint(max(0, g["house_x"] + 1), g["spawn_x"]),
+                x=rng.randrange(max(0, g["house_x"] + 1), g["cols"] * g["units_per_tile"]),
             )
             for _ in range(live)
         ),
         key=lambda spawn: (spawn.row, spawn.x, spawn.zombie_type),
     )
-    # The ledger represents already-defeated, live, and future zombies. Future
-    # entries supply the public total but are suppressed in every target fork.
-    # A future zombie enters from the spawn line on a drawn lane and roster type.
-    # Defeated copies stay behind spawn_index and never enter.
+    # Only physical history belongs to the engine ledger. Unspawned zombies have
+    # no schedule, type, lane or RNG draws and never enter either continuation.
     spawns = [Spawn(tick, zombie_types[0], 0)] * defeated + live_spawns
-    spawns.extend(
-        Spawn(tick + offset + 1, rng.choice(zombie_types), rng.randrange(g["rows"]))
-        for offset in range(pending)
-    )
     game = scratch_game(rules)
     game.reset(
         LevelSpec("tile-prediction", tuple(spawns), rng.randint(*settings["sun"]), plants),
@@ -135,14 +127,25 @@ def prediction_snapshot(cfg, seed, rules, *, skill="prediction"):
         )
         game._start_walk(zombie, pole=pole)
         game._zombies[zombie.id] = zombie
+        maximum = spec["health"] + spec["armor"]
+        remaining = max(
+            1,
+            min(maximum, round(maximum * sample_hp_fraction(rng, settings["zombie_hp_fraction"]))),
+        )
+        game._damage(zombie, maximum - remaining, 0)
+    game._events.clear()
     # An unmoved frame has an empty ring. Eight waits make the summary real motion,
     # and the forecast fork is this warmed frame.
     motion = MotionHistory(cfg, rules)
     motion.sync(game.observe())
     for _ in range(motion.ticks):
+        previous, history = game.snapshot(), motion.export()
         result = game.step(Wait(), ticks=1)
+        if result.status == Status.LOST:
+            # Keep the last pre-entry frame if a warmup ever reaches the house.
+            return EngineSnapshot.capture(restored_game(previous, rules)), history, unspawned
         if result.ticks_advanced:
             motion.advance(result.observation, result.events)
         if result.status != Status.RUNNING:
             break
-    return EngineSnapshot.capture(restored_game(game.snapshot(), rules)), motion.export()
+    return EngineSnapshot.capture(restored_game(game.snapshot(), rules)), motion.export(), unspawned

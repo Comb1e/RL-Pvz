@@ -114,7 +114,9 @@ _STAGE_PARAMETERS = {
                 "plants",
                 "live_zombies",
                 "defeated_zombies",
-                "pending_zombies",
+                "unspawned_zombies",
+                "zombie_hp_fraction",
+                "scene_protocol",
                 "sun",
                 "ready_probability",
             )
@@ -1122,6 +1124,10 @@ def validate_config(cfg: dict) -> None:
     for prediction_stage in ("pre_prediction", "prediction"):
         prediction = prediction_settings(cfg, prediction_stage)
         if prediction is not None:
+            from pvz_rl.envs.prediction_counts import SCENE_PROTOCOL
+
+            if prediction.get("scene_protocol") != SCENE_PROTOCOL or "pending_zombies" in prediction:
+                raise ValueError("Prediction scene generation changed; start a fresh run")
             if type(prediction.get("n_envs")) is not int or prediction["n_envs"] < 1:
                 raise ValueError("prediction.n_envs must be a positive integer")
             if (
@@ -1141,7 +1147,7 @@ def validate_config(cfg: dict) -> None:
                 ("plants", 45),
                 ("live_zombies", math.inf),
                 ("defeated_zombies", math.inf),
-                ("pending_zombies", math.inf),
+                ("unspawned_zombies", math.inf),
                 ("sun", rules.game["sun_cap"]),
             ):
                 values = prediction.get(key)
@@ -1152,10 +1158,22 @@ def validate_config(cfg: dict) -> None:
                     or not 0 <= values[0] <= values[1] <= limit
                 ):
                     raise ValueError(f"Invalid prediction.{key} range")
-            if not prediction["live_zombies"][1] and not prediction["pending_zombies"][1]:
-                raise ValueError("Prediction scenes need live or pending zombies")
+            if not prediction["live_zombies"][1] and not prediction["unspawned_zombies"][1]:
+                raise ValueError("Prediction scenes need live or unspawned zombies")
+            hp = prediction.get("zombie_hp_fraction")
+            if (
+                not isinstance(hp, dict)
+                or set(hp) != {"mean", "std", "min", "max"}
+                or any(type(v) not in (int, float) or not math.isfinite(v) for v in hp.values())
+                or not 0 < hp["min"] <= hp["mean"] <= hp["max"] <= 1
+                or hp["min"] == hp["max"]
+                or hp["std"] <= 0
+            ):
+                raise ValueError(f"Invalid {prediction_stage}.zombie_hp_fraction")
             curve = prediction.get("surviving_curve")
-            if curve is not None:
+            if curve is None:
+                raise ValueError("Prediction scenes require their configured surviving_curve")
+            else:
                 weights_ok = (
                     isinstance(curve, list)
                     and len(curve) == 4
@@ -1194,7 +1212,7 @@ def validate_config(cfg: dict) -> None:
                     f"{prediction_stage}.env_success_threshold must be finite and in {bounds}"
                 )
             if prediction.get("stop") != (
-                "one_frame" if prediction_stage == "pre_prediction" else "last_quiet"
+                "one_frame" if prediction_stage == "pre_prediction" else "first_house_or_quiet"
             ):
                 raise ValueError(f"Invalid {prediction_stage}.stop")
             if prediction.get("target") != (

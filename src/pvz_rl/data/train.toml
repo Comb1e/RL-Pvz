@@ -188,6 +188,7 @@ oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown 
 oracle_vram_mib = 1024
 
 [training.pre_prediction]
+scene_protocol = "prediction-frame-v2"
 # One opening-frame forecast; exact private targets suppress future spawns.
 forecast_mode = "prediction_only"
 extra_actions = 0
@@ -201,30 +202,33 @@ validation_cases = 200 # Inactive panel. The cohort bar is each environment's fo
 plants = [0, 20]
 live_zombies = [0, 10]
 defeated_zombies = [0, 30]
-pending_zombies = [0, 20]
-# On-field plus still-due zombies. Relative exponential weights, normalized
+unspawned_zombies = [0, 20] # Count only; no scheduled arrivals.
+zombie_hp_fraction = { mean = 0.8, std = 0.1, min = 0.01, max = 1.0 } # Remaining body + armor; truncated normal.
+# On-field plus unspawned zombies. Relative exponential weights, normalized
 # over every legal total. One zombie weighs 0.1 and ten weigh 0.01.
 surviving_curve = [1, 0.1, 10, 0.01]
 sun = [0, 500]
 ready_probability = 0.5 # Applied independently to each card slot and mower.
 
 [training.prediction]
+scene_protocol = "prediction-frame-v2"
 # The stage bar is this cohort's pre-pass check. Training does not run the held-out panel.
 # An environment succeeds when its labeled forecasts are strictly above this rate.
 forecast_mode = "prediction_only"
 extra_actions = 0
 env_success_threshold = 0.95
-stop = "last_quiet" # No zombies, projectiles, or moving mowers; every plant ready; no spawn still due.
+stop = "first_house_or_quiet" # Stop forecasts at first house entry; finish static/probe privately.
 target = "episode_static_then_probe" # One real-fight static result, then one quiet-board probe.
-breach = "until_quiet" # A house entry keeps this env playing until the lawn is quiet.
+breach = "until_quiet" # Private continuation completes the field after a house entry.
 n_envs = 640
 probe_interval_games = 10000
 validation_cases = 200 # Inactive panel. The cohort bar is each environment's forecast success rate.
 plants = [0, 20]
 live_zombies = [0, 10]
 defeated_zombies = [0, 30]
-pending_zombies = [0, 20]
-# On-field plus still-due zombies. Relative exponential weights, normalized
+unspawned_zombies = [0, 20] # Count only; no scheduled arrivals.
+zombie_hp_fraction = { mean = 0.8, std = 0.1, min = 0.01, max = 1.0 }
+# On-field plus unspawned zombies. Relative exponential weights, normalized
 # over every legal total. One zombie weighs 0.1 and ten weigh 0.01.
 surviving_curve = [1, 0.1, 10, 0.01]
 sun = [0, 500]

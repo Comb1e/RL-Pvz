@@ -1,9 +1,9 @@
-"""Last quiet board for a prediction episode.
+"""First entry or quiet-board boundary for Prediction forecasting.
 
 The pinned simulator marks a win when every zombie has been defeated and then
 stops stepping. Prediction holds that win until the real lawn is quiet. A house
-entry does not stop the episode either: that zombie leaves the lawn and the
-fight keeps resolving. The step that leaves the quiet lawn is the last forecast.
+entry removes that zombie and closes forecasting. An isolated suffix finishes
+the fight, settles the defenses and probes them without another model call.
 
 A plant that is sitting still does not keep the lawn open. Armed mines and
 digesting or recovering Chompers are quiet. A plant that is still rising,
@@ -41,10 +41,11 @@ _HELD_HOUSE = """    for (I i = 0; i < h->nz;) {
       if (!z[i].headless && z[i].health > 0 && z[i].x <= G_house_x) {
         if (prediction_hold_win) {
           if (field_enabled) {
-            field[1 + z[i].row] = h->tick;
+            if (field[1 + z[i].row] < 0) field[1 + z[i].row] = h->tick;
             field[6 + (h->tick - field[0]) * 5 + z[i].row] = 10;
           }
-          z[i] = z[--h->nz];
+          for (I k = i; k + 1 < h->nz; k++) z[k] = z[k + 1];
+          h->nz--;
           continue;
         }
         h->status = 2;
@@ -63,6 +64,11 @@ _QUIET_METHOD = f"""  __device__ bool prediction_board_quiet() {{
       if ({_RESOLVING_TEST}) return false;
     }}
     return true;
+  }}
+  __device__ bool prediction_entered_house() {{
+    if (!prediction_hold_win || !field_enabled) return false;
+    for (I row = 0; row < 5; row++) if (field[1 + row] >= 0) return true;
+    return false;
   }}
 """
 
@@ -91,15 +97,17 @@ def prediction_last_quiet(header, plants, mowers, active):
     )
 
 
-def prediction_step_done(header, quiet, active, cutoff_tick):
-    """Cutoff, an already lost board, or the step that left the last quiet board.
+def prediction_step_done(header, quiet, active, cutoff_tick, breached=None):
+    """Cutoff, loss, first entry, or the step that left the quiet board.
 
-    A prediction house entry does not set lost, so the env keeps forecasting
-    until the lawn is quiet.
+    A mower-resolved entry ends forecasting without making the target a loss.
     """
     lost = header[:, HEADER.index("status")] == LOST
     cutoff = header[:, HEADER.index("tick")] >= cutoff_tick
-    return active.bool() & (lost | cutoff | quiet.bool())
+    stop = lost | cutoff | quiet.bool()
+    if breached is not None:
+        stop |= breached.bool()
+    return active.bool() & stop
 
 
 def prediction_resume_won(header, quiet, active):
@@ -119,6 +127,7 @@ def prediction_quiet_source(source):
         "I motion_slots, I motion_width) {": "I motion_slots, I motion_width, I prediction_hold_win) {",
         "motion + i * motion_width, motion_slots};": "motion + i * motion_width, motion_slots, prediction_hold_win};",
         "  __device__ void advance() {": _QUIET_METHOD + "  __device__ void advance() {",
+        "    for (I i = 0; i < ticks && !h->status; i++)": "    for (I i = 0; i < ticks && !h->status && !prediction_entered_house(); i++)",
         _WIN: _HELD_WIN,
         _HOUSE: _HELD_HOUSE,
     }

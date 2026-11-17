@@ -70,6 +70,7 @@ class ForkService:
                     max_step_ticks=settings["chunk_ticks"],
                     device=source.device,
                     sky_sun_rate=sky_sun_rate,
+                    individual_breaches=settings.get("individual_breaches", False),
                 )
                 break
             except cp.cuda.memory.OutOfMemoryError:

@@ -309,15 +309,15 @@ class ScenarioQueue:
             boards = {}
             for index, _, _, seed, _ in staged:
                 check_deadline(self.deadline)
-                snapshot, motion = prediction_snapshot(
+                snapshot, motion, unspawned = prediction_snapshot(
                     self.cfg, seed, self.rules, skill=self.tile_scenario
                 )
                 if self.tile_scenario == "pre_prediction":
                     from pvz_rl.learning.fixed_prediction import fixed_seeds, opening_hash
 
                     if fixed_seeds(self.cfg) is not None:
-                        self.fixed_opening_hashes[index] = opening_hash(snapshot, motion)
-                boards[index] = dict(snapshot=snapshot, motion=motion)
+                        self.fixed_opening_hashes[index] = opening_hash(snapshot, motion, unspawned)
+                boards[index] = dict(snapshot=snapshot, motion=motion, unspawned=unspawned)
             self.tile_boards.update(boards)
             staged = [
                 (*s[:4], LevelSpec.from_dict(boards[s[0]]["snapshot"]["level"])) for s in staged
@@ -395,6 +395,7 @@ class CudaVecEnv(VecEnv):
         self.active_tasks, self._tasks = Counter(), {}
         self.enabled_envs = np.ones(count, dtype=bool)
         self.prediction_anchor = np.full(count, -1, np.int64)
+        self.prediction_unspawned = np.zeros(count, np.int64)
         self.static_forks = None
         self._pending_spawns = np.zeros(count, dtype=np.int64)
         self.tile_scenario = "complete"
@@ -414,12 +415,7 @@ class CudaVecEnv(VecEnv):
         for prediction_stage in ("pre_prediction", "prediction"):
             prediction = prediction_settings(cfg, prediction_stage)
             if prediction is not None:
-                counts.append(
-                    sum(
-                        prediction[k][1]
-                        for k in ("live_zombies", "defeated_zombies", "pending_zombies")
-                    )
-                )
+                counts.append(sum(prediction[k][1] for k in ("live_zombies", "defeated_zombies")))
         self.batch = AccountingCudaBatch(
             count,
             zombie_capacity=max(1, *counts),
@@ -482,6 +478,10 @@ class CudaVecEnv(VecEnv):
                 self.live_view.fail(exc)
         self.enabled_envs[indices] = True
         self.prediction_anchor[indices] = -1
+        self.features.unspawned[indices] = 0
+        self.prediction_unspawned[indices] = 0
+        if self.tile_scenario == "prediction" and not self.batch.field_enabled:
+            self.batch.enable_field_tracking()
         if cases is None:
             staged = self.queue.prepare(indices, seeds=tile_seeds)
         else:
@@ -524,6 +524,10 @@ class CudaVecEnv(VecEnv):
                 from pvz_rl.envs.motion_history import install_motion
 
                 install_motion(self.batch, [boards[i]["motion"] for i in indices], indices)
+                self.prediction_unspawned[indices] = [boards[i]["unspawned"] for i in indices]
+                self.features.unspawned[indices] = self.cp.asarray(
+                    self.prediction_unspawned[indices]
+                )
                 boards.clear()  # Physical roots and scene seeds already have owners.
             else:
                 self.tile_boards = deepcopy(boards)
@@ -594,6 +598,7 @@ class CudaVecEnv(VecEnv):
                 }
             )
             settings["fork_wait_ticks"] = self._decision_ticks
+            settings["individual_breaches"] = is_prediction_skill(self.tile_scenario)
             settings["fork_max_jobs"] = max(1, int(self.enabled_envs.sum())) * (
                 5 if self.training else 1
             )
@@ -755,12 +760,12 @@ class CudaVecEnv(VecEnv):
         self.executed_actions.copy_(torch.where(self._device_active & h[:, 12].bool(), actions, 0))
         cutoff_tick = self.cfg["environment"]["cutoff_seconds"] * self.batch.rules.game["tick_rate"]
         if self.batch.prediction_hold_win:
-            # The step that leaves the real lawn quiet is the last forecast.
-            # A house entry and a defeated horde both keep stepping until that board.
+            # First actual entry closes forecasting. Its exact suffix is private.
             quiet = prediction_last_quiet(
                 h, self.plant_tensor, self.mower_tensor, self._device_active
             )
-            done = prediction_step_done(h, quiet, self._device_active, cutoff_tick)
+            breached = (torch.from_dlpack(self.batch.field_trace[:, 1:6]) >= 0).any(dim=1)
+            done = prediction_step_done(h, quiet, self._device_active, cutoff_tick, breached)
             timed_out = (h[:, 0] >= cutoff_tick) & (h[:, 1] == 0) & self._device_active
         else:
             done = ((h[:, 1] != 0) | (h[:, 0] >= cutoff_tick)) & self._device_active
@@ -941,6 +946,7 @@ class CudaVecEnv(VecEnv):
 
     def snapshot_training(self):
         """Complete private simulator/queue state, never part of model inputs."""
+        from pvz_rl.envs.prediction_counts import SCENE_PROTOCOL
         from pvz_rl.envs.prediction_snapshots import capture_prediction_accounting
 
         header = self.batch.header.get()
@@ -949,6 +955,11 @@ class CudaVecEnv(VecEnv):
             "games": games,
             "prediction_accounting": capture_prediction_accounting(games)
             if self.tile_scenario == "prediction"
+            else None,
+            "prediction_scene": dict(
+                protocol=SCENE_PROTOCOL, unspawned=self.prediction_unspawned.tolist()
+            )
+            if is_prediction_skill(self.tile_scenario)
             else None,
             "allowed": header[:, 15].tolist(),
             "digging": header[:, 16].astype(bool).tolist(),
@@ -1004,6 +1015,13 @@ class CudaVecEnv(VecEnv):
 
     def restore_training(self, state):
         skill = state.get("tile_scenario", "complete")
+        from pvz_rl.envs.prediction_counts import validate_scene_state
+
+        unspawned = (
+            validate_scene_state(state.get("prediction_scene"), self.num_envs)
+            if is_prediction_skill(skill)
+            else [0] * self.num_envs
+        )
         prediction_roots = None
         if skill == "prediction":
             from pvz_rl.envs.prediction_snapshots import validated_prediction_snapshots
@@ -1090,6 +1108,8 @@ class CudaVecEnv(VecEnv):
             else:
                 self.features.initialize_home(list(range(self.num_envs)))
             self._restore_motion(state.get("motion"))
+            self.features.unspawned[:] = self.cp.asarray(unspawned)
+            self.prediction_unspawned[:] = unspawned
             self.features.encode()
             for rng, saved in zip(self.queue.rngs, state["queue_rng"], strict=True):
                 rng.bit_generator.state = deepcopy(saved)
@@ -1162,7 +1182,7 @@ class CudaVecEnv(VecEnv):
             **{k: float(t[j]) for k, j in LEDGER_INDICES.items()},
             mowers_used=int(t[24]),
             defeated=int(h[5]),
-            total_zombies=int(h[8]),
+            total_zombies=int(h[8]) + int(self.prediction_unspawned[index]),
             failure_category="house_breach"
             if status == "lost"
             else "time_cutoff"

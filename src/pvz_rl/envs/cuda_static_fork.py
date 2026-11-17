@@ -62,7 +62,7 @@ _METHODS = r"""
 """
 
 
-def static_fork_source(source):
+def static_fork_source(source, *, individual_breaches=False):
     """Fail closed when any of the pinned source contracts changes."""
     terminal = """    for (I i = 0; i < h->nz; i++)
       if (!z[i].headless && z[i].x <= G_house_x)
@@ -95,6 +95,11 @@ def static_fork_source(source):
         if source.count(before) != 1:
             raise RuntimeError(f"Pinned static-fork hook changed: {before[:70]}")
         source = source.replace(before, after)
+    if individual_breaches:
+        source = source.replace(
+            "if (lost[z[j].row]) {",
+            "if (!z[j].headless && z[j].health > 0 && z[j].x <= G_house_x) {",
+        )
     # Probe initialization uses the engine's own spawn construction and gait RNG.
     source += r"""
 extern "C" __global__ void start_probes(
@@ -140,13 +145,14 @@ class StaticForkBatch(CudaBatch):
     phase: 0 field (including settling), 2 probe, 3 completed.
     """
 
-    def __init__(self, *args, sky_sun_rate=1.0, **kwargs):
+    def __init__(self, *args, sky_sun_rate=1.0, individual_breaches=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.forecast = self.cp.zeros((self.n, *OUTCOME_SHAPE), self.cp.int64)
         self.forecast_phase = self.cp.zeros(self.n, self.cp.int64)
         self.forecast_start = self.cp.zeros(self.n, self.cp.int64)
         self.sky_sun_rate = sky_sun_rate
-        self.source = static_fork_source(self.source)
+        self.individual_breaches = individual_breaches
+        self.source = static_fork_source(self.source, individual_breaches=individual_breaches)
         self.module = self.cp.RawModule(code=self.source, options=("--std=c++11", "--fmad=false"))
         self._step_kernel = self.module.get_function("step_games")
         self._probe_kernel = self.module.get_function("start_probes")
@@ -261,10 +267,13 @@ class StaticForkBatch(CudaBatch):
         return dict(
             count=self.count,
             sky_sun_rate=self.sky_sun_rate,
+            individual_breaches=self.individual_breaches,
             arrays={name: getattr(self, name)[: self.count].get() for name in names},
         )
 
     def restore(self, state):
+        if state.get("individual_breaches", False) != self.individual_breaches:
+            raise ValueError("Static fork breach handling differs from recovery")
         if state["sky_sun_rate"] != self.sky_sun_rate:
             raise ValueError("Static fork sky-sun settings differ from recovery")
         if not 0 <= state["count"] <= self.n:

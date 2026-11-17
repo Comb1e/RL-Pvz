@@ -14,7 +14,18 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   only the encoder and effect head train, without warmup or other losses.
   All 15 classes must match at the inclusive threshold 1.0; ordinary Prediction
   keeps its strict threshold. The regular stage retains the configured streak.
-  Existing Prediction last-quiet trajectories and model identity stay unchanged.
+  Prediction stops forecasting at first mower-resolved house entry or quiet;
+  its private suffix and probe retain the full episode target. Model identity stays unchanged.
+- Both forecast stages use `prediction-frame-v2`. Unspawned zombies are count-only
+  metadata: public total is physical ledger total plus unspawned. They never have
+  a schedule or delay completion. Share the count adapter across CPU/CUDA encoding,
+  viewers and recovery; leave physical spawn/kill counters untouched. On-field
+  positions span the whole five-by-nine lawn. Sample remaining body-plus-armor
+  durability from the configured truncated normal (80% center, 10-point spread,
+  1–100% bounds), using rejection sampling and engine armor-first damage. Preserve
+  headless transitions and ledger accounting. Keep the last pre-entry warmup frame.
+  Old collection recoveries require fresh runs; same-architecture weight transfers
+  remain valid. Save unspawned metadata and first-entry lifecycle with owned jobs.
 - `tools/overfit_pre_prediction.py` starts fresh weights and optimizer, persists
   a distinct fixed scene-seed panel, then recollects and scores it before each
   single fitting pass. Opening physical/motion and exact target hashes must
@@ -77,10 +88,11 @@ If the user has not declared it in advance. Ignore the existing runs by default.
 - All models are outcome-only. Factual prediction heads, horizon/snapshot labels,
   losses, summaries, storage and legacy resumes are removed. Early stages use
   `placement_outcomes`: exactly one pre-action field/probe job per decision,
-  including rejections. Prediction keeps playing Wait and records another forecast
-  every 10 ticks until the step that leaves the last quiet board, or the cutoff.
-  A house entry does not end the env or switch the live view: that zombie leaves
-  the lawn and the fight keeps resolving. Last quiet means no zombies, no
+  including rejections. Prediction records another forecast every 10 ticks until
+  the first actual house-entry step, quiet, or cutoff. A crossing closes that
+  environment's transformer participation at the exact crossing tick. Capture its owned physical root and
+  finish the field suffix privately, retaining other zombies even in a breached
+  lane; never replay its observed prefix. Last quiet means no zombies, no
   projectiles, no moving mower, no spawn still due, and no plant still resolving
   (`arming`, `rising`, `fusing`, `biting`, `biting_got_one`, `exploding`,
   `detonating`). `ready`, `armed`, `digesting`, and `recovering` leave the lawn
@@ -92,8 +104,8 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   The env then leaves the policy batch before the next forward. The static result
   is the deepest real-fight field code on each lane and the tick delay from the
   first forecast to that lane's first home entry. A home entry is field class 10.
-  One probe of that quiet board supplies probe depth, including after a house
-  entry, and the policy does not run for it. Every forecast of that episode is
+  One probe of the settled board supplies probe depth, including after a house
+  entry, and the policy does not run for the suffix or probe. Every forecast of that episode is
   fit to that shared target. The cutoff publishes no label. `prediction.target` is
   `episode_static_then_probe`. `prediction.breach` is `until_quiet`.
   Placement keeps one pre-action fork per decision, action 0 on the pre-mutation
@@ -262,30 +274,30 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   bar is the labeled-set check on that collected cohort. Weights-only stage
   transfers use `--init-from`; recovery retains the saved stage order.
 - Prediction uses the configured environment count (640) of seeded, engine-validated
-  opening frames. Zombies that have not yet entered are drawn across the five lanes
-  and the roster and come in from the spawn line. The total of zombies already on
-  the field and zombies still due follows a discrete exponential: relative weight
+  opening frames. Unspawned zombies contribute only to public totals. The total
+  of zombies already on the field and count-only unspawned zombies follows a discrete exponential: relative weight
   0.1 at one zombie and 0.01 at ten, normalized over every legal total from one
   through the configured caps. A drawn total is split uniformly into a legal
-  on-field count and a still-due count. Already-defeated copies stay uniform.
+  on-field count and an unspawned count. Already-defeated copies stay uniform.
   After the 8-tick motion warmup
   the environment keeps playing Wait.
   Every existing decision boundary, 10 simulator ticks, records another forecast of
   the board at that moment. Each forecast is the effect head's field depth, breach
-  bin, and probe depth. The real lawn keeps moving after every zombie is defeated,
-  and after a house entry, until it is last quiet: no zombies, no projectiles, no
+  bin, and probe depth. The first mower-resolved house entry ends forecasting;
+  an owned private continuation finishes the remaining fight, including later
+  entries and other zombies in the same lane. Without an entry the real lawn
+  keeps forecasting until quiet: no zombies, no projectiles, no
   moving mower, no spawn still due, and no plant still resolving. `ready`,
   `armed`, `digesting`, and `recovering` are quiet. An opening that is already
   won and still resolving is set back to running before branch availability is
   recorded, and keeps forecasting until quiet. An opening that is already won
   and already quiet records that one
-  frame and then probes. The live view stays on
-  that env through the entry and switches only after this quiet board. The step
-  that leaves that board is the last forecast. That env's transformer stops before
+  frame and then probes. The live view closes that env's policy episode at first
+  entry or quiet. The forecast before the boundary step is the last. The transformer stops before
   the next forward. The static result is the guarded trace of that fight: the
   deepest field code on each lane, a home entry stored as class 10, and the breach
   delay from the first forecast tick. One probe of that quiet board then
-  supplies the five probe depths, including after a house entry. The policy is not called, and that probe stores
+  supplies the five probe depths, including after a house entry. The policy is not called for the suffix or probe, which store
   no new forecast row. Every forecast in that episode receives that one target. The
   cutoff publishes nothing. A missing probe stays unlabeled. A forecast is
   fully correct when every lane's field depth, breach bin, and probe depth match
@@ -301,14 +313,14 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   forecasts equally. Train the forecast path without warmup, Q, or teachers.
   Eligible parameters are the shared encoder and the effect head. That forward
   does not call the action MLP, tile decoder, or tile head. This is the only
-  autonomous stage that updates the shared encoder and the effect head. Easy,
+  autonomous stage family that updates the shared encoder and the effect head. Easy,
   standard, and shared update the action MLP. The cohort line prints successful environments and
   `forecasts N/M`. The before-fit chart draws both series. The inactive panel
   stays at `validation_cases = 200` with the trigger disabled. `prediction.stop`
-  is `last_quiet`. `prediction.target` is `episode_static_then_probe`.
+  is `first_house_or_quiet`. `prediction.target` is `episode_static_then_probe`.
   `prediction.breach` is `until_quiet`. A checkpoint from the one-shot scene, the
   peashooter stage, the opening-anchor stop, the per-decision fork labels, or a
-  house-entry stop does not resume. `--init-from` of the same architecture
+  previous house-entry or last-quiet stop does not resume. `--init-from` of the same architecture
   still loads. Policy kind and observation protocol stay unchanged.
 - Cohort fitting and the stage bar use the same collected cohort. Prediction, cherry bomb,
   cherry-bomb obstacle, attacker pre, and attacker take one fitting pass per cohort.
@@ -338,6 +350,7 @@ Paths are relative to `src/pvz_rl/` unless stated otherwise.
 
 `envs/prediction_snapshots.py` owns Prediction exit accounting and validated
 recovery roots, shared by capture and restore.
+`envs/prediction_counts.py` owns count-only scene metadata and public totals.
 
 | Area                                                                                                                                                                                    | Ownership                                                                                                                                                                                                                                                                                  |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -345,7 +358,7 @@ recovery roots, shared by capture and restore.
 | `config.py`, `data/train.toml`, `gpu.py`                                                                                                                                                | Stage tuning, validation panels, model dimensions and device selection.                                                                                                                                                                                                                    |
 | `policy/`                                                                                                                                                                               | Shared public encoder, pre-action effect head exposing hidden lane vectors, six-token CLS/lane memory, action MLP, conditional tile decoder, readouts, stateless runner and bounded graphs/batching.                                                                                          |
 | `envs/`                                                                                                                                                                                 | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `motion_history.py` writes the per-tick ring onto those tokens. `field_tracking.py` owns guarded per-tick depth and home-entry hooks.                                                                    |
-| `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py`, `prediction_scenarios.py`, `prediction_stop.py`                       | Validated automatic exercises, persistent preparation, bounded oracles, conservative attacker labels, seeded prediction frames, and the last-quiet prediction stop.                                                                                                                       |
+| `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py`, `prediction_scenarios.py`, `prediction_stop.py`                       | Validated automatic exercises, persistent preparation, bounded oracles, conservative attacker labels, seeded prediction frames, and the first-entry/quiet forecast boundary.                                                                                                                       |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py`                                                                                                                           | Cohort orchestration, collection/fitting, reporting and atomic recovery.                                                                                                                                                                                                                   |
 | `envs/field_tracking.py`, `wait_capture.py`, `static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu`                                                        | Guarded field observations, exact real-tick capture, isolated field/probe phases, bounded refillable workers, verified suffix caching and queue recovery.                                                                                                                                  |
 | `learning/forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py`, `fixed_prediction.py`                                                                                                           | Absolute field/probe targets, shared-forward categorical losses, hard static/probe indicators, calibration and fixed-panel overfitting integrity.                                                                                                            |

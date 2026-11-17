@@ -7,17 +7,27 @@ import numpy as np
 
 
 def prediction_label_action(done, timed_out, lost, breached=False):
-    """Keep forecasting, drop the episode, or probe the quiet board.
+    """Forecast, drop, or hand the remaining static fight to an owned fork.
 
     A house entry stays on the static target and still receives the probe.
     The cutoff and a real loss publish nothing.
     """
-    del breached
+    if breached and not timed_out and not lost:
+        return "continue_static"
     if not done:
         return "keep"
     if timed_out or lost:
         return "drop"
     return "probe"
+
+
+def merge_static_suffix(depth, home, outcome, root_tick):
+    """Join a private suffix without replaying or rebasing the observed prefix."""
+    suffix = np.asarray(outcome, dtype=np.int64)
+    depth[:] = np.maximum(depth, suffix[:, 0])
+    ticks = np.where(suffix[:, 1] >= 0, suffix[:, 1] + root_tick, -1)
+    replace = (ticks >= 0) & ((home < 0) | (ticks < home))
+    home[replace] = ticks[replace]
 
 
 def accumulate_static(depth, home, trace, breaches):

@@ -8,6 +8,7 @@ from pvz_rl.envs.cuda_lane_oracle import LaneTransfers
 from pvz_rl.envs.cuda_snapshots import download_snapshots
 from pvz_rl.envs.cuda_static_fork import StaticForkBatch
 from pvz_rl.envs.outcome_math import OUTCOME_SHAPE, OUTCOME_SIZE
+from pvz_rl.envs.prediction_counts import continuation_lifecycle
 from pvz_rl.envs.scratch_game import EngineSnapshot
 from pvz_rl.envs.snapshot_packet import SnapshotRoot
 
@@ -71,6 +72,7 @@ class CudaWorkers:
                     projectile_capacity=source.qcap,
                     max_step_ticks=settings["chunk_ticks"],
                     sky_sun_rate=source.sky_sun_rate,
+                    individual_breaches=settings.get("individual_breaches", False),
                 )
                 module = cp.RawModule(
                     code=self.batch.source + FORK_STEP, options=("--std=c++11", "--fmad=false")
@@ -283,6 +285,7 @@ class CudaWorkers:
                     anchor=int(row[2]),
                     labels=row[OUTCOME_VALUES].reshape(OUTCOME_SHAPE).copy(),
                 )
+                state["lifecycle"] = continuation_lifecycle(snapshot, state["phase"])
             states.append((job["id"], state))
         return states
 

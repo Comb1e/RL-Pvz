@@ -19,13 +19,14 @@ from pvz_game.types import (
 )
 
 from pvz_rl.envs.cuda_features import METRIC_INDICES
+from pvz_rl.envs.prediction_counts import public_counts
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.tile_scenarios import is_placement_skill
 from pvz_rl.learning.objective import COMPONENTS, components, training_rewards
 from pvz_rl.presentation.live_view import Activity, LiveSession, PanelState
 
 
-def public_observation(arrays, rules, level):
+def public_observation(arrays, rules, level, unspawned=0):
     """Match Game.observe using present-state arrays only (never templates/seeds)."""
     h = dict(zip(s.HEADER, map(int, arrays["header"]), strict=True))
     tick, g = h["tick"], rules.game
@@ -71,7 +72,7 @@ def public_observation(arrays, rules, level):
                 bool(z["headless"]),
             )
         )
-    return Observation(
+    observation = Observation(
         API_VERSION,
         tick,
         tick / g["tick_rate"],
@@ -98,12 +99,13 @@ def public_observation(arrays, rules, level):
         ZombieCounts(
             h["total_spawns"],
             h["spawn_index"],
-            h["spawn_index"] - h["defeated"],
+            sum(not z.headless for z in zombies),
             h["defeated"],
             h["total_spawns"] - h["spawn_index"],
             h["total_spawns"] - h["defeated"],
         ),
     )
+    return public_counts(observation, unspawned)
 
 
 class CudaLiveCapture:
@@ -199,7 +201,9 @@ class CudaLiveCapture:
             self.indices = None
         if self.indices is None:
             self.indices = torch.tensor(
-                list(range(capacity)) if placement else [p.env for p in self.session.selection.panels],
+                list(range(capacity))
+                if placement
+                else [p.env for p in self.session.selection.panels],
                 device=self.env.header_tensor.device,
             )
             self.last_capture = -float("inf")
@@ -286,6 +290,7 @@ class CudaLiveCapture:
                     dict(
                         env=env,
                         level=self.env._level_names[env],
+                        unspawned=int(self.env.prediction_unspawned[env]),
                         task=self.env._tasks[env],
                         episode=self.env._episode_serial[env],
                         sequence=self.sequence,
@@ -316,7 +321,9 @@ class CudaLiveCapture:
                 for key, width in self.widths.items():
                     arrays[key] = raw[row, offset : offset + width].reshape(self.shapes[key])
                     offset += width
-                obs = public_observation(arrays, self.env.batch.rules, frame.pop("level"))
+                obs = public_observation(
+                    arrays, self.env.batch.rules, frame.pop("level"), frame.pop("unspawned")
+                )
                 frame["observation"] = obs
                 frame["reward"] = float(
                     training_rewards(reward_totals[row, self.reward_columns], self.env.cfg)

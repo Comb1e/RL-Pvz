@@ -90,6 +90,7 @@ __device__ int shot_order(const Shot &a, const Shot &b) {
 // past ENTITY_LIMIT are omitted and counted; later store positions are cleared.
 extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     const I *zombies, const I *projectiles, const I *mowers, const I *cooldowns,
+    const I *unspawned,
     int *records, int *entities, bool *mask, float *globals, double *assets,
     I *summary, short *lane_zombies, I n, const I *motion, I motion_slots,
     I motion_width) {
@@ -129,7 +130,7 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     g[O_elapsed] = (double)h.tick / G_tick_rate / CUTOFF_SECONDS;
     g[O_wave] = (double)h.wave / WAVE_SCALE;
     g[O_total_waves] = (double)h.total_waves / WAVE_SCALE;
-    g[O_initial] = (double)h.total_spawns / COUNT_SCALE;
+    g[O_initial] = (double)(h.total_spawns + unspawned[i]) / COUNT_SCALE;
     g[O_defeated] = (double)h.defeated / COUNT_SCALE;
     const I recharge[8] = {CD_0, CD_1, CD_2, CD_3, CD_4, CD_5, CD_6, CD_7};
     for (I j=0; j<8; j++) g[O_cooldown_0+j] = (double)cooldowns[i*8+j] / recharge[j];
