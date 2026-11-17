@@ -7,7 +7,7 @@ from pvz_rl.policy.entity_attention import attend, stable_norm
 
 
 class EffectHead(nn.Module):
-    """Cross-attend the encoder memory and emit one outcome vector per lane.
+    """Return residual lane features and outcome logits from encoder memory.
 
     The queries are learned lane embeddings. They do not see the action, the
     chosen cell, or these outputs.
@@ -48,4 +48,4 @@ class EffectHead(nn.Module):
             query_chunk=self.query_chunk,
         )
         hidden = queries + self.output(attended.transpose(1, 2).reshape(batch, length, width))
-        return self.mlp(hidden)
+        return hidden, self.mlp(hidden)

@@ -26,15 +26,21 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   Simulated field/probe outcomes are private auxiliary targets, never observations.
   Future spawns are suppressed inside forks; IDs, schedules, seeds and snapshots stay private.
 - Encode once per decision/fitting call. Prediction runs the shared encoder, the
-  effect head, and the forecast-input embeddings, then submits Wait. Placement and
+  effect head, then submits Wait. Placement and
   Peashooter add the tile decoder and tile head for the supplied card. Easy,
-  standard, and shared also run the ten-query action decoder and the action head.
+  standard, and shared also run the ten-score action MLP.
   A Wait or excluded branch still skips the tile decoder.
   Encoder memory is the global token and the entities. The effect head cross-attends
   that memory with five learned lane queries and emits field depth, breach bin, and
   probe depth before the action is chosen. It does not see the action, the tile, or
-  its own tokens. Detached class ids become five lane tokens placed after the global
-  token on the memory the decoders read. Nothing from this prediction is written
+  its own tokens. The residual cross-attention hidden vectors before the prediction
+  MLP form five lane tokens after CLS. Policy memory is exactly those six vectors,
+  with no entity tokens or class embeddings. The action MLP applies shared
+  per-token LayerNorm, flattens, then uses one configured GELU hidden layer and
+  ten unrestricted scores. Tile queries still combine coordinates and the selected
+  action embedding. Autonomous policy fitting stops gradients at that memory;
+  Prediction logits and demonstration fitting retain their differentiable paths.
+  Nothing from this prediction is written
   back into the encoder or kept for the next decision. Wait and an excluded
   branch skip tile decoding. Illegal cards and cells are
   excluded by setting that score to -inf on a selection copy. The choice is not
@@ -49,7 +55,7 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   `placement_outcomes`: exactly one pre-action field/probe job per exercise,
   including rejections. The fork is action 0 on the pre-mutation root. Keep placement teachers
   and stage weights. Train the tile decoder and tile head. Freeze the shared
-  encoder, effect head, forecast-input embeddings, action decoder, action head,
+  encoder, effect head, action MLP,
   and their EMA. Early tile scores
   receive no outcome-summary injection.
   Reserve no Wait boundary buffers for placement exercises; charge only their
@@ -137,9 +143,9 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   actual home entries after mower resolution. They contain no factual horizons or
   bite-contact targets. Resource failures preserve exact work without creating labels.
 - Preliminary stages retain automatic placement objectives. Prediction trains the
-  shared encoder, the effect head, and the forecast-input embeddings. Later stages
-  freeze those three. Placement and Peashooter train the tile decoder and tile
-  head. Easy, standard, and shared train the action decoder, action head, tile
+  shared encoder and the effect head. Later stages
+  freeze both. Placement and Peashooter train the tile decoder and tile
+  head. Easy, standard, and shared train the action MLP, tile
   decoder, and tile head. Update EMA only for each phase's trained groups and
   copy frozen weights onto the teacher. Demo initialization has no auxiliary loss.
 - Bomb/attacker stages use successful-set cross-entropy over all 45 outputs,
@@ -151,7 +157,7 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   Preserve existing user datasets/recordings. Retain human recording, replay
   verification and demo initialization with their demonstration objectives and
   no auxiliary supervision.
-- Only `shared_public_outcomes_q_v11` checkpoints are supported. Reject every older
+- Only `shared_public_outcomes_q_v12` checkpoints are supported. Reject every older
   checkpoint before environment/CUDA preparation for inference, resume and
   initialization; no conversions or legacy execution. New-version recovery retains
   optimizer/counters, owned roots/rows/choices, partial jobs, unpublished results
@@ -213,12 +219,10 @@ If the user has not declared it in advance. Ignore the existing runs by default.
 - Prediction uses 640 seeded, engine-validated current frames per cohort and one
   exact untouched-board target per scene. Average all 15 known
   outcome terms per scene and weight scenes equally. Train the forecast path
-  without warmup, Q, or teachers. Eligible parameters are the shared encoder, the
-  effect head, and the forecast-input embeddings. That forward does not call the
-  action decoder, action head, tile decoder, or tile head. Detached class ids give
-  the decoders and forecast-input no gradient from that loss. This is the only stage
-  that updates the shared encoder and the effect head. Easy, standard, and shared
-  update the action decoder. The stage bar scores the cohort just collected:
+  without warmup, Q, or teachers. Eligible parameters are the shared encoder and the
+  effect head. That forward does not call the action MLP, tile decoder, or tile
+  head. This is the only autonomous stage that updates the shared encoder and
+  the effect head. Easy, standard, and shared update the action MLP. The stage bar scores the cohort just collected:
   every scene passes only when every lane's field depth, breach bin, and probe
   depth match. Ten consecutive full cohorts at that rate advance the stage.
   Progress reports that fully-correct scene rate.
@@ -253,7 +257,7 @@ recovery roots, shared by capture and restore.
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Repository `tools/bootstrap.*`, `tools/stage_game.py`                                                                                                                                   | Verified installation of the pinned engine.                                                                                                                                                                                                                                                |
 | `config.py`, `data/train.toml`, `gpu.py`                                                                                                                                                | Stage tuning, validation panels, model dimensions and device selection.                                                                                                                                                                                                                    |
-| `policy/`                                                                                                                                                                               | Shared public encoder, pre-action effect head, decoder-only forecast tokens, action decoder, conditional tile decoder, action/tile/outcome readouts, stateless runner and bounded graphs/batching.                                                                                          |
+| `policy/`                                                                                                                                                                               | Shared public encoder, pre-action effect head exposing hidden lane vectors, six-token CLS/lane memory, action MLP, conditional tile decoder, readouts, stateless runner and bounded graphs/batching.                                                                                          |
 | `envs/`                                                                                                                                                                                 | CPU/CUDA adapters, public encoding, actions, rewards, source credit and scenarios. `field_tracking.py` owns guarded per-tick depth and home-entry hooks.                                                                                                                                   |
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py`, `prediction_scenarios.py`                                           | Validated automatic exercises, persistent preparation, bounded oracles, conservative attacker labels and seeded prediction frames.                                                                                                                                                         |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py`                                                                                                                           | Cohort orchestration, collection/fitting, reporting and atomic recovery.                                                                                                                                                                                                                   |

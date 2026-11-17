@@ -574,7 +574,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
     if (cfg["encoding"]["version"], cfg["policy"]["kind"]) not in {
-        ("entity_public_v4", "shared_public_outcomes_q_v11"),
+        ("entity_public_v4", "shared_public_outcomes_q_v12"),
     }:
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
@@ -681,7 +681,7 @@ def validate_config(cfg: dict) -> None:
         cfg.get("encoding", {}).get("version"),
         cfg.get("policy", {}).get("kind"),
     ) in {
-        ("entity_public_v4", "shared_public_outcomes_q_v11"),
+        ("entity_public_v4", "shared_public_outcomes_q_v12"),
     }
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -817,14 +817,14 @@ def validate_config(cfg: dict) -> None:
     policy = cfg["policy"]
     required = {
         "board": ("blocks", "heads"),
-        "action": ("blocks", "heads"),
+        "action": ("hidden_width",),
         "tile": ("blocks", "heads"),
         "effect": ("heads",),
         "execution": ("microbatch", "query_chunk", "token_budget"),
     }
     optional = {
         "board": {"feedforward", "width"},
-        "action": {"feedforward", "width"},
+        "action": set(),
         "tile": {"feedforward", "width"},
         "effect": {"width"},
         "execution": set(),
@@ -849,7 +849,7 @@ def validate_config(cfg: dict) -> None:
         for key in keys:
             if type(group[key]) is not int or group[key] < 1:
                 raise ValueError(f"policy.{name}.{key} must be a positive integer")
-        if name == "execution":
+        if name in ("execution", "action"):
             continue
         if "feedforward" in group:
             if type(group["feedforward"]) is not int or group["feedforward"] < 1:
@@ -862,6 +862,8 @@ def validate_config(cfg: dict) -> None:
                 f"policy.{name}.width must equal policy.{name}.heads * policy.head_dim"
             )
         group["width"] = width
+    if policy["board"]["width"] != policy["effect"]["width"]:
+        raise ValueError("policy.board and policy.effect widths must match for six-token memory")
     optional = {"attacker": attacker_mix(cfg), "prediction": prediction_settings(cfg)}
     stages = tuple(
         stage for stage in _STAGE_PARAMETERS if stage not in optional or optional[stage] is not None

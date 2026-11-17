@@ -41,6 +41,9 @@ def test_cpu_agent_inference():
             actions, details = policy.decide(board)
             effect = details["effect_logits"]
         assert not hasattr(policy, "threat_head")
+        assert not hasattr(policy, "action_decoder") and not hasattr(policy, "forecast_input")
+        memory, valid = details["board_memory"]
+        assert memory.shape == (1, 6, cfg["policy"]["board"]["width"]) and valid.all()
         assert effect.shape == (1, 5, 56) and torch.isfinite(effect).all()
         assert species.shape == (1, len(cfg["environment"]["plants"]) + 2)
         assert tiles.shape == (1, env.codec.rows * env.codec.cols)

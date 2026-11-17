@@ -2,13 +2,26 @@
 
 Train a sequential Q policy against a pinned Plants vs. Zombies simulator. A
 shared Transformer encodes the public board. An effect head predicts this frame's
-untouched field, breach, and probe, and five detached lane tokens go to the
-action decoder and the tile decoder. An action readout then chooses
+untouched field, breach, and probe. Its five hidden lane vectors and the encoder's
+first (CLS) vector form a six-token policy memory. An MLP chooses
 Wait/species/Dig, and a conditional decoder scores all 45 tiles. Illegal cards
 and cells are excluded before that choice: a plant needs sun, a finished
 cooldown, and an empty cell; Dig needs a cell that already has a plant. Exact simulated
 pre-action outcomes are auxiliary training targets. Validation uses the greedy
 network on the public board.
+
+```mermaid
+flowchart LR
+    B[Public board] --> E[Shared transformer]
+    E --> P[Prediction cross-attention]
+    P --> F[Field / breach / probe readout]
+    E --> C[CLS + five hidden lane vectors]
+    P --> C
+    C --> A[Action MLP]
+    C --> T[Tile decoder]
+    A -->|Selected action| T
+    T --> O[45 tile scores]
+```
 
 ## Requirements
 
@@ -88,20 +101,20 @@ strictly above 0.95. Peashooter uses the same 0.95 rule on games won. Easy,
 standard, and shared require every game of each of their tasks to be won, and
 every required task has to occur. Training does not run a held-out panel. The
 live view draws the three bands and hides action scores that were not recorded.
-Prediction trains the shared board encoder, the effect head, and the
-forecast-input embeddings, and its forward stops after those three. Later
-stages freeze those three and still run them. The teacher on every stage uses
-EMA decay 0.99.
-Placement and Peashooter train and run the tile decoder and tile head. Easy,
-standard, and shared also train and run the action decoder and action head. The
-forecast reads the current encoder memory before the action is chosen. Use the
-prediction `final.zip` to initialize `cherry_bomb`.
+Prediction trains the shared board encoder and effect head, and its forward stops
+there. Later stages freeze both and still run them. The teacher on every stage
+uses EMA decay 0.99. Placement and Peashooter train and run the tile decoder and
+tile head. Easy, standard, and shared also train and run the action MLP. It
+normalizes and concatenates CLS and five hidden lane vectors; the tile decoder
+reads those six vectors with action-conditioned coordinate queries. The forecast
+reads the full encoder memory before the action is chosen. Use the prediction
+`final.zip` to initialize `cherry_bomb`.
 
 Across stages, a probe starts once the field clears, queued shots fire and their
 projectiles clear, moving mowers finish, and surviving Chompers are ready. The
 static-field **H** cell is 1 when the predicted field class is home. Start fresh
-with `shared_public_outcomes_q_v11` and use its checkpoints for `--resume` and
-`--init-from`.
+with `shared_public_outcomes_q_v12` and use its checkpoints for `--resume` and
+`--init-from`. Earlier architectures cannot resume or initialize this model.
 
 `attacker` mixes the three placement exercises in shuffled 640-board cohorts
 (64 Cherry Bomb, 256 Obstacle, 320 Attacker Pre). Its stage bar is the same
@@ -110,9 +123,8 @@ labeled-set check as the other placement stages. Peashooter can start from
 
 Resume an interrupted stage from its recovery checkpoint:
 
-Prediction recovery records house exits separately from actual kills. Compatible
-Prediction checkpoints saved before that metadata was added also resume with
-their original physical state, kill counts and fitting progress.
+Same-version Prediction recovery records house exits separately from actual
+kills and restores the original physical state, kill counts and fitting progress.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --stage cherry_bomb_obstacle --until-stage-complete `
@@ -121,8 +133,8 @@ their original physical state, kill counts and fitting progress.
 ```
 
 No seed is required; `--seed` optionally fixes initialization. Start a new run:
-each width is that group's heads times `head_dim`, and a previous flat policy does
-not transfer. The live view's gradient field scales the next cohort's update and
+attention widths are each group's heads times `head_dim`; the action MLP uses
+`policy.action.hidden_width` (256 by default). The live view's gradient field scales the next cohort's update and
 still clips at `max_grad_norm`. Its `3×` control arms the next cohort at
 `learning_rate_restart` times `learning_rate` for one pass. The cohort line
 prints each pass's gradient norm before that clip. A checkpoint of this model

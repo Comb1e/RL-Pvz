@@ -133,7 +133,7 @@ def load_torch_snapshot(path):
 
 
 def protocol_for(kind):
-    if kind != "shared_public_outcomes_q_v11":
+    if kind != "shared_public_outcomes_q_v12":
         raise ValueError(
             f"Incompatible checkpoint model family: {kind}; use the bundled public model profile"
         )
@@ -430,7 +430,7 @@ def _inspect_completed_weights(path, *, weights_only):
 
 
 def model_class(cfg):
-    if cfg["policy"]["kind"] != "shared_public_outcomes_q_v11":
+    if cfg["policy"]["kind"] != "shared_public_outcomes_q_v12":
         raise ValueError("Retired model; use the bundled public model profile")
     from pvz_rl.learning.sequential_training import CudaSequentialQ
 

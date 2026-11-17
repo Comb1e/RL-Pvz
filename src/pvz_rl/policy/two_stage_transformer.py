@@ -1,4 +1,4 @@
-"""Shared public-board encoding with action and tile decoders and outcome readouts."""
+"""Shared public encoding with lane forecasts, action MLP and tile decoder."""
 
 from contextlib import contextmanager
 
@@ -11,11 +11,10 @@ from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.encoding import collate_observations
 from pvz_rl.envs.outcome_math import ABSOLUTE_SIZES
 from pvz_rl.learning.forecast_labels import EFFECT_WIDTH, effect_forecast
-from pvz_rl.policy.action_decoder import ActionDecoder
+from pvz_rl.policy.action_head import ActionHead
 from pvz_rl.policy.active_batch import encode_active
 from pvz_rl.policy.effect_head import EffectHead
 from pvz_rl.policy.entity_attention import SpatialTransformer
-from pvz_rl.policy.forecast_input import ForecastInput, effect_classes
 from pvz_rl.policy.sequential_q import (
     POLICY_SIGNATURE,
     action_branch_mask,
@@ -60,15 +59,9 @@ class TwoStageTransformerPolicy(nn.Module):
         spec = cfg["policy"]
         self.board_encoder = SpatialTransformer(self.layout, spec, "board")
         self.tile_decoder = TileDecoder(self.layout, spec)
-        self.action_decoder = ActionDecoder(self.layout, spec)
         board_width = spec["board"]["width"]
-        action_width = spec["action"]["width"]
         tile_width = spec["tile"]["width"]
-        self.forecast_input = ForecastInput(board_width)
-        self.species_head = nn.Sequential(
-            nn.Linear(action_width, 128), nn.ReLU(), nn.Linear(128, 1)
-        )
-        self.species_bias = nn.Parameter(torch.zeros(self.action_decoder.token_overhead))
+        self.action_head = ActionHead(board_width, spec["action"]["hidden_width"])
         self.tile_head = nn.Sequential(nn.Linear(tile_width, 128), nn.ReLU(), nn.Linear(128, 1))
         self.effect_head = EffectHead(
             spec["effect"]["width"],
@@ -90,11 +83,11 @@ class TwoStageTransformerPolicy(nn.Module):
     def tile_encoder(self):
         return self.tile_decoder
 
-    encoder_names = ("species", "tile", "action")
+    encoder_names = ("species", "tile")
 
     @property
     def encoders(self):
-        return self.board_encoder, self.tile_decoder, self.action_decoder
+        return self.board_encoder, self.tile_decoder
 
     _FITTING_STAGES = (
         "species",
@@ -108,27 +101,25 @@ class TwoStageTransformerPolicy(nn.Module):
 
     @staticmethod
     def _eligible(name, stage):
-        """Prediction owns the encoder, effect head, and forecast embeddings.
+        """Prediction owns the encoder and effect head.
 
-        Later stages leave those three fixed. Placement and Peashooter train the
+        Later stages leave both fixed. Placement stages train the
         tile decoder and tile head. Easy, standard, and shared add the action
-        decoder and action head.
+        MLP.
         """
         board = name.startswith("board_encoder.")
-        action_decoder = name.startswith("action_decoder.")
         tile_decoder = name.startswith("tile_decoder.")
-        action_head = name.startswith("species_head.") or name == "species_bias"
+        action_head = name.startswith("action_head.")
         tile_head = name.startswith("tile_head.")
         effect_head = name.startswith("effect_head.")
-        forecast_input = name.startswith("forecast_input.")
         if stage == "prediction_only":
-            return board or effect_head or forecast_input
+            return board or effect_head
         if stage == "species":
-            return action_decoder or action_head
+            return action_head
         if stage in ("tile", "tile_outcomes", "placement_outcomes"):
             return tile_decoder or tile_head
         if stage in ("easy_action", "action_heads"):
-            return action_decoder or tile_decoder or action_head or tile_head
+            return tile_decoder or action_head or tile_head
         return False
 
     def _require_stage(self, stage):
@@ -348,10 +339,9 @@ class TwoStageTransformerPolicy(nn.Module):
         return encode_active(encoder, observations, plan, branches)
 
     def encode_board(self, observations, *, plan=None):
-        """Encoder memory, then the pre-action forecast, then decoder memory.
+        """Read full encoder memory once, then expose CLS and hidden lane vectors.
 
-        Decoder memory is the global token, five forecast tokens, and the
-        entities. The effect head reads only the encoder memory.
+        Policy memory contains six vectors. Only the effect head reads entities.
         """
         observations = collate_observations(observations, self.device)
         encoded = self._encode(self.board_encoder, observations, plan=plan)
@@ -362,25 +352,21 @@ class TwoStageTransformerPolicy(nn.Module):
             ),
             1,
         )
-        logits = self.effect_head(encoded, encoded_valid)
-        tokens, token_valid = self.forecast_input.tokens(effect_classes(logits))
-        memory = torch.cat((encoded[:, :1], tokens, encoded[:, 1:]), 1)
-        valid = torch.cat(
-            (
-                torch.ones((len(observations), 1), device=self.device, dtype=torch.bool),
-                token_valid[:, None].expand(-1, 5),
-                observations.entity_mask,
-            ),
-            1,
-        )
+        lane_hidden, logits = self.effect_head(encoded, encoded_valid)
+        memory = torch.cat((encoded[:, :1], lane_hidden), 1)
+        valid = torch.ones(memory.shape[:2], device=self.device, dtype=torch.bool)
         self._effect_logits = logits
         return memory, valid
 
     @contextmanager
-    def board_context(self, observations, *, plan=None):
+    def board_context(self, observations, *, plan=None, detach_policy_features=False):
         # Explicit call-scoped memory, never an across-decision policy cache.
         saved = getattr(self, "_board_context", None)
-        self._board_context = (observations, self.encode_board(observations, plan=plan))
+        # Autonomous policy fitting freezes the feature extractor. Prediction and
+        # demonstration fitting retain their original differentiable forwards.
+        with torch.set_grad_enabled(torch.is_grad_enabled() and not detach_policy_features):
+            memory = self.encode_board(observations, plan=plan)
+        self._board_context = (observations, memory)
         try:
             yield self._board_context[1]
         finally:
@@ -405,32 +391,10 @@ class TwoStageTransformerPolicy(nn.Module):
         if self.execution_scope == "forecast":
             raise RuntimeError(f"The {module} stays uncalled during prediction")
 
-    def action_vectors(self, memory, *, rows=None):
-        """Ten action-decoder vectors. A full-batch call is reused within this forward."""
-        self._require_full_scope("action decoder")
-        tokens, valid = memory
-        if rows is not None:
-            tokens, valid = tokens[rows], valid[rows]
-        vectors = self.action_decoder(tokens, valid)
-        if rows is None:
-            self._decision_action_vectors = vectors
-            self._decision_action_memory = tokens
-        return vectors
-
     def action_values(self, memory, *, rows=None):
-        self._require_full_scope("action head")
-        scores = self.species_head(self.action_vectors(memory, rows=rows)).squeeze(-1)
-        return scores + self.species_bias
-
-    def _action_vectors(self, memory):
-        cached = getattr(self, "_decision_action_vectors", None)
-        if cached is not None and getattr(self, "_decision_action_memory", None) is memory[0]:
-            return cached
-        return self.action_vectors(memory)
-
-    def wait_features(self, memory):
-        """Slot 0 of decoder memory, the global token."""
-        return memory[0][:, 0]
+        self._require_full_scope("action MLP")
+        tokens = memory[0] if rows is None else memory[0][rows]
+        return self.action_head(tokens)
 
     def tile_values(self, features):
         self._require_tile_scope("tile head")
@@ -558,8 +522,6 @@ class TwoStageTransformerPolicy(nn.Module):
                 device=self.device,
                 dtype=next(self.parameters()).dtype,
             )
-            self._decision_action_vectors = None
-            self._decision_action_memory = None
         elif self.execution_scope == "full":
             species = self.species_values(observations, memory=memory)
         else:
@@ -605,7 +567,6 @@ class TwoStageTransformerPolicy(nn.Module):
         details["tile_inference_skipped"] = (branches > 0) & ~tile_rows
         details["observations"] = observations
         details["board_memory"] = memory
-        details["action_vectors"] = self._decision_action_vectors
         details["effect_logits"] = self._effect_logits
         return actions, details
 
@@ -614,8 +575,6 @@ class TwoStageTransformerPolicy(nn.Module):
         count = len(observations)
         blank = next(self.parameters()).new_zeros(count)
         actions = torch.zeros(count, device=self.device, dtype=torch.long)
-        self._decision_action_vectors = None
-        self._decision_action_memory = None
         return actions, dict(
             greedy_actions=actions,
             coins=torch.zeros(count, 2, dtype=torch.bool, device=self.device),
@@ -631,7 +590,6 @@ class TwoStageTransformerPolicy(nn.Module):
             tile_inference_skipped=torch.zeros(count, dtype=torch.bool, device=self.device),
             observations=observations,
             board_memory=memory,
-            action_vectors=None,
             effect_logits=self._effect_logits,
         )
 

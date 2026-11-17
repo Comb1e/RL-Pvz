@@ -113,7 +113,7 @@ def current_model_config(cfg):
         identity
         in {
             (
-                "shared_public_outcomes_q_v11",
+                "shared_public_outcomes_q_v12",
                 "entity_public_v4",
                 CURRENT_OBJECTIVE,
                 CURRENT_OBJECTIVE,

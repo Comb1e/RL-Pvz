@@ -95,7 +95,7 @@ max_minutes = 120
 finalization_minutes = 15
 batch_size = 1024
 learning_rate = 0.0003
-max_grad_norm = 5 # Shared by autonomous training and demonstration initialization.
+max_grad_norm = 1.0 # Shared by autonomous training and demonstration initialization.
 eval_interval = 250000 # Used only by bounded decision-window diagnostics.
 torch_threads = 1
 learning_rate_restart = 3.0 # Next armed cohort: one pass at this multiple of learning_rate.
@@ -252,19 +252,19 @@ intermediate_weights = [0.5, 0.5, 0.0]
 final_weights = [0.2, 0.4, 0.4]
 
 [training.normal.curriculum.stages.easy]
-n_epochs = 4 # Fitting passes per easy cohort.
+n_epochs = 1 # Fitting passes per easy cohort.
 tasks = ["easy"]
 weights = [1.0]
 requirements = {easy = 100}
 
 [training.normal.curriculum.stages.standard]
-n_epochs = 4
+n_epochs = 1
 tasks = ["easy", "standard"]
 weights = [0.5, 0.5]
 requirements = {easy = 100, standard = 100}
 
 [training.normal.curriculum.stages.shared]
-n_epochs = 4
+n_epochs = 1
 tasks = ["easy", "standard", "hard"]
 weights = [0.2, 0.4, 0.4]
 requirements = {easy = 100, standard = 100, hard = 100}
@@ -344,24 +344,23 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "shared_public_outcomes_q_v11"
+kind = "shared_public_outcomes_q_v12"
 action_distribution = "sequential_q_unmasked_tiles_v2"
 head_dim = 64
 
 [policy.board]
-blocks = 18
-heads = 12
+blocks = 6
+heads = 4
 
 [policy.action]
-blocks = 9
-heads = 6
+hidden_width = 256 # CLS and five lane vectors -> hidden GELU -> ten action scores.
 
 [policy.tile]
-blocks = 9
-heads = 6
+blocks = 3
+heads = 2
 
 [policy.effect]
-heads = 8
+heads = 4
 
 [policy.execution]
 microbatch = 128

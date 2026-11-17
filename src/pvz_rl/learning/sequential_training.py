@@ -116,7 +116,7 @@ def restored_grad_norms(extra):
 
 
 def joint_fitting_stage(cfg, curriculum_state):
-    """Easy, standard, and shared train the action decoder with the tile groups."""
+    """Easy, standard, and shared train the action MLP with the tile groups."""
     explicit = selected_stage(cfg)
     if explicit in STAGES:
         name = explicit
@@ -144,7 +144,7 @@ def flat_batches(buffer, decision_budget, spool=None):
 
 
 class CudaSequentialQ(CudaCohortLifecycle):
-    policy_protocol = "shared_public_outcomes_q_v11"
+    policy_protocol = "shared_public_outcomes_q_v12"
     optimizer_version = FIT_SCHEDULE_PROTOCOL
 
     def _open_cohort_number(self):
@@ -1744,7 +1744,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
         features = next(self.policy.parameters()).new_zeros(
             (len(rows), 45, self.cfg["policy"]["tile"]["width"])
         )
-        with self.policy.board_context(observations) as memory:
+        with self.policy.board_context(observations, detach_policy_features=True) as memory:
             if len(at):
                 features = features.index_copy(
                     0,
@@ -1789,11 +1789,12 @@ class CudaSequentialQ(CudaCohortLifecycle):
         ]
         branch_tensor = torch.tensor(branches, device=self.device, dtype=torch.long)
         if features is None:
-            values = self.policy.fitting_tiles(
-                observations,
-                branch_tensor,
-                rows=torch.arange(len(rows), device=self.device),
-            ).float()
+            with self.policy.board_context(observations, detach_policy_features=True):
+                values = self.policy.fitting_tiles(
+                    observations,
+                    branch_tensor,
+                    rows=torch.arange(len(rows), device=self.device),
+                ).float()
         else:
             del memory
             values = self.policy.tile_values(features).float()
