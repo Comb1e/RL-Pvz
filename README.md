@@ -69,7 +69,7 @@ Start autonomous training when ready:
 ```
 
 Default progression is
-`prediction → cherry_bomb → cherry_bomb_obstacle → attacker_pre → attacker → peashooter → easy → standard → shared`.
+`prediction → cherry_bomb → cherry_bomb_obstacle → attacker_pre → attacker → easy → standard → shared`.
 Use `--stage NAME --until-stage-complete` for one stage, or `--games N` for a
 completed-episode budget. Explicit normal stages skip preliminary stages. Omit
 `--init-from` to start with random weights.
@@ -87,28 +87,50 @@ Each stage can start from the previous stage's weights;
 take one fitting pass per cohort. Each cohort is scored once before that pass,
 and the pass still runs when the score is already perfect. The fitting line
 shows that score as an integer ratio, such as `612/640`, and `streak k/10`.
-The report charts the check from before the first fitting pass for these five
-stages, redraws every 10 cohorts and when a stage advances, and does not chart
-exploration for them. A checkpoint that omits that pair still resumes. When the
-open cohort has not committed a pass, the finished first check is that point;
-otherwise the next cohort records it. Changing `ema_decay` or the stage-gate
-settings means the open prediction run does not resume. Prediction counts a
-scene when every lane matches field depth, breach bin, and probe depth. The
-four placement stages count a board when the greedy legal tile is in its
-labeled successful set. A stage advances after 10 consecutive full cohorts meet
-that bar: prediction, obstacle, attacker pre, and attacker at 100%, cherry bomb
-strictly above 0.95. Peashooter uses the same 0.95 rule on games won. Easy,
-standard, and shared require every game of each of their tasks to be won, and
-every required task has to occur. Training does not run a held-out panel. The
-live view draws the three bands and hides action scores that were not recorded.
-Prediction trains the shared board encoder and effect head, and its forward stops
-there. Later stages freeze both and still run them. The teacher on every stage
-uses EMA decay 0.99. Placement and Peashooter train and run the tile decoder and
+On prediction the same line also prints `forecasts N/M`. The report charts the
+check from before the first fitting pass for these five stages. Prediction draws
+successful environments and fully-correct forecasts. The charts redraw every 10
+cohorts and when a stage advances, and do not chart exploration for them.
+Episode rows are written at that same refresh. A checkpoint that omits the
+before-fit pair or the forecast pair still resumes. When the open cohort has
+not committed a pass, the finished first check is that point; otherwise the next
+cohort records it. This prediction behavior is a new run. A checkpoint from
+the one-shot scene, the peashooter stage, the opening-anchor stop, the
+per-decision fork labels, or a house-entry stop does not resume. `--init-from` of the same architecture still loads. A prediction
+environment keeps playing Wait. Zombies still due are drawn across the five lanes
+and the roster and enter from the right edge. The opening count of zombies on the
+field plus zombies still due follows a discrete exponential, with relative weight
+0.1 at one zombie and 0.01 at ten. It records a forecast every 10 ticks until
+the step that leaves the last quiet board: no zombies, no projectiles, no
+moving mower, no spawn still due, and no plant still resolving. Ready, armed,
+digesting, and recovering plants leave the lawn quiet. An opening that is already
+won and still resolving is set back to running before that decision is recorded,
+and keeps forecasting until that board. An opening that is already won and
+already quiet records that one frame
+and then probes. A house entry stays
+on the live view and keeps forecasting until that board. That decision is the
+last forecast, and that env's transformer stops before the next forward. The
+fight's deepest field codes and breach delays are the static result. One probe
+of that quiet board supplies probe depth, including after a house entry, and
+the policy does not run again. Every forecast in that episode is fit to that
+one result. The cutoff publishes no label. The environment succeeds when
+strictly more than 95% of its scored forecasts are fully correct. The cohort
+succeeds when all 640 environments succeed. The four placement stages count a
+board when the greedy legal tile is in its labeled successful set. A stage
+advances after 10 consecutive full cohorts meet that bar: prediction when every
+environment succeeds, obstacle, attacker pre, and attacker at 100%, cherry bomb
+strictly above 0.95. Easy, standard, and shared require every game of each of
+their tasks to be won, and every required task has to occur. Training does not
+run a held-out panel. The live view draws the three bands and hides action
+scores that were not recorded. Prediction trains the shared board encoder and
+effect head, and its forward stops there. Later stages freeze both and still
+run them. The teacher on
+every stage uses EMA decay 0.99. Placement trains and runs the tile decoder and
 tile head. Easy, standard, and shared also train and run the action MLP. It
-normalizes and concatenates CLS and five hidden lane vectors; the tile decoder
-reads those six vectors with action-conditioned coordinate queries. The forecast
-reads the full encoder memory before the action is chosen. Use the prediction
-`final.zip` to initialize `cherry_bomb`.
+normalizes and concatenates the six vectors; the tile decoder reads those six
+vectors with action-conditioned coordinate queries. The forecast reads the
+full encoder memory before the action is
+chosen. Use the prediction `final.zip` to initialize `cherry_bomb`.
 
 Across stages, a probe starts once the field clears, queued shots fire and their
 projectiles clear, moving mowers finish, and surviving Chompers are ready. The
@@ -118,7 +140,7 @@ with `shared_public_outcomes_q_v13` and use its checkpoints for `--resume` and
 
 `attacker` mixes the three placement exercises in shuffled 640-board cohorts
 (64 Cherry Bomb, 256 Obstacle, 320 Attacker Pre). Its stage bar is the same
-labeled-set check as the other placement stages. Peashooter can start from
+labeled-set check as the other placement stages. Easy can start from
 `runs\compact-stages\attacker\final.zip`.
 
 Resume an interrupted stage from its recovery checkpoint:
@@ -137,12 +159,13 @@ attention widths are each group's heads times `head_dim`. Every MLP has
 `policy.mlp_hidden_layers` hidden layers (four by default), followed by its output
 layer. Board FFNs use 128 hidden units; prediction and tile FFNs use 96; the
 action MLP uses 128; tile scoring uses 48. Set these widths in the corresponding
-policy groups in [train.toml](src/pvz_rl/data/train.toml). The live view's gradient field scales the next cohort's update and
-still clips at `max_grad_norm`. Its `3×` control arms the next cohort at
-`learning_rate_restart` times `learning_rate` for one pass. The cohort line
-prints each pass's gradient norm before that clip. A checkpoint of this model
-that omits the scale, those norms, or the restart flags stays at 1 and idle,
-and records later passes. Peashooter and the three normal stages each have a
+policy groups in [train.toml](src/pvz_rl/data/train.toml). The live view's gradient field
+scales the next cohort's update. Its max field
+sets that cohort's clip; the file default stays `max_grad_norm`. Its `3×` control
+arms the next cohort at `learning_rate_restart` times `learning_rate` for one
+pass. The cohort line prints each pass's gradient norm before that clip. A
+checkpoint of this model that omits the scale, the max, those norms, or the
+restart flags stays at 1, `max_grad_norm`, and idle, and records later passes. The three normal stages each have a
 fitting pass count unless that restart is armed. Tune those passes, the loss
 weights, and the execution settings in [train.toml](src/pvz_rl/data/train.toml);
 each setting is commented there. Separate evaluation commands keep their panels.
@@ -162,7 +185,7 @@ new file there.
 ```
 
 The smoke tests check that the workflow runs, not that the agent masters a stage.
-For throughput work, the [collection benchmark](tools/benchmark_peashooter.py),
+For throughput work, the [easy-stage collection benchmark](tools/benchmark_peashooter.py),
 [workflow profiler](tools/profile_training_workflow.py) and
 [timeline tool](tools/draw_collection_process.py) document their options in `--help`.
 

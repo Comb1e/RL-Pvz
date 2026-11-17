@@ -24,6 +24,11 @@ from pvz_rl.envs.actions import ActionSchema as A
 from pvz_rl.envs.actions import dig_branch_available
 from pvz_rl.envs.cuda_accounting import AccountingCudaBatch
 from pvz_rl.envs.cuda_features import LEDGER_INDICES, METRIC_INDICES, CudaFeatures
+from pvz_rl.envs.prediction_stop import (
+    prediction_last_quiet,
+    prediction_resume_won,
+    prediction_step_done,
+)
 from pvz_rl.envs.rewards import REWARD_METRICS
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.envs.sky_sun import peashooter_sky_sun_rate
@@ -296,7 +301,8 @@ class ScenarioQueue:
             boards = {}
             for index, _, _, seed, _ in staged:
                 check_deadline(self.deadline)
-                boards[index] = dict(snapshot=prediction_snapshot(self.cfg, seed, self.rules))
+                snapshot, motion = prediction_snapshot(self.cfg, seed, self.rules)
+                boards[index] = dict(snapshot=snapshot, motion=motion)
             self.tile_boards.update(boards)
             staged = [
                 (*s[:4], LevelSpec.from_dict(boards[s[0]]["snapshot"]["level"])) for s in staged
@@ -373,6 +379,7 @@ class CudaVecEnv(VecEnv):
         )
         self.active_tasks, self._tasks = Counter(), {}
         self.enabled_envs = np.ones(count, dtype=bool)
+        self.prediction_anchor = np.full(count, -1, np.int64)
         self.static_forks = None
         self._pending_spawns = np.zeros(count, dtype=np.int64)
         self.tile_scenario = "complete"
@@ -420,6 +427,8 @@ class CudaVecEnv(VecEnv):
             self.features = CudaFeatures(self.batch, cfg, condition)
             self.features.profiler = self.profiler
             self.header_tensor = torch.from_dlpack(self.batch.header)
+            self.plant_tensor = torch.from_dlpack(self.batch.plants)
+            self.mower_tensor = torch.from_dlpack(self.batch.mowers)
         self.render_mode = None
         super().__init__(self.batch.n, self.features.encoder.space, spaces.Discrete(A.size))
         self._branch_costs = torch.tensor(
@@ -456,6 +465,7 @@ class CudaVecEnv(VecEnv):
             except Exception as exc:
                 self.live_view.fail(exc)
         self.enabled_envs[indices] = True
+        self.prediction_anchor[indices] = -1
         if cases is None:
             staged = self.queue.prepare(indices, seeds=tile_seeds)
         else:
@@ -484,6 +494,7 @@ class CudaVecEnv(VecEnv):
         self.batch.set_sky_sun_rate(
             peashooter_sky_sun_rate(self.cfg) if self.tile_scenario == "peashooter" else 1.0
         )
+        self.batch.clear_motion(indices)
         if is_single_frame_skill(self.tile_scenario):
             from pvz_rl.envs.cuda_snapshots import upload_snapshots
 
@@ -494,6 +505,11 @@ class CudaVecEnv(VecEnv):
                 indices=indices,
             )
             if self.tile_scenario == "prediction":
+                from pvz_rl.envs.motion_history import install_motion
+
+                install_motion(
+                    self.batch, [boards[i]["motion"] for i in indices], indices
+                )
                 boards.clear()  # Physical roots and scene seeds already have owners.
             else:
                 self.tile_boards = deepcopy(boards)
@@ -610,6 +626,26 @@ class CudaVecEnv(VecEnv):
         """Exact pre-action legality for alternative sampling and baselines."""
         return torch.from_dlpack(self.batch.action_masks_device())
 
+    def reopen_unsettled_prediction_wins(self, active=None):
+        """A still-resolving warmup win becomes running before availability is read.
+
+        Availability treats a won header as finished. Clearing that win only
+        inside the step made the simulator accept Wait while the recorded
+        branch said it was unavailable. An already quiet win stays won.
+        """
+        if self.tile_scenario != "prediction":
+            return
+        if active is None:
+            active = self.enabled_envs
+        active = torch.as_tensor(active, device=self.header_tensor.device, dtype=torch.bool)
+        if active.shape != (self.num_envs,):
+            raise ValueError("active must match the CUDA environment size")
+        quiet_now = prediction_last_quiet(
+            self.header_tensor, self.plant_tensor, self.mower_tensor, active
+        )
+        resume = prediction_resume_won(self.header_tensor, quiet_now, active)
+        self.header_tensor[resume, HEADER.index("status")] = 0
+
     def branch_availability(self, active=None):
         """Return pre-action card availability and empty-board Dig rejection.
 
@@ -676,6 +712,10 @@ class CudaVecEnv(VecEnv):
             torch.as_tensor(self.enabled_envs, device=actions.device) if active is None else active
         )
         self.header_tensor[:, 17].copy_(self._device_active.long())
+        self.batch.prediction_hold_win = self.tile_scenario == "prediction"
+        # Collection reopens before it records availability. Repeat here so a
+        # caller that only steps still presents a running board to the kernel.
+        self.reopen_unsettled_prediction_wins(self._device_active)
         before_spawns = self.header_tensor[:, HEADER.index("spawn_index")].clone()
         _, reward = self.features.step(
             self.cp.from_dlpack(actions.detach().contiguous()),
@@ -683,7 +723,7 @@ class CudaVecEnv(VecEnv):
             per_tick=self._per_tick,
             publish=False,
             observation_active=self.cp.asarray(self.enabled_envs),
-            action_only=self.tile_scenario == "prediction",
+            action_only=False,
         )
         if self.static_forks is not None:
             self.static_forks.invalidate(
@@ -699,14 +739,20 @@ class CudaVecEnv(VecEnv):
         # in action-phase mode they advance zero ticks. Both use the same
         # acceptance bit, while rejected proposals execute as waits.
         self.executed_actions.copy_(torch.where(self._device_active & h[:, 12].bool(), actions, 0))
-        done = (
-            (h[:, 1] != 0)
-            | (
-                h[:, 0]
-                >= self.cfg["environment"]["cutoff_seconds"] * self.batch.rules.game["tick_rate"]
+        cutoff_tick = (
+            self.cfg["environment"]["cutoff_seconds"] * self.batch.rules.game["tick_rate"]
+        )
+        if self.batch.prediction_hold_win:
+            # The step that leaves the real lawn quiet is the last forecast.
+            # A house entry and a defeated horde both keep stepping until that board.
+            quiet = prediction_last_quiet(
+                h, self.plant_tensor, self.mower_tensor, self._device_active
             )
-        ) & self._device_active
-        timed_out = done & (h[:, 1] == 0)
+            done = prediction_step_done(h, quiet, self._device_active, cutoff_tick)
+            timed_out = (h[:, 0] >= cutoff_tick) & (h[:, 1] == 0) & self._device_active
+        else:
+            done = ((h[:, 1] != 0) | (h[:, 0] >= cutoff_tick)) & self._device_active
+            timed_out = done & (h[:, 1] == 0)
         with self.profiler.track("transfer"):
             record = torch.cat(
                 (
@@ -756,7 +802,7 @@ class CudaVecEnv(VecEnv):
             self.task_transitions.update(self._tasks[i] for i in np.flatnonzero(self._step_active))
         self._pending_spawns[:] = self._step_state_host["pending_spawns"].numpy()
         compact = host[:, RECORD_OUTCOME]
-        if is_single_frame_skill(self.tile_scenario):
+        if is_single_frame_skill(self.tile_scenario) and self.tile_scenario != "prediction":
             # A one-frame exercise ends after its proposal, even when time did not advance.
             compact[self._step_active, 0] = 1
             compact[self._step_active, 1] = 0
@@ -776,7 +822,7 @@ class CudaVecEnv(VecEnv):
             compact, actions, self.last_action_result_host, truncation, self._step_active, completed
         )
         reward, done, timed_out = self._step_device_result
-        if is_single_frame_skill(self.tile_scenario):
+        if is_single_frame_skill(self.tile_scenario) and self.tile_scenario != "prediction":
             done = self._device_active.clone()
             timed_out = torch.zeros_like(done)
         reward = reward.clone()
@@ -895,6 +941,7 @@ class CudaVecEnv(VecEnv):
             "allowed": header[:, 15].tolist(),
             "digging": header[:, 16].astype(bool).tolist(),
             "enabled": header[:, 17].tolist(),
+            "prediction_anchor": self.prediction_anchor.copy(),
             "totals": self.features.totals.get(),
             "home_ledger": self.features.home_ledger.get(),
             "queue_rng": [deepcopy(r.bit_generator.state) for r in self.queue.rngs],
@@ -903,6 +950,7 @@ class CudaVecEnv(VecEnv):
             "queue_stage": self.queue.stage,
             "tile_scenario": self.tile_scenario,
             "sky_sun_rate": self.batch.sky_sun_rate,
+            "motion": self.batch.motion.get(),
             "static_forks": self.static_forks.snapshot() if self.static_forks else None,
             "tile_boards": deepcopy(
                 {
@@ -929,6 +977,18 @@ class CudaVecEnv(VecEnv):
                 )
             },
         }
+
+    def _restore_motion(self, saved):
+        """A missing or mismatched ring refills with the unknown columns."""
+        motion = self.batch.motion
+        if saved is None:
+            motion.fill(0)
+            return
+        saved = np.asarray(saved)
+        if saved.shape == tuple(motion.shape) and saved.dtype == np.int64:
+            motion[:] = self.cp.asarray(saved)
+        else:
+            motion.fill(0)
 
     def restore_training(self, state):
         skill = state.get("tile_scenario", "complete")
@@ -1004,11 +1064,20 @@ class CudaVecEnv(VecEnv):
             self.enabled_envs[:] = np.asarray(enabled, dtype=bool)
             if prediction_roots is not None:
                 self.batch.action_masks_device()
+            saved_anchor = state.get("prediction_anchor")
+            if saved_anchor is None:
+                self.prediction_anchor[:] = -1
+            else:
+                saved_anchor = np.asarray(saved_anchor, dtype=np.int64)
+                if saved_anchor.shape != self.prediction_anchor.shape:
+                    raise ValueError("Saved prediction anchors disagree with the environment count")
+                self.prediction_anchor[:] = saved_anchor
             self.features.totals[:] = self.cp.asarray(state["totals"])
             if ledger is not None:
                 self.features.home_ledger[:] = self.cp.asarray(ledger)
             else:
                 self.features.initialize_home(list(range(self.num_envs)))
+            self._restore_motion(state.get("motion"))
             self.features.encode()
             for rng, saved in zip(self.queue.rngs, state["queue_rng"], strict=True):
                 rng.bit_generator.state = deepcopy(saved)

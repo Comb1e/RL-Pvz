@@ -2,7 +2,8 @@
 
 Viewer code owns no model or simulator; it renders public snapshots. Selection
 uses a private RNG. Commands change subscriptions, never game state. The
-gradient-scale shares and the 3× restart flag are the training values the view can write.
+gradient-scale shares, the gradient-max shares, and the 3× restart flag are the
+training values the view can write.
 """
 
 from __future__ import annotations
@@ -208,17 +209,18 @@ def coerce_grad_scale(value):
     return accept_grad_scale(value)
 
 
-def format_grad_scale(value):
+def format_grad_scale(value, fallback=1.0):
     accepted = accept_grad_scale(value)
-    return "1" if accepted is None else format(accepted, ".6g")
+    shown = float(fallback) if accepted is None else accepted
+    return format(shown, ".6g")
 
 
-def restored_grad_scale(extra, key):
-    """Missing or rejected recovery fields stay at 1."""
+def restored_grad_scale(extra, key, fallback=1.0):
+    """Missing or rejected recovery fields stay at the fallback."""
     if not isinstance(extra, dict):
-        return 1.0
-    accepted = accept_grad_scale(extra.get(key, 1.0))
-    return 1.0 if accepted is None else accepted
+        return float(fallback)
+    accepted = accept_grad_scale(extra.get(key, fallback))
+    return float(fallback) if accepted is None else accepted
 
 
 def pull_shared_grad_scale(requested, current):
@@ -249,16 +251,24 @@ def publish_shared_grad_scale(requested, active, requested_value, active_value):
         active.value = float(active_value)
 
 
-def read_shared_grad_scale(requested, active):
-    """Pending coefficient, then the scale already in force."""
+def read_shared_grad_scale(requested, active, fallback=1.0):
+    """Pending coefficient, then the value already in force."""
     if requested is None and active is None:
-        return 1.0, 1.0
+        return float(fallback), float(fallback)
     if requested is None:
-        return 1.0, float(active.value)
+        return float(fallback), float(active.value)
     with requested.get_lock():
         pending = float(requested.value)
-        current = float(active.value) if active is not None else 1.0
+        current = float(active.value) if active is not None else float(fallback)
         return pending, current
+
+
+def configured_grad_max(cfg):
+    """File clip. A missing or rejected config stays at 1."""
+    training = cfg.get("training") if isinstance(cfg, dict) else None
+    raw = training.get("max_grad_norm", 1.0) if isinstance(training, dict) else 1.0
+    accepted = accept_grad_scale(raw)
+    return 1.0 if accepted is None else accepted
 
 
 def accept_lr_restart(value):
@@ -417,7 +427,6 @@ def learning_settings(cfg):
                     "attacker_pre",
                     "prediction",
                     "attacker",
-                    "peashooter",
                     "normal",
                 )
                 for field, probe in (outcome_prediction_weights(cfg, stage),)
@@ -456,6 +465,9 @@ class LiveSession:
         self.activity = ctx.Value("i", int(Activity.STARTING))
         self.grad_scale_requested = ctx.Value("d", 1.0)
         self.grad_scale_active = ctx.Value("d", 1.0)
+        ceiling = configured_grad_max(cfg)
+        self.grad_max_requested = ctx.Value("d", ceiling)
+        self.grad_max_active = ctx.Value("d", ceiling)
         self.lr_restart_requested = ctx.Value("i", 0)
         self.lr_restart_active = ctx.Value("i", 0)
         # A requested nonzero port is retained until the web child binds. A
@@ -487,6 +499,8 @@ class LiveSession:
                 self.grad_scale_active,
                 self.lr_restart_requested,
                 self.lr_restart_active,
+                self.grad_max_requested,
+                self.grad_max_active,
             ),
             name="pvz-live-view",
             daemon=True,
@@ -555,6 +569,15 @@ class LiveSession:
         publish_shared_grad_scale(
             self.grad_scale_requested, self.grad_scale_active, requested, active
         )
+
+    def pull_grad_max(self, current):
+        return pull_shared_grad_scale(self.grad_max_requested, current)
+
+    def latch_grad_max(self, current):
+        return latch_shared_grad_scale(self.grad_max_requested, self.grad_max_active, current)
+
+    def publish_grad_max(self, requested, active):
+        publish_shared_grad_scale(self.grad_max_requested, self.grad_max_active, requested, active)
 
     def pull_lr_restart(self, current):
         return pull_shared_lr_restart(self.lr_restart_requested, current)

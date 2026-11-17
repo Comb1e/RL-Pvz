@@ -20,6 +20,7 @@ from pvz_rl.envs.action_credit import CausalCreditLedger
 from pvz_rl.envs.action_timing import ActionPhaseGame, per_tick_actions
 from pvz_rl.envs.actions import ActionCodec
 from pvz_rl.envs.encoding import ObservationEncoder
+from pvz_rl.envs.motion_history import MotionHistory, matched_step
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS, HomeProximityLedger, reward_parts
 from pvz_rl.envs.scenarios import difficulty_weights, scenario
 from pvz_rl.envs.sky_sun import SkySunGame, validate_sky_sun_rate
@@ -43,7 +44,11 @@ class PvZEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"], "render_fps": 2}
 
     def _encoded_public(self):
-        return self.encoder.encode(self.public)
+        return self.encoder.encode(self.public, self.motion)
+
+    def _advance_motion(self, result, _action=None):
+        if result.ticks_advanced:
+            self.motion.advance(result.observation, result.events)
 
     def __init__(
         self,
@@ -91,6 +96,7 @@ class PvZEnv(gym.Env):
         }
         self.codec = ActionCodec(self.cfg)
         self.encoder = ObservationEncoder(self.cfg, self.rules)
+        self.motion = MotionHistory(self.cfg, self.rules)
         self.observation_space = self.encoder.space
         self.action_space = gym.spaces.Discrete(5 if self.options["hybrid"] else self.codec.size)
         self.selection_rng = np.random.default_rng(worker_seed)
@@ -153,6 +159,7 @@ class PvZEnv(gym.Env):
         if self.game.rules.digest != rules.digest:
             self.game = self._new_game()
         self.public = self.game.reset(resolved, game_seed)
+        self.motion.sync(self.public)
         self.causal_credit.reset((level, family, game_seed))
         self.causal_credit.seed_observation(self.public)
         self.causal_summary = {
@@ -299,7 +306,15 @@ class PvZEnv(gym.Env):
             )
         else:
             ticks = min(self.cfg["environment"]["decision_ticks"], self.cutoff_ticks - before.tick)
-        result = (self.recorder or self.game).step(concrete, ticks=ticks)
+        if ticks > 1 and type(self.recorder) is Recorder:
+            result = self.recorder._step(
+                concrete, ticks=ticks, after_tick=self._advance_motion
+            )
+        elif ticks > 1:
+            result = matched_step(self.game, concrete, ticks, self.motion)
+        else:
+            result = (self.recorder or self.game).step(concrete, ticks=ticks)
+            self._advance_motion(result)
         self.public = result.observation
         causal_credits = self.causal_credit.attribute(
             result.events, action_id=self.metrics["decisions"]

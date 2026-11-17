@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 
 from pvz_rl.envs.tile_scenarios import LEGACY_SKILLS, is_bomb_skill
 from pvz_rl.learning.curriculum import COHORT_PERFECT_STAGES, TILE_STAGES
-from pvz_rl.learning.peashooter_rules import RULE_OBJECTIVE
 from pvz_rl.learning.training_requirements import CURRENT_OBJECTIVE
 
 
@@ -168,7 +167,19 @@ def report_charts(segments, cfg, output, save):
             if plot_panels(records, spec, xvalue, xlabel, output, name, save, rate_fields=rates):
                 images.append((f"{title}: {heading}", name + ".png"))
 
-        if scope in COHORT_PERFECT_STAGES:
+        if scope == "prediction":
+            add(
+                "before-fit",
+                "accuracy before fit",
+                fields(
+                    [
+                        ("cohort.accuracy_before_fit", "Successful environments"),
+                        ("cohort.forecast_accuracy_before_fit", "Fully-correct forecasts"),
+                    ]
+                ),
+                ("cohort.accuracy_before_fit", "cohort.forecast_accuracy_before_fit"),
+            )
+        elif scope in COHORT_PERFECT_STAGES:
             add(
                 "before-fit",
                 "accuracy before fit",
@@ -184,7 +195,6 @@ def report_charts(segments, cfg, output, save):
                 ),
                 ("rolling_return", "Episode reward"),
                 ("rolling_seconds", "Episode duration (simulated seconds)"),
-                ("invalid_action_rate", "Invalid-action rate"),
                 ("rolling_agent_actions", "Accepted plant + dig actions / episode"),
                 ("rolling_first_attacker_seconds", "First sustained attacker (seconds)"),
                 ("rolling_maximum_sun", "Maximum sun / episode"),
@@ -208,8 +218,8 @@ def report_charts(segments, cfg, output, save):
                         key,
                         text,
                         get
-                        if key in ("rolling_win_rate", "invalid_action_rate")
-                        else lambda row, get=get: get(row) if phase(row) == "peashooter" else None,
+                        if key == "rolling_win_rate"
+                        else lambda row, get=get: None,
                     )
                     for key, text, get in behavior_fields
                 ]
@@ -217,7 +227,7 @@ def report_charts(segments, cfg, output, save):
                 "training",
                 "training behavior",
                 behavior_fields,
-                ("rolling_win_rate", "invalid_action_rate"),
+                ("rolling_win_rate",),
             )
 
         fitting = fields(
@@ -231,18 +241,6 @@ def report_charts(segments, cfg, output, save):
                 ("optimization.q_grad_norm", "Gradient norm before clipping"),
             ]
         )
-        fitting = [
-            (
-                key,
-                title,
-                lambda row, get=get: (
-                    get(row) if row.get("fitting_objective") != RULE_OBJECTIVE else None
-                ),
-            )
-            if key == "optimization.q_loss"
-            else (key, title, get)
-            for key, title, get in fitting
-        ]
         if any(
             value(row, "optimization.effect_loss") is not None
             for _, rows in records
@@ -270,44 +268,6 @@ def report_charts(segments, cfg, output, save):
                 ),
                 ("optimization.forecast_fully_correct", "optimization.effect_accuracy"),
             )
-        rule_fields = fields(
-            [
-                ("peashooter_teacher.rule_1", "Covered-board reinforcement labels"),
-                ("peashooter_teacher.rule_2", "Undefended-lane labels"),
-                ("peashooter_teacher.rule_3", "Endangered-lane assistance labels"),
-                ("peashooter_teacher.preferred_tiles", "Preferred tiles across labeled decisions"),
-                ("peashooter_teacher.mean_preferred_set_size", "Mean preferred-set size"),
-                ("peashooter_teacher.fallback_lanes", "Rule-2 fallback lanes"),
-                ("peashooter_teacher.blocked_lanes", "Fully occupied endangered lanes"),
-                ("peashooter_teacher.unlabeled", "Decisions without a preferred legal tile"),
-                ("peashooter_teacher.pending", "Pending oracle continuations"),
-                ("peashooter_teacher.queued_boards", "Boards awaiting coverage preparation"),
-                (
-                    "peashooter_teacher.completed_rollouts",
-                    "Completed oracle continuations (excluded from games)",
-                ),
-                ("peashooter_teacher.oracle_successes", "Successful oracle continuations"),
-                ("peashooter_teacher.oracle_timeouts", "Oracle timeouts"),
-                ("peashooter_teacher.simulated_ticks", "Oracle simulated ticks"),
-                ("peashooter_teacher.oracle_seconds", "Oracle wall time (seconds)"),
-                ("optimization.peashooter_cross_entropy_loss", "Column-distribution cross-entropy"),
-                ("optimization.peashooter_preferred_column_accuracy", "Preferred-column accuracy"),
-            ]
-        )
-        add(
-            "peashooter-rules",
-            "Peashooter rule labels and visible-lane oracle",
-            [
-                (
-                    key,
-                    title,
-                    lambda row, get=get: (
-                        get(row) if row.get("fitting_objective") == RULE_OBJECTIVE else None
-                    ),
-                )
-                for key, title, get in rule_fields
-            ],
-        )
         if pre:
             fitting = [
                 (
@@ -315,7 +275,7 @@ def report_charts(segments, cfg, output, save):
                     text,
                     get
                     if key.endswith("q_grad_norm")
-                    else lambda row, get=get: get(row) if phase(row) == "peashooter" else None,
+                    else lambda row, get=get: None,
                 )
                 for key, text, get in fitting
             ]
@@ -379,7 +339,7 @@ def report_charts(segments, cfg, output, save):
                     lambda row, get=get: (
                         get(row)
                         if row.get("collection_policy") != "search_assisted"
-                        and row.get("fitting_objective") not in (RULE_OBJECTIVE, CURRENT_OBJECTIVE)
+                        and row.get("fitting_objective") != CURRENT_OBJECTIVE
                         else None
                     ),
                 )
@@ -424,12 +384,8 @@ def report_charts(segments, cfg, output, save):
                 ]
             )
         )
-        if pre:
-            accounting = [
-                (key, text, lambda row, get=get: get(row) if phase(row) == "peashooter" else None)
-                for key, text, get in accounting
-            ]
-        add("accounting", "reward accounting", accounting)
+        if not pre:
+            add("accounting", "reward accounting", accounting)
         if scope not in COHORT_PERFECT_STAGES:
             add(
                 "exploration",
@@ -534,7 +490,7 @@ def report_charts(segments, cfg, output, save):
                         continue
                     row = dict(
                         probe,
-                        active_skill=probe.get("previous", "peashooter"),
+                        active_skill=probe.get("previous", scope),
                         curriculum_stage=stage,
                     )
                     for skill, wins in probe["scores"].items():

@@ -118,7 +118,12 @@ _STAGE_PARAMETERS = {
                 "ready_probability",
             )
         },
+        "surviving_curve": "training.tile_scenarios.prediction.surviving_curve",
         "probe_interval_games": "curriculum.prediction_probe_interval_games",
+        "env_success_threshold": "training.tile_scenarios.prediction.env_success_threshold",
+        "stop": "training.tile_scenarios.prediction.stop",
+        "target": "training.tile_scenarios.prediction.target",
+        "breach": "training.tile_scenarios.prediction.breach",
     },
     "attacker": {
         **{
@@ -126,25 +131,6 @@ _STAGE_PARAMETERS = {
             for key in ("n_envs", "validation_cases", "ratios")
         },
         "probe_interval_games": "curriculum.attacker_probe_interval_games",
-    },
-    "peashooter": {
-        "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
-        **{
-            key: f"training.peashooter_rules.{key}"
-            for key in (
-                "fitting_objective",
-                "column_decay",
-                "softmax_temperature",
-                "oracle_lanes",
-                "oracle_vram_mib",
-                "oracle_chunk_ticks",
-                "prepare_workers",
-                "n_envs",
-                "snapshot_cache_mib",
-            )
-        },
-        "probe_interval_games": "curriculum.peashooter_probe_interval_games",
-        "validation_success_threshold": "curriculum.peashooter_validation_success_threshold",
     },
 }
 
@@ -155,13 +141,11 @@ for _stage, _fields in _STAGE_PARAMETERS.items():
         _fields[f"{_outcome}_prediction_weight"] = (
             f"training.stage_outcome_weights.{_stage}.{_outcome}"
         )
-    if _stage == "peashooter":
-        _fields["n_epochs"] = f"training.stage_epochs.{_stage}"
 
 
 def absolute_outcomes(cfg):
     """The supported model uses public inputs and absolute action outcomes."""
-    return cfg["encoding"]["version"] == "entity_public_v4"
+    return cfg["encoding"]["version"] == "entity_public_v5"
 
 
 def forecast_version(cfg):
@@ -358,7 +342,8 @@ def stage_pass_text(cfg, stage):
         if per is None:
             return "one pass per cohort"
         return f"{per} one-pass cohorts, then one cohort until fully correct"
-    return f"{stage_epochs(cfg, stage)} passes"
+    count = stage_epochs(cfg, stage)
+    return f"{count} pass" if count == 1 else f"{count} passes"
 
 
 def cohort_envs(cfg, skill=None):
@@ -369,8 +354,6 @@ def cohort_envs(cfg, skill=None):
         return attacker_mix(cfg)["n_envs"]
     if skill == "attacker_pre":
         return cfg["training"]["tile_scenarios"]["attacker"]["n_envs"]
-    if skill == "peashooter":
-        return cfg["training"].get("peashooter_rules", {}).get("n_envs", cfg["training"]["n_envs"])
     if is_bomb_skill(skill):
         return (
             cfg["training"]
@@ -433,11 +416,7 @@ def training_env_capacity(cfg, family="preset"):
         attacker = tile.get("attacker", {}).get("n_envs", 0)
         mixed = (attacker_mix(cfg) or {}).get("n_envs", 0)
         prediction = (prediction_settings(cfg) or {}).get("n_envs", 0)
-        return max(
-            cherry, attacker, mixed, prediction, cohort_envs(cfg, "peashooter"), cohort_envs(cfg)
-        )
-    if stage == "peashooter":
-        return cohort_envs(cfg, "peashooter")
+        return max(cherry, attacker, mixed, prediction, cohort_envs(cfg))
     return cohort_envs(cfg)
 
 
@@ -574,7 +553,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
     if (cfg["encoding"]["version"], cfg["policy"]["kind"]) not in {
-        ("entity_public_v4", "shared_public_outcomes_q_v13"),
+        ("entity_public_v5", "shared_public_outcomes_q_v13"),
     }:
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
@@ -586,9 +565,6 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             f"Removed training settings: {sorted(removed)}; start from the shared-encoder train.toml"
         )
-    from pvz_rl.learning.peashooter_rules import validate_rule_settings
-
-    validate_rule_settings(cfg)
     objective = cfg["training"].get("objective")
     if not isinstance(objective, dict):
         raise ValueError("training.objective must describe the stateless two-stage objective")
@@ -681,7 +657,7 @@ def validate_config(cfg: dict) -> None:
         cfg.get("encoding", {}).get("version"),
         cfg.get("policy", {}).get("kind"),
     ) in {
-        ("entity_public_v4", "shared_public_outcomes_q_v13"),
+        ("entity_public_v5", "shared_public_outcomes_q_v13"),
     }
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -692,6 +668,14 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("simulation.backend must be cpu or cuda")
     if not current_policy:
         raise ValueError("Retired observation/policy format; use the bundled public model profile")
+    history = cfg.get("encoding", {}).get("history")
+    expected_history = {"ticks": 8, "shot_clamp": 30, "state_clamp": 50}
+    if not isinstance(history, dict):
+        raise ValueError("encoding.history must set ticks, shot_clamp and state_clamp")
+    for key, expected in expected_history.items():
+        value = history.get(key)
+        if type(value) is not int or value != expected:
+            raise ValueError(f"encoding.history.{key} must be {expected}")
     if cfg["reward"].get("version") != "action_global_value_v5":
         raise ValueError(
             "Retired reward format; ranked endgame action/global rewards require fresh training with the bundled train profile"
@@ -935,17 +919,13 @@ def validate_config(cfg: dict) -> None:
     c = cfg["curriculum"]
     for key in (
         "cherry_bomb_probe_interval_games",
-        "peashooter_probe_interval_games",
         "attacker_pre_probe_interval_games",
         "prediction_probe_interval_games",
         "attacker_probe_interval_games",
     ):
         if key in c and (type(c[key]) is not int or c[key] < 1):
             raise ValueError(f"{key} must be a positive integer")
-    for key in (
-        "cherry_bomb_validation_success_threshold",
-        "peashooter_validation_success_threshold",
-    ):
+    for key in ("cherry_bomb_validation_success_threshold",):
         if key in c and (
             type(c[key]) not in (int, float) or not math.isfinite(c[key]) or not 0 <= c[key] < 1
         ):
@@ -1153,8 +1133,43 @@ def validate_config(cfg: dict) -> None:
                 raise ValueError(f"Invalid prediction.{key} range")
         if not prediction["live_zombies"][1] and not prediction["pending_zombies"][1]:
             raise ValueError("Prediction scenes need live or pending zombies")
+        curve = prediction.get("surviving_curve")
+        if curve is not None:
+            weights_ok = (
+                isinstance(curve, list)
+                and len(curve) == 4
+                and all(
+                    type(weight) in (int, float) and math.isfinite(weight) and weight > 0
+                    for weight in (curve[1], curve[3])
+                )
+            )
+            if (
+                not weights_ok
+                or type(curve[0]) is not int
+                or type(curve[2]) is not int
+                or curve[0] < 0
+                or curve[2] < 0
+                or curve[0] == curve[2]
+            ):
+                raise ValueError(
+                    "prediction.surviving_curve must be two distinct counts and two positive weights"
+                )
         if "prediction_probe_interval_games" not in c:
             raise ValueError("Prediction requires its own validation interval")
+        threshold = prediction.get("env_success_threshold")
+        if (
+            isinstance(threshold, bool)
+            or type(threshold) not in (int, float)
+            or not math.isfinite(threshold)
+            or not 0 <= threshold < 1
+        ):
+            raise ValueError("prediction.env_success_threshold must be finite and in [0, 1)")
+        if prediction.get("stop") != "last_quiet":
+            raise ValueError("prediction.stop must be last_quiet")
+        if prediction.get("target") != "episode_static_then_probe":
+            raise ValueError("prediction.target must be episode_static_then_probe")
+        if prediction.get("breach") != "until_quiet":
+            raise ValueError("prediction.breach must be until_quiet")
     elif c.get("run_stage") == "prediction":
         raise ValueError("prediction requires its training configuration section")
     mix = attacker_mix(cfg)
@@ -1591,9 +1606,7 @@ def validate_config(cfg: dict) -> None:
     accepted = (fixed, fixed | frozenset(COHORT_PERFECT_STAGES))
     if epochs is None:
         if type(legacy) is not int or isinstance(legacy, bool) or legacy < 1:
-            raise ValueError(
-                "peashooter, easy, standard, and shared each need a positive n_epochs"
-            )
+            raise ValueError("easy, standard, and shared each need a positive n_epochs")
     elif (
         legacy is not None
         or not isinstance(epochs, dict)
@@ -1603,9 +1616,7 @@ def validate_config(cfg: dict) -> None:
             for count in epochs.values()
         )
     ):
-        raise ValueError(
-            "peashooter, easy, standard, and shared each need their own positive n_epochs"
-        )
+        raise ValueError("easy, standard, and shared each need their own positive n_epochs")
     per_epoch = train.get("cohorts_per_epoch")
     if per_epoch is not None and (
         type(per_epoch) is not int or isinstance(per_epoch, bool) or per_epoch < 1

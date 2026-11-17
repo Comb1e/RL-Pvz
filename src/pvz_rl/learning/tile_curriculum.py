@@ -24,7 +24,7 @@ def required_validation_wins(cfg, skill):
     count = tile_validation_count(cfg, skill)
     threshold = (
         cfg["curriculum"].get(f"{skill}_validation_success_threshold")
-        if skill in ("cherry_bomb", "peashooter")
+        if skill == "cherry_bomb"
         else None
     )
     if threshold is None:

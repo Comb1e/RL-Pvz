@@ -83,7 +83,6 @@ def test_cuda_learning_and_checkpoint(tmp_path):
 
         cfg = load_config()
         cfg["training"]["tile_scenarios"]["enabled"] = False
-        cfg["training"].pop("peashooter_rules", None)
         cfg["training"]["forecasts"]["enabled"] = False
         cfg["environment"]["cutoff_seconds"] = 1
         cfg["training"].update(

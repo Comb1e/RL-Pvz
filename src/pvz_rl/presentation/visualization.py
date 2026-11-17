@@ -245,7 +245,6 @@ def build_run_report(run, cfg=None):
         (
             f"<p>Tile stage: <b>{escape(status.get('curriculum_stage', skills.get('phase', 'not recorded')))}</b>. "
             f"Completed scenario episodes: {escape(sum(skills.get('episodes', {}).values()))}. "
-            f"Peashooter: {escape(skills.get('episodes', {}).get('peashooter', 0))}; "
             f"Cherry Bomb: {escape(skills.get('episodes', {}).get('cherry_bomb', 0))}; "
             f"Obstacle: {escape(skills.get('episodes', {}).get('cherry_bomb_obstacle', 0))}; "
             f"Attacker pre: {escape(skills.get('episodes', {}).get('attacker_pre', 0))}; "

@@ -43,7 +43,7 @@ from pvz_rl.envs.tile_scenarios import (
     prediction_settings,
 )
 from pvz_rl.evaluation.runner import evaluate, summarize
-from pvz_rl.jsonl_log import JsonlAppender, append_jsonl_file, jsonl_series
+from pvz_rl.jsonl_log import JsonlAppender, append_jsonl_file, batch_record_ids, numbered_parts
 from pvz_rl.learning.budget import (
     budget_target,
     effective_limits,
@@ -73,7 +73,6 @@ from pvz_rl.learning.exploration import (
     exploration_state,
 )
 from pvz_rl.learning.objective import components, training_rewards
-from pvz_rl.learning.peashooter_rules import RULE_OBJECTIVE
 from pvz_rl.learning.performance import compilation_requested
 from pvz_rl.learning.tile_curriculum import (
     initial_tile_state,
@@ -177,7 +176,12 @@ def cohort_score_text(model):
     total = getattr(model, "_cohort_scored", None)
     if type(correct) is not int or type(total) is not int or total < 1:
         return None
-    return f"{correct}/{total}"
+    text = f"{correct}/{total}"
+    forecast_correct = getattr(model, "_forecast_correct", None)
+    forecast_scored = getattr(model, "_forecast_scored", None)
+    if type(forecast_correct) is int and type(forecast_scored) is int:
+        text += f"  forecasts {forecast_correct}/{forecast_scored}"
+    return text
 
 
 def grad_norm_text(values):
@@ -252,6 +256,7 @@ class ResearchCallback(BaseCallback):
         self.initial_budget_progress = 0
         self.eval_seconds = 0.0
         self.stream = None
+        self._episode_rows = []
         self.settings = output_settings(cfg)
         self.owns_progress = progress is None
         self.progress = progress or ProgressReporter.from_settings(self.output / "train.log", cfg)
@@ -379,7 +384,6 @@ class ResearchCallback(BaseCallback):
         progress = progress_value(self.cfg, self.model)
         budget_rate = (progress - self.initial_budget_progress) / active
         rows = list(self.recent)
-        decisions = sum(r["decisions"] for r in rows)
         purchases = sum(sum(r.get("plant_usage", {}).values()) for r in rows)
         weights = difficulty_weights(
             self.cfg,
@@ -418,13 +422,6 @@ class ResearchCallback(BaseCallback):
             "training_steps": self.model.num_timesteps,
             "training_games": games,
             "tile_scenarios": self.model.tile_skills.to_dict(),
-            "peashooter_teacher": dict(
-                getattr(
-                    getattr(self.model, "_peashooter_teacher", None),
-                    "metrics",
-                    self.model.cohort_metrics.get("peashooter_teacher", {}),
-                )
-            ),
             "static_forks": dict(
                 getattr(
                     getattr(self.model.env, "static_forks", None),
@@ -448,11 +445,7 @@ class ResearchCallback(BaseCallback):
             ),
             "collection_policy": "network",
             "fitting_objective": (
-                RULE_OBJECTIVE
-                if self.model.peashooter_rule_training
-                else "nstep_fork_forecast_v3"
-                if not self.model.tile_skills.active
-                else None
+                "nstep_fork_forecast_v3" if not self.model.tile_skills.active else None
             ),
             "validation_trigger": self.validation_trigger.snapshot(
                 self.model.tile_skills.validation_domain
@@ -580,9 +573,6 @@ class ResearchCallback(BaseCallback):
             "rolling_maximum_sun": sum(r.get("maximum_sun", 0) for r in rows) / len(rows)
             if rows
             else None,
-            "invalid_action_rate": (
-                sum(r["invalid_actions"] for r in rows) / max(1, decisions) if rows else None
-            ),
             "best_validation_win_rate": None if self.best_score == -math.inf else self.best_score,
             "cohort": getattr(self.model, "cohort_metrics", {}),
         }
@@ -621,6 +611,18 @@ class ResearchCallback(BaseCallback):
             return "3×"
         return ""
 
+    def _clip_text(self):
+        model = self.model
+        fallback = float(getattr(model, "max_grad_norm", 1.0))
+        requested = float(getattr(model, "_grad_max_requested", fallback))
+        active = float(getattr(model, "_grad_max_active", fallback))
+        if requested == fallback and active == fallback:
+            return ""
+        text = f"clip {format(active, '.6g')}"
+        if requested != active:
+            text += f" → {format(requested, '.6g')}"
+        return text
+
     def _streak_text(self):
         limit = stage_streak(self.cfg)
         skills = self.model.tile_skills
@@ -635,7 +637,12 @@ class ResearchCallback(BaseCallback):
         return f"streak {value}/{limit}"
 
     def _cohort_status(self, cohort):
-        parts = [self._cohort_label(cohort), self._restart_text(), self._streak_text()]
+        parts = [
+            self._cohort_label(cohort),
+            self._restart_text(),
+            self._clip_text(),
+            self._streak_text(),
+        ]
         return "  ".join(part for part in parts if part)
 
     def cohort_text(self):
@@ -662,6 +669,8 @@ class ResearchCallback(BaseCallback):
         """Write the detailed status snapshot; offer one compact line to the terminal."""
         if hasattr(self.model, "_pull_lr_restart"):
             self.model._pull_lr_restart()
+        if hasattr(self.model, "_pull_grad_max"):
+            self.model._pull_grad_max()
         if not force and not self.progress.due():
             return
         self.hardware_context()
@@ -791,8 +800,6 @@ class ResearchCallback(BaseCallback):
         row = self.snapshot()
         values = self.model.logger.name_to_value
         keys = (
-            "peashooter_cross_entropy_loss",
-            "peashooter_preferred_column_accuracy",
             "total_loss",
             "primary_loss",
             "effect_loss",
@@ -874,6 +881,7 @@ class ResearchCallback(BaseCallback):
         previous_activity = self.hardware_activity
         try:
             self.hardware_context("reporting")
+            self._publish_episode_log()
             for stream in (self.stream, self.metrics_stream):
                 if stream and not stream.closed:
                     stream.flush()
@@ -905,7 +913,6 @@ class ResearchCallback(BaseCallback):
         self.restore_schedule()
         self.training_env.env_method("set_progress", progress)
         limit = jsonl_batch_bytes(self.cfg)
-        self.stream = JsonlAppender(self.output / "training-episodes.jsonl", limit)
         self.metrics_stream = JsonlAppender(self.output / "training-metrics.jsonl", limit)
         self.last_updates = self.model._n_updates
         if teaching_enabled(self.cfg) and self.family == "preset" and not pre_stage(self.cfg):
@@ -965,7 +972,7 @@ class ResearchCallback(BaseCallback):
                 if info["episode_metrics"].get("time_reward_pending"):
                     self.model._pending_episodes[info["episode_slot"]]["report"] = report
                 else:
-                    append_jsonl(self.stream, report)
+                    self._queue_episode(report)
         progress = progress_value(self.cfg, self.model)
         if hasattr(self, "progress"):
             self.log_progress()
@@ -991,22 +998,65 @@ class ResearchCallback(BaseCallback):
     def _append_run_log(self, name, row):
         append_jsonl_file(self.output / name, row, jsonl_batch_bytes(self.cfg))
 
-    def finalize_cohort_rewards(self, pending):
-        """Publish finalized rewards once, even when replaying an older recovery ZIP."""
+    def _queue_episode(self, row):
+        """Hold one episode until the next report refresh."""
+        if not self.settings["visualization"]["enabled"]:
+            return
+        row = json.loads(json.dumps(row, sort_keys=True, allow_nan=False))
+        record_id = row.get("record_id")
+        if record_id is not None:
+            for index, existing in enumerate(self._episode_rows):
+                if existing.get("record_id") != record_id:
+                    continue
+                pending_now = bool(row.get("time_reward_pending", True))
+                pending_kept = bool(existing.get("time_reward_pending", True))
+                if not pending_kept and pending_now:
+                    return
+                self._episode_rows[index] = row
+                return
+        self._episode_rows.append(row)
+
+    def _publish_episode_log(self):
+        """Append queued episodes. Report refresh is the only caller."""
+        if not self.settings["visualization"]["enabled"]:
+            self._episode_rows.clear()
+            return
+        if not self._episode_rows:
+            return
+        if self.stream is None:
+            self.stream = JsonlAppender(
+                self.output / "training-episodes.jsonl", jsonl_batch_bytes(self.cfg)
+            )
+        elif self.stream.closed:
+            return
         self.stream.flush()
-        seen = set()
-        for part in jsonl_series(self.output / "training-episodes.jsonl"):
-            with part.open(encoding="utf-8") as source:
-                for line in source:
-                    if line.strip():
-                        seen.add(json.loads(line).get("record_id"))
+        seen = batch_record_ids(self.stream.path)
+        # A resume that rolls an oversized part starts on an empty file. The
+        # cohort it may replay was written to the batch just closed.
+        if not seen:
+            closed = [
+                part for part in numbered_parts(self.stream.series) if part != self.stream.path
+            ]
+            if closed:
+                seen = batch_record_ids(closed[-1])
+        for row in self._episode_rows:
+            record_id = row.get("record_id")
+            if record_id is not None and record_id in seen:
+                continue
+            append_jsonl(self.stream, row)
+            if record_id is not None:
+                seen.add(record_id)
+        self.stream.flush()
+        self._episode_rows.clear()
+
+    def finalize_cohort_rewards(self, pending):
+        """Queue finalized rewards. The episode log is written with the report."""
         for item in pending.values():
             report = item.get("report")
-            if report is not None and item["record_id"] not in seen:
-                append_jsonl(
-                    self.stream, {**report, **item["metrics"], "record_id": item["record_id"]}
+            if report is not None:
+                self._queue_episode(
+                    {**report, **item["metrics"], "record_id": item["record_id"]}
                 )
-        self.stream.flush()
 
     def _cohort_task_wins(self):
         counts = {}
@@ -1813,8 +1863,6 @@ def train(
 ):
     started = perf_counter()
     cfg = copy.deepcopy(cfg)
-    if family == "diagnostic":
-        cfg["training"].pop("peashooter_rules", None)
     validate_config(cfg)
     output = Path(output)
     require_cuda_training(cfg, condition, runtime=False)
@@ -1960,12 +2008,10 @@ def train(
             f"{cfg['training']['device']}  {output.resolve()}",
             force=True,
         )
-        if stage == "peashooter" and cfg["training"].get("peashooter_rules"):
-            progress.emit("peashooter  prioritized lanes", force=True)
     else:
         progress.emit(
             f"Shared {condition} {cfg['policy']['kind']} policy; learner seed {learner_seed}; {cfg['training']['device']}; "
-            f"{cohort_envs(cfg, 'peashooter')} Peashooter lanes, {cohort_envs(cfg)} normal lanes, "
+            f"{cohort_envs(cfg)} normal lanes, "
             f"{cohort_envs(cfg, 'cherry_bomb')} Cherry Bomb lanes, "
             f"{cfg['training'].get('tile_scenarios', {}).get('attacker', {}).get('n_envs', 0)} attacker-pre lanes, "
             f"{(prediction_settings(cfg) or {}).get('n_envs', 0)} prediction lanes, "
@@ -1991,8 +2037,6 @@ def train(
             f"minibatch {cfg['training']['batch_size']}",
             force=True,
         )
-        if cfg["training"].get("peashooter_rules"):
-            progress.emit("peashooter  prioritized lanes", force=True)
         if validation_after_stage(cfg, family):
             probe_key = "probe_interval_games" if game_budget else "probe_interval"
             progress.emit(

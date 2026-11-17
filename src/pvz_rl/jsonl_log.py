@@ -52,6 +52,26 @@ def jsonl_series(path) -> list[Path]:
     return parts
 
 
+def batch_record_ids(path) -> set:
+    """Ids in one JSONL batch. A partial last line contributes nothing."""
+    path = Path(path)
+    found = set()
+    if not path.is_file():
+        return found
+    with path.open(encoding="utf-8") as stream:
+        lines = stream.readlines()
+    for number, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            found.add(json.loads(line).get("record_id"))
+        except json.JSONDecodeError:
+            unfinished = number == len(lines) - 1 and not line.endswith("\n")
+            if not unfinished:
+                raise
+    return found
+
+
 def _next_part(path: Path) -> Path:
     highest = 0
     for part in numbered_parts(path):

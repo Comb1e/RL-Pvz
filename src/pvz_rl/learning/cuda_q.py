@@ -62,7 +62,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         learning_rate=3e-4,
         batch_size=1024,
         n_epochs=1,
-        max_grad_norm=5,
+        max_grad_norm=1.0,
         policy_kwargs=None,
         seed=None,
         device="cuda",

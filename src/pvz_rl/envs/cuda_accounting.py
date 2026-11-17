@@ -55,6 +55,23 @@ class AccountingCudaBatch(CudaBatch):
         from pvz_rl.envs.wait_capture import wait_capture_source
 
         self.source = wait_capture_source(self.source)
+        from pvz_rl.envs.motion_history import (
+            SHOT_CLAMP,
+            STATE_CLAMP,
+            motion_kernel_source,
+            motion_row_width,
+            motion_table_slots,
+        )
+
+        self.motion_slots = motion_table_slots(self.zcap, self.qcap)
+        self.motion = self.cp.zeros((self.n, motion_row_width(self.motion_slots)), self.cp.int64)
+        self.source = motion_kernel_source(
+            self.source, shot_clamp=SHOT_CLAMP, state_clamp=STATE_CLAMP
+        )
+        from pvz_rl.envs.prediction_stop import prediction_quiet_source
+
+        self.source = prediction_quiet_source(self.source)
+        self.prediction_hold_win = False
         self.wait_capture = None
         self.field_enabled = False
         self.field_trace = self.cp.zeros(1, self.cp.int64)
@@ -114,6 +131,7 @@ class AccountingCudaBatch(CudaBatch):
         if self.field_enabled:
             self.field_trace[self.cp.asarray(indices)] = 0
             self.field_error[self.cp.asarray(indices)] = 0
+        self.clear_motion(indices)
         if self.sky_sun_rate != 1.0:
             from pvz_game.cuda.schema import HEADER
 
@@ -142,6 +160,7 @@ class AccountingCudaBatch(CudaBatch):
             "facts",
             "masks",
             "accounting",
+            "motion",
         ):
             setattr(view, name, getattr(self, name)[:count])
         view._templates = self._templates[:count]
@@ -166,5 +185,12 @@ class AccountingCudaBatch(CudaBatch):
                 self.field_error,
                 self.cp.int64(self.field_enabled),
                 *capture_arguments(self),
+                self.motion,
+                self.cp.int64(self.motion_slots),
+                self.cp.int64(self.motion.shape[1]),
+                self.cp.int64(self.prediction_hold_win),
             ),
         )
+
+    def clear_motion(self, indices):
+        self.motion[self.cp.asarray(indices)] = 0

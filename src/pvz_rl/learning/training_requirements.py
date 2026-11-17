@@ -114,7 +114,7 @@ def current_model_config(cfg):
         in {
             (
                 "shared_public_outcomes_q_v13",
-                "entity_public_v4",
+                "entity_public_v5",
                 CURRENT_OBJECTIVE,
                 CURRENT_OBJECTIVE,
             ),
@@ -148,7 +148,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Use the shared public encoder and conditional decoder, entity_public_v4, "
+            "Retired policy or scheduler. Use the shared public encoder and conditional decoder, entity_public_v5, "
             "action_global_value_v5 and complete-game collection. "
             "Start fresh with the bundled train profile."
         )

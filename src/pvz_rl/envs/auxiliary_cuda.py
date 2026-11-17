@@ -80,23 +80,7 @@ class CudaWorkers:
                 self.counts = cp.zeros((count, 2), cp.int64)
                 self.timers = cp.zeros((count, 2), cp.int64)
             else:
-                from pvz_game.cuda.backend import projectile_bound
-
-                from pvz_rl.learning.peashooter_teacher import _LaneBatch
-
-                self.batch = _LaneBatch(
-                    count,
-                    rules=source.rules,
-                    device=source.device,
-                    zombie_capacity=source.zcap,
-                    projectile_capacity=source.qcap + projectile_bound(source.rules),
-                    max_step_ticks=teacher_settings["oracle_chunk_ticks"],
-                    cutoff=teacher_settings["cutoff"],
-                    timing=True,
-                )
-                self.batch.set_sky_sun_rate(source.sky_sun_rate)
-                # Compile before collection, including the exact cutoff wrapper.
-                self.batch._timed_kernel.compile()
+                raise RuntimeError("The lane teacher is no longer part of auxiliary execution")
             self.batch.header[:, HEADER.index("enabled")] = 0
             self.transfers = LaneTransfers(cp, min(16 * 2**20, settings["vram_mib"] * 2**20 // 32))
             self.transfers.copy.compile()

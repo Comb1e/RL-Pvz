@@ -13,7 +13,7 @@ progress_seconds = 15
 terminal_progress_seconds = 60
 terminal_mode = "compact"
 hardware_sample_seconds = 1.0
-jsonl_batch_bytes = 5000000 # One open JSONL part, in a folder named for the log. A larger existing file is moved in whole.
+jsonl_batch_bytes = 5000000 # Open JSONL part, in a folder named for the log. Episode rows are written when the report refreshes.
 rolling_window = 100
 
 [visualization]
@@ -46,10 +46,15 @@ zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"]
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = "entity_public_v4"
+version = "entity_public_v5"
 max_entities = 256 # RTX 4070 Laptop: lower attention cost than 512; see docs/math/entity-inputs.md.
 count_scale = 75
 wave_scale = 15
+
+[encoding.history]
+ticks = 8
+shot_clamp = 30
+state_clamp = 50
 
 [reward]
 version = "action_global_value_v5"
@@ -95,7 +100,7 @@ max_minutes = 120
 finalization_minutes = 15
 batch_size = 1024
 learning_rate = 0.0003
-max_grad_norm = 1.0 # Shared by autonomous training and demonstration initialization.
+max_grad_norm = 1.0 # File default for the clip. The live view can replace it for the next cohort. Demonstration initialization keeps this value.
 eval_interval = 250000 # Used only by bounded decision-window diagnostics.
 torch_threads = 1
 learning_rate_restart = 3.0 # Next armed cohort: one pass at this multiple of learning_rate.
@@ -184,15 +189,23 @@ oracle_vram_mib = 1024
 
 [training.prediction]
 # The stage bar is this cohort's pre-pass check. Training does not run the held-out panel.
+# An environment succeeds when its labeled forecasts are strictly above this rate.
 forecast_mode = "prediction_only"
 extra_actions = 0
+env_success_threshold = 0.95
+stop = "last_quiet" # No zombies, projectiles, or moving mowers; every plant ready; no spawn still due.
+target = "episode_static_then_probe" # One real-fight static result, then one quiet-board probe.
+breach = "until_quiet" # A house entry keeps this env playing until the lawn is quiet.
 n_envs = 640
 probe_interval_games = 10000
-validation_cases = 200 # Every environment must match all field, breach, and probe classes.
+validation_cases = 200 # Inactive panel. The cohort bar is each environment's forecast success rate.
 plants = [0, 20]
 live_zombies = [0, 10]
 defeated_zombies = [0, 30]
 pending_zombies = [0, 20]
+# On-field plus still-due zombies. Relative exponential weights, normalized
+# over every legal total. One zombie weighs 0.1 and ten weigh 0.01.
+surviving_curve = [1, 0.1, 10, 0.01]
 sun = [0, 500]
 ready_probability = 0.5 # Applied independently to each card slot and mower.
 
@@ -205,26 +218,6 @@ n_envs = 640
 validation_cases = 200 # All must pass.
 ratios = [0.1, 0.4, 0.5] # Cherry Bomb, Cherry Bomb Obstacle, Attacker Pre.
 probe_interval_games = 10000
-
-[training.peashooter]
-n_epochs = 8
-forecast_mode = "action_outcomes" # Teacher plus the untouched pre-action field/probe target.
-extra_actions = 0 # The placement teacher supplies targets; retain actual-action effects only.
-static_field_prediction_weight = 0.5
-probe_prediction_weight = 0.2
-# Independent cohort size, preparation, and fitting passes.
-n_envs = 128
-sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
-probe_interval_games = 2000
-validation_success_threshold = 0.95 # Strictly exceed this rate (96/100); separate from cohort qualification.
-fitting_objective = "prioritized_lane_cross_entropy_v1"
-column_decay = 0.5 # Preferred-cell target weight halves with each column to the right.
-softmax_temperature = 1.0
-prepare_workers = 0 # In-process projection beat persistent worker IPC after setup reuse.
-snapshot_cache_mib = 256 # Charged against the shared RAM budget; excess spills to owned storage.
-oracle_lanes = 1024 # Fastest repeated 90-second resource screen on the RTX 4070 Laptop.
-oracle_vram_mib = 4096 # Upper bound; actual lanes shrink to preserve profile headroom.
-oracle_chunk_ticks = 4096
 
 [training.normal]
 forecast_mode = "action_outcomes" # Untouched pre-action field/probe targets.

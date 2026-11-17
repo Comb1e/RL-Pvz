@@ -320,9 +320,10 @@ def inspect_checkpoint(path, *, weights_only=False):
             else:
                 validate_runtime_identity(runtime)
             if not weights_only:
-                from pvz_rl.learning.peashooter_teacher import validate_rule_recovery
-
-                validate_rule_recovery(runtime, cfg)
+                if runtime.get("peashooter_teacher") is not None:
+                    raise ValueError(
+                        "Peashooter stage recovery is no longer supported; use --init-from"
+                    )
                 if runtime.get("buffer") is not None:
                     from pvz_rl.learning.collection_scheduler import (
                         CollectionScheduler,

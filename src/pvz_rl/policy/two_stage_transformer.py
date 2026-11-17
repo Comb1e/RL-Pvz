@@ -35,7 +35,7 @@ def execution_scope_for(phase):
 
     if phase == "prediction":
         return "forecast"
-    if phase == "peashooter" or is_placement_skill(phase):
+    if is_placement_skill(phase):
         return "placement"
     if phase in ("easy", "standard", "shared"):
         return "full"
