@@ -38,6 +38,7 @@ from pvz_rl.envs.tile_scenarios import (
     attacker_exercise_scores,
     attacker_mix,
     is_placement_skill,
+    is_prediction_skill,
     is_single_frame_skill,
     placement_settings,
     prediction_settings,
@@ -217,7 +218,7 @@ def current_grad_norms(model):
 
 def progress_unit(phase):
     """Collection noun for one environment: a scene, a board, or a game."""
-    if phase == "prediction":
+    if is_prediction_skill(phase):
         return "scene"
     if is_placement_skill(phase):
         return "board"
@@ -649,7 +650,7 @@ class ResearchCallback(BaseCallback):
         summary = self.cohort_summary()
         phase = progress_phase(self.model)
         done = f"{summary['completed']}/{summary['games']}"
-        if phase == "prediction":
+        if is_prediction_skill(phase):
             # Collection progress only. The fit marker carries this cohort's
             # integer score; validation keeps the separate panel percentage.
             return done
@@ -661,8 +662,7 @@ class ResearchCallback(BaseCallback):
         )
         marker = "~" if summary["provisional"] else ""
         return (
-            f"{done}  wins {summary['wins']}/{summary['games']}  "
-            f"Rraw={raw} Rtrain={fitted}{marker}"
+            f"{done}  wins {summary['wins']}/{summary['games']}  Rraw={raw} Rtrain={fitted}{marker}"
         )
 
     def log_progress(self, *, force=False):
@@ -732,9 +732,7 @@ class ResearchCallback(BaseCallback):
         else:
             marker = phase
         budget = (
-            f"{row['budget_progress']:,}"
-            if pre_stage(self.cfg)
-            else f"{row['training_games']:,}"
+            f"{row['budget_progress']:,}" if pre_stage(self.cfg) else f"{row['training_games']:,}"
         )
         if row["target_games"] is not None:
             budget += f"/{row['target_games']:,}"
@@ -1054,9 +1052,7 @@ class ResearchCallback(BaseCallback):
         for item in pending.values():
             report = item.get("report")
             if report is not None:
-                self._queue_episode(
-                    {**report, **item["metrics"], "record_id": item["record_id"]}
-                )
+                self._queue_episode({**report, **item["metrics"], "record_id": item["record_id"]})
 
     def _cohort_task_wins(self):
         counts = {}
@@ -1089,9 +1085,7 @@ class ResearchCallback(BaseCallback):
         tasks = None
         if self.curriculum is not None and stage in ("easy", "standard", "shared"):
             tasks = tuple(self.curriculum.requirements(self.cfg))
-        threshold = self.cfg["curriculum"].get(
-            f"{stage}_validation_success_threshold", 0.95
-        )
+        threshold = self.cfg["curriculum"].get(f"{stage}_validation_success_threshold", 0.95)
         return cohort_meets_stage_bar(
             stage,
             correct=correct,
@@ -1278,7 +1272,7 @@ class ResearchCallback(BaseCallback):
                     optimizer_step=optimizer_step(self.model),
                 ),
             )
-            if domain == "prediction":
+            if is_prediction_skill(domain):
                 correct = cohort.get("fully_correct_scenes")
                 total = cohort.get("forecast_scene_count")
                 evidence = (
@@ -1451,15 +1445,16 @@ class ResearchCallback(BaseCallback):
             names = ", ".join(skills.validation_skills)
             self.progress.phase(Phase.VALIDATING, names)
             try:
-                if skills.phase == "prediction":
+                if is_prediction_skill(skills.phase):
                     from pvz_rl.evaluation.prediction import validate_prediction
 
                     results = {
-                        "prediction": validate_prediction(
+                        skills.phase: validate_prediction(
                             self.cfg,
                             self.model,
                             self.validation_panels["tile"],
                             deadline=self.operation_deadline(final),
+                            stage=skills.phase,
                         )
                     }
                 else:
@@ -1485,8 +1480,8 @@ class ResearchCallback(BaseCallback):
                 attacker_exercise_scores(results["attacker"]) if previous == "attacker" else None
             )
             prediction_metrics = {}
-            if previous == "prediction":
-                losses = [row["loss"] for row in results["prediction"]]
+            if is_prediction_skill(previous):
+                losses = [row["loss"] for row in results[previous]]
                 finite = all(loss is not None for loss in losses)
                 prediction_metrics = dict(
                     mean_loss=sum(losses) / count if finite else None,
@@ -1515,8 +1510,8 @@ class ResearchCallback(BaseCallback):
                 self.save_checkpoint("latest.zip")
             detail = "  ".join(f"{skill} {wins}/{count}" for skill, wins in scores.items())
             if prediction_metrics:
-                rate = fully_correct_text(scores["prediction"], count) or (
-                    f"{scores['prediction']}/{count}"
+                rate = fully_correct_text(scores[previous], count) or (
+                    f"{scores[previous]}/{count}"
                 )
                 loss = prediction_metrics["mean_loss"]
                 loss_text = f"  {loss:.2f}" if loss is not None else ""
@@ -2127,7 +2122,7 @@ def train(
                 + "  ".join(
                     (
                         f"fully correct {wins}/{tile_validation_count(cfg, skill)}"
-                        if skill == "prediction"
+                        if is_prediction_skill(skill)
                         else f"{skill} {wins}/{tile_validation_count(cfg, skill)}"
                     )
                     for skill, wins in requirements.items()

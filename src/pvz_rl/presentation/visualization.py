@@ -13,6 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from pvz_rl.config import output_settings
+from pvz_rl.envs.tile_scenarios import is_prediction_skill
 from pvz_rl.evaluation.runner import evaluate
 from pvz_rl.jsonl_log import read_jsonl_series
 from pvz_rl.learning.curriculum import TILE_STAGES, pre_stage
@@ -31,7 +32,7 @@ def score_text(scores, cfg):
     parts = []
     for skill, wins in scores.items():
         total = tile_validation_count(cfg, skill)
-        if skill == "prediction":
+        if is_prediction_skill(skill):
             parts.append(fully_correct_text(wins, total) or f"{wins}/{total}")
         else:
             parts.append(f"{skill} {wins}/{total}")
@@ -41,7 +42,7 @@ def score_text(scores, cfg):
 def cohort_result_text(check):
     cohort = check.get("cohort") or {}
     domain_name = cohort.get("domain") or check.get("domain")
-    if domain_name == "prediction" or cohort.get("skill") == "prediction":
+    if is_prediction_skill(domain_name) or is_prediction_skill(cohort.get("skill")):
         rate = fully_correct_text(
             cohort.get("fully_correct_scenes"), cohort.get("forecast_scene_count")
         )
@@ -266,7 +267,7 @@ def build_run_report(run, cfg=None):
         pending = trigger.get("pending") or "—"
         threshold = (
             ""
-            if skills.get("phase") == "prediction" or status.get("curriculum_stage") == "prediction"
+            if is_prediction_skill(skills.get("phase")) or is_prediction_skill(status.get("curriculum_stage"))
             else f"{trigger['cohort_success_threshold']:.0%} · "
         )
         run_progress += (
@@ -303,7 +304,7 @@ def build_run_report(run, cfg=None):
                 + "".join(
                     (
                         f"<td>{escape(fully_correct_text(probe['scores'][skill], counts.get(skill) or tile_validation_count(cfg, skill)) or '—')}</td>"
-                        if skill == "prediction"
+                        if is_prediction_skill(skill)
                         else f"<td>{probe['scores'][skill]}/{counts.get(skill, cfg['curriculum']['probe_cases'])}"
                         f"{breakdown if skill == 'attacker' else ''}</td>"
                     )

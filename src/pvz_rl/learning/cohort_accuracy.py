@@ -61,11 +61,12 @@ def _strict_rate(numer, denom, threshold):
     return numer / denom > threshold
 
 
-def prediction_env_succeeds(correct, scored, threshold):
-    """One environment passes when its labeled forecasts are strictly above the threshold.
+def prediction_env_succeeds(correct, scored, threshold, *, inclusive=False):
+    """Score labeled forecasts, with an inclusive threshold for opening-only scenes.
 
-    An empty environment has no scored forecast and fails. Nineteen of twenty is
-    0.95 and fails. The threshold is not applied by dropping loss rows.
+    Ordinary Prediction remains strict: nineteen of twenty at 0.95 fails.
+    Pre-prediction uses an inclusive 1.0 so its one exact forecast passes.
+    Empty environments fail; this gate never drops loss rows.
     """
     if type(correct) is not int or type(scored) is not int or scored < 1:
         return False
@@ -73,7 +74,11 @@ def prediction_env_succeeds(correct, scored, threshold):
         return False
     if isinstance(threshold, bool) or type(threshold) not in (int, float):
         return False
-    if threshold != threshold or threshold < 0 or threshold >= 1:
+    if threshold != threshold or threshold < 0 or threshold > 1:
+        return False
+    if inclusive:
+        return correct / scored >= threshold
+    if threshold == 1:
         return False
     return correct / scored > threshold
 

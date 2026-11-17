@@ -7,7 +7,7 @@ from queue import Empty, Full
 from time import monotonic
 
 from pvz_rl.envs.actions import ActionSchema as A
-from pvz_rl.envs.tile_scenarios import is_placement_skill
+from pvz_rl.envs.tile_scenarios import is_placement_skill, is_prediction_skill
 from pvz_rl.presentation.forecast_display import scores_recorded, tile_label
 from pvz_rl.presentation.outcome_view import draw_live_outcomes
 from pvz_rl.presentation.rendering import render_context
@@ -487,12 +487,12 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
             pygame.draw.rect(surface, (212, 168, 74), rect, width=2, border_radius=5)
         title = str(packet["env"]) if not frame else f"{packet['env']}  {frame['task']}"
         task = frame.get("task") if frame else None
-        if frame and task != "prediction" and not is_placement_skill(task):
+        if frame and not is_prediction_skill(task) and not is_placement_skill(task):
             reward = frame.get("reward")
             if isinstance(reward, (int, float)):
                 title += f"  {reward:+.3g}{'~' if frame.get('reward_pending') else ''}"
         elif (
-            task == "prediction"
+            is_prediction_skill(task)
             and decision
             and decision.get("effect_prediction_valid")
             and frame.get("observation") is not None

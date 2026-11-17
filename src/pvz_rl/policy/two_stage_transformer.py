@@ -31,9 +31,9 @@ from pvz_rl.policy.tile_decoder import TileDecoder
 
 def execution_scope_for(phase):
     """Forward modules a curriculum phase is allowed to run."""
-    from pvz_rl.envs.tile_scenarios import is_placement_skill
+    from pvz_rl.envs.tile_scenarios import is_placement_skill, is_prediction_skill
 
-    if phase == "prediction":
+    if is_prediction_skill(phase):
         return "forecast"
     if is_placement_skill(phase):
         return "placement"

@@ -28,7 +28,9 @@ class PlacementOutcomes:
         self.env, self.buffer, self.auxiliary = env, buffer, env.auxiliary
         if self.auxiliary is None:
             raise RuntimeError("Single-frame outcomes require the bounded simulation service")
-        self.family = "prediction" if env.tile_scenario == "prediction" else "placement"
+        self.family = (
+            env.tile_scenario if env.tile_scenario in ("pre_prediction", "prediction") else "placement"
+        )
         self.jobs_metric = f"{self.family}_jobs"
         self.jobs = {}
         self.opening_seen = set()
@@ -51,6 +53,10 @@ class PlacementOutcomes:
                 "episodes" not in state or state.get("quiet") != PREDICTION_QUIET
             ):
                 raise ValueError("Prediction outcome recovery predates the idle-plant stop")
+            if state.get("stage", env.tile_scenario) != env.tile_scenario:
+                raise ValueError("Outcome recovery belongs to a different exercise stage")
+            if self.family == "pre_prediction" and state.get("stage") != self.family:
+                raise ValueError("Missing single-frame pre_prediction recovery identity")
             self.jobs = {tuple(key): value for key, value in state["jobs"]}
             self.opening_seen = {int(index) for index in state.get("opening_seen", ())}
             for job in self.jobs.values():
@@ -221,6 +227,7 @@ class PlacementOutcomes:
             jobs.append((identity, saved))
         saved = dict(
             protocol=self.protocol,
+            stage=self.env.tile_scenario,
             jobs=jobs,
             opening_seen=sorted(self.opening_seen),
             episodes=[self.episodes[index] for index in sorted(self.episodes)],

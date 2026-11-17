@@ -17,22 +17,24 @@ from pvz_rl.policy.two_stage_transformer import execution_scope_for
 
 
 @torch.no_grad()
-def validate_prediction(cfg, model, seeds, *, deadline=None):
-    settings = prediction_settings(cfg)
+def validate_prediction(cfg, model, seeds, *, deadline=None, stage=None):
+    stage = stage or cfg["curriculum"].get("run_stage")
+    stage = "pre_prediction" if stage == "pre_prediction" else "prediction"
+    settings = prediction_settings(cfg, stage)
     if len(seeds) != settings["validation_cases"] or len(set(seeds)) != len(seeds):
         raise ValueError("Prediction validation requires a complete, distinct scene panel")
     policy = model.policy
     previous_stage = getattr(policy, "forecast_stage", None)
     previous_scope = policy.execution_scope
-    policy.forecast_stage = "prediction"
-    policy.execution_scope = execution_scope_for("prediction")
+    policy.forecast_stage = stage
+    policy.execution_scope = execution_scope_for(stage)
     results = []
     try:
         local = deepcopy(cfg)
         local["training"]["n_envs"] = len(seeds)
         check_deadline(deadline)
         with closing(CudaVecEnv(local, "masked", 0, training=False)) as env, env.device_context():
-            env.tile_scenario = env.queue.tile_scenario = "prediction"
+            env.tile_scenario = env.queue.tile_scenario = stage
             env.queue.deadline = deadline
             slots = list(range(len(seeds)))
             env.reset_indices(

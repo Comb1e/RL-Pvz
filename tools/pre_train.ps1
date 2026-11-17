@@ -2,7 +2,9 @@ $ErrorActionPreference = "Stop"
 
 .\.venv\Scripts\python.exe -m pvz_rl initialize-demo --archive data\human-1000.jsonl --replay data\human-1000.pvzdemo --output runs\human-init --device cuda
 
-.\.venv\Scripts\python.exe -m pvz_rl train --until-stage-complete --stage prediction --output runs\compact-stages\prediction --gpu 0 --gpu-profile rtx4070-laptop
+.\.venv\Scripts\python.exe -m pvz_rl train --until-stage-complete --stage pre_prediction --output runs\compact-stages\pre_prediction --gpu 0 --gpu-profile rtx4070-laptop
+
+.\.venv\Scripts\python.exe -m pvz_rl train --until-stage-complete --stage prediction --output runs\compact-stages\prediction --init-from runs\compact-stages\pre_prediction\final.zip --gpu 0 --gpu-profile rtx4070-laptop
 
 .\.venv\Scripts\python.exe -m pvz_rl train --until-stage-complete --stage cherry_bomb --output runs\compact-stages\cherry_bomb --init-from runs\compact-stages\prediction\final.zip --gpu 0 --gpu-profile rtx4070-laptop
 

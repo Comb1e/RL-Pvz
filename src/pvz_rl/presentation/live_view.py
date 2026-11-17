@@ -425,6 +425,7 @@ def learning_settings(cfg):
                     "cherry_bomb",
                     "cherry_bomb_obstacle",
                     "attacker_pre",
+                    "pre_prediction",
                     "prediction",
                     "attacker",
                     "normal",

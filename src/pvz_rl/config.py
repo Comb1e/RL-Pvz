@@ -22,6 +22,7 @@ from pvz_rl.envs.tile_scenarios import (
     attacker_mix,
     is_bomb_skill,
     is_placement_skill,
+    is_prediction_skill,
     is_single_frame_skill,
     prediction_settings,
 )
@@ -134,6 +135,14 @@ _STAGE_PARAMETERS = {
     },
 }
 
+_STAGE_PARAMETERS["pre_prediction"] = {
+    key: value.replace("prediction", "pre_prediction")
+    for key, value in _STAGE_PARAMETERS["prediction"].items()
+}
+_STAGE_PARAMETERS["pre_prediction"]["fixed_scene_seeds"] = (
+    "training.tile_scenarios.pre_prediction.fixed_scene_seeds"
+)
+
 for _stage, _fields in _STAGE_PARAMETERS.items():
     _fields["forecast_mode"] = f"training.stage_forecast_modes.{_stage}"
     _fields["extra_actions"] = f"training.stage_extra_actions.{_stage}"
@@ -162,7 +171,7 @@ def forecast_mode(cfg, stage=None):
 
 def forecast_forks_enabled(cfg, stage=None):
     stage = stage or cfg.get("curriculum", {}).get("run_stage")
-    if stage == "prediction":
+    if is_prediction_skill(stage):
         return forecast_mode(cfg, stage) == "prediction_only"
     return cfg["training"].get("forecasts", {}).get("enabled", False) and forecast_mode(
         cfg, stage
@@ -173,7 +182,7 @@ def outcome_prediction_weights(cfg, stage="normal"):
     """Static-field/probe coefficients; saved single-weight runs retain their loss."""
     training = cfg["training"]
     stage = stage if stage in _STAGE_PARAMETERS else "normal"
-    if stage == "prediction":
+    if is_prediction_skill(stage):
         return 1.0, 1.0
     weights = training.get("stage_outcome_weights", {}).get(stage)
     if weights is not None:
@@ -348,8 +357,8 @@ def stage_pass_text(cfg, stage):
 
 def cohort_envs(cfg, skill=None):
     """Configured real-episode cohort size; missing stage settings retain legacy size."""
-    if skill == "prediction":
-        return prediction_settings(cfg)["n_envs"]
+    if is_prediction_skill(skill):
+        return prediction_settings(cfg, skill)["n_envs"]
     if skill == "attacker":
         return attacker_mix(cfg)["n_envs"]
     if skill == "attacker_pre":
@@ -416,7 +425,14 @@ def training_env_capacity(cfg, family="preset"):
         attacker = tile.get("attacker", {}).get("n_envs", 0)
         mixed = (attacker_mix(cfg) or {}).get("n_envs", 0)
         prediction = (prediction_settings(cfg) or {}).get("n_envs", 0)
-        return max(cherry, attacker, mixed, prediction, cohort_envs(cfg))
+        return max(
+            cherry,
+            attacker,
+            mixed,
+            prediction,
+            (prediction_settings(cfg, "pre_prediction") or {}).get("n_envs", 0),
+            cohort_envs(cfg),
+        )
     return cohort_envs(cfg)
 
 
@@ -845,7 +861,10 @@ def validate_config(cfg: dict) -> None:
         group["width"] = width
     if policy["board"]["width"] != policy["effect"]["width"]:
         raise ValueError("policy.board and policy.effect widths must match for six-token memory")
-    optional = {"attacker": attacker_mix(cfg), "prediction": prediction_settings(cfg)}
+    optional = {
+        "attacker": attacker_mix(cfg),
+        **{stage: prediction_settings(cfg, stage) for stage in ("pre_prediction", "prediction")},
+    }
     stages = tuple(
         stage for stage in _STAGE_PARAMETERS if stage not in optional or optional[stage] is not None
     )
@@ -856,7 +875,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Unknown outcome weight stage")
     for stage in stages:
         weights = split_weights.get(stage)
-        if stage == "prediction" and weights is not None:
+        if is_prediction_skill(stage) and weights is not None:
             raise ValueError("Prediction-only fitting uses unweighted outcome loss")
         if stage in split_weights and (
             not isinstance(weights, dict) or set(weights) != {"static_field", "probe"}
@@ -921,6 +940,7 @@ def validate_config(cfg: dict) -> None:
         "cherry_bomb_probe_interval_games",
         "attacker_pre_probe_interval_games",
         "prediction_probe_interval_games",
+        "pre_prediction_probe_interval_games",
         "attacker_probe_interval_games",
     ):
         if key in c and (type(c[key]) is not int or c[key] < 1):
@@ -1099,79 +1119,94 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Tile stages require training.tile_scenarios.enabled")
     if c.get("run_stage") == "attacker_pre" and "attacker" not in tile:
         raise ValueError("attacker_pre requires its training configuration section")
-    prediction = prediction_settings(cfg)
-    if prediction is not None:
-        if type(prediction.get("n_envs")) is not int or prediction["n_envs"] < 1:
-            raise ValueError("prediction.n_envs must be a positive integer")
-        if (
-            type(prediction.get("validation_cases")) is not int
-            or prediction["validation_cases"] != 200
-        ):
-            raise ValueError("Prediction validation requires exactly 200 cases")
-        for key, limit in (("ready_probability", 1),):
-            value = prediction.get(key)
+    for prediction_stage in ("pre_prediction", "prediction"):
+        prediction = prediction_settings(cfg, prediction_stage)
+        if prediction is not None:
+            if type(prediction.get("n_envs")) is not int or prediction["n_envs"] < 1:
+                raise ValueError("prediction.n_envs must be a positive integer")
             if (
-                type(value) not in (int, float)
-                or not math.isfinite(value)
-                or not 0 <= value <= limit
+                type(prediction.get("validation_cases")) is not int
+                or prediction["validation_cases"] != 200
             ):
-                raise ValueError(f"Invalid prediction.{key}")
-        for key, limit in (
-            ("plants", 45),
-            ("live_zombies", math.inf),
-            ("defeated_zombies", math.inf),
-            ("pending_zombies", math.inf),
-            ("sun", rules.game["sun_cap"]),
-        ):
-            values = prediction.get(key)
-            if (
-                not isinstance(values, list)
-                or len(values) != 2
-                or any(type(n) is not int for n in values)
-                or not 0 <= values[0] <= values[1] <= limit
+                raise ValueError("Prediction validation requires exactly 200 cases")
+            for key, limit in (("ready_probability", 1),):
+                value = prediction.get(key)
+                if (
+                    type(value) not in (int, float)
+                    or not math.isfinite(value)
+                    or not 0 <= value <= limit
+                ):
+                    raise ValueError(f"Invalid prediction.{key}")
+            for key, limit in (
+                ("plants", 45),
+                ("live_zombies", math.inf),
+                ("defeated_zombies", math.inf),
+                ("pending_zombies", math.inf),
+                ("sun", rules.game["sun_cap"]),
             ):
-                raise ValueError(f"Invalid prediction.{key} range")
-        if not prediction["live_zombies"][1] and not prediction["pending_zombies"][1]:
-            raise ValueError("Prediction scenes need live or pending zombies")
-        curve = prediction.get("surviving_curve")
-        if curve is not None:
-            weights_ok = (
-                isinstance(curve, list)
-                and len(curve) == 4
-                and all(
-                    type(weight) in (int, float) and math.isfinite(weight) and weight > 0
-                    for weight in (curve[1], curve[3])
+                values = prediction.get(key)
+                if (
+                    not isinstance(values, list)
+                    or len(values) != 2
+                    or any(type(n) is not int for n in values)
+                    or not 0 <= values[0] <= values[1] <= limit
+                ):
+                    raise ValueError(f"Invalid prediction.{key} range")
+            if not prediction["live_zombies"][1] and not prediction["pending_zombies"][1]:
+                raise ValueError("Prediction scenes need live or pending zombies")
+            curve = prediction.get("surviving_curve")
+            if curve is not None:
+                weights_ok = (
+                    isinstance(curve, list)
+                    and len(curve) == 4
+                    and all(
+                        type(weight) in (int, float) and math.isfinite(weight) and weight > 0
+                        for weight in (curve[1], curve[3])
+                    )
                 )
-            )
+                if (
+                    not weights_ok
+                    or type(curve[0]) is not int
+                    or type(curve[2]) is not int
+                    or curve[0] < 0
+                    or curve[2] < 0
+                    or curve[0] == curve[2]
+                ):
+                    raise ValueError(
+                        "prediction.surviving_curve must be two distinct counts and two positive weights"
+                    )
+            if f"{prediction_stage}_probe_interval_games" not in c:
+                raise ValueError("Prediction requires its own validation interval")
+            if prediction_stage == "pre_prediction":
+                from pvz_rl.learning.fixed_prediction import validate_fixed_seeds
+
+                validate_fixed_seeds(prediction, c.get("run_stage"))
+            threshold = prediction.get("env_success_threshold")
             if (
-                not weights_ok
-                or type(curve[0]) is not int
-                or type(curve[2]) is not int
-                or curve[0] < 0
-                or curve[2] < 0
-                or curve[0] == curve[2]
+                isinstance(threshold, bool)
+                or type(threshold) not in (int, float)
+                or not math.isfinite(threshold)
+                or not 0 <= threshold <= 1
+                or (prediction_stage == "prediction" and threshold == 1)
             ):
+                bounds = "[0, 1]" if prediction_stage == "pre_prediction" else "[0, 1)"
                 raise ValueError(
-                    "prediction.surviving_curve must be two distinct counts and two positive weights"
+                    f"{prediction_stage}.env_success_threshold must be finite and in {bounds}"
                 )
-        if "prediction_probe_interval_games" not in c:
-            raise ValueError("Prediction requires its own validation interval")
-        threshold = prediction.get("env_success_threshold")
-        if (
-            isinstance(threshold, bool)
-            or type(threshold) not in (int, float)
-            or not math.isfinite(threshold)
-            or not 0 <= threshold < 1
-        ):
-            raise ValueError("prediction.env_success_threshold must be finite and in [0, 1)")
-        if prediction.get("stop") != "last_quiet":
-            raise ValueError("prediction.stop must be last_quiet")
-        if prediction.get("target") != "episode_static_then_probe":
-            raise ValueError("prediction.target must be episode_static_then_probe")
-        if prediction.get("breach") != "until_quiet":
-            raise ValueError("prediction.breach must be until_quiet")
-    elif c.get("run_stage") == "prediction":
-        raise ValueError("prediction requires its training configuration section")
+            if prediction.get("stop") != (
+                "one_frame" if prediction_stage == "pre_prediction" else "last_quiet"
+            ):
+                raise ValueError(f"Invalid {prediction_stage}.stop")
+            if prediction.get("target") != (
+                "opening_static_then_probe"
+                if prediction_stage == "pre_prediction"
+                else "episode_static_then_probe"
+            ):
+                raise ValueError(f"Invalid {prediction_stage}.target")
+            if prediction.get("breach") != "until_quiet":
+                raise ValueError("prediction.breach must be until_quiet")
+        elif c.get("run_stage") == prediction_stage:
+            raise ValueError("prediction requires its training configuration section")
     mix = attacker_mix(cfg)
     if mix is not None:
         from fractions import Fraction
@@ -1317,7 +1352,7 @@ def validate_config(cfg: dict) -> None:
     for stage in stages:
         expected = (
             "prediction_only"
-            if stage == "prediction"
+            if is_prediction_skill(stage)
             else "placement_outcomes"
             if is_placement_skill(stage)
             else "action_outcomes"

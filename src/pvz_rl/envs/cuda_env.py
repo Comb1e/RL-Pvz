@@ -37,6 +37,7 @@ from pvz_rl.envs.tile_scenarios import (
     BombGenerationFailure,
     bomb_tile_distances,
     is_placement_skill,
+    is_prediction_skill,
     is_single_frame_skill,
     peashooter_level,
     placement_source,
@@ -90,6 +91,7 @@ class ScenarioQueue:
         self._prefetched = None
         self.preparation_metrics = {}
         self.validation_cases = None
+        self.fixed_opening_hashes = {}
 
     def _staging_rngs(self):
         if not self.random_cohorts:
@@ -133,6 +135,12 @@ class ScenarioQueue:
 
     def _draft(self, indices, rngs, seeds=None):
         cfg = self.cfg
+        if self.tile_scenario == "pre_prediction" and seeds is None:
+            from pvz_rl.learning.fixed_prediction import fixed_seeds
+
+            panel = fixed_seeds(cfg)
+            if panel is not None:
+                seeds = [panel[index] for index in indices]
         staged = []
         for offset, index in enumerate(indices):
             rng = rngs[index]
@@ -295,13 +303,20 @@ class ScenarioQueue:
                 scratch_lanes=prep.cuda.batch.n if prep.cuda is not None else 0,
                 host_reserved_bytes=self.reserved_bytes,
             )
-        elif self.tile_scenario == "prediction":
+        elif is_prediction_skill(self.tile_scenario):
             from pvz_rl.envs.prediction_scenarios import prediction_snapshot
 
             boards = {}
             for index, _, _, seed, _ in staged:
                 check_deadline(self.deadline)
-                snapshot, motion = prediction_snapshot(self.cfg, seed, self.rules)
+                snapshot, motion = prediction_snapshot(
+                    self.cfg, seed, self.rules, skill=self.tile_scenario
+                )
+                if self.tile_scenario == "pre_prediction":
+                    from pvz_rl.learning.fixed_prediction import fixed_seeds, opening_hash
+
+                    if fixed_seeds(self.cfg) is not None:
+                        self.fixed_opening_hashes[index] = opening_hash(snapshot, motion)
                 boards[index] = dict(snapshot=snapshot, motion=motion)
             self.tile_boards.update(boards)
             staged = [
@@ -396,14 +411,15 @@ class CudaVecEnv(VecEnv):
             for level, fam, seed in cases:
                 game.reset(scenario(level, fam, seed, self.queue.rules, cfg), seed)
                 counts.append(game.observe().counts.initial_total)
-        prediction = prediction_settings(cfg)
-        if prediction is not None:
-            counts.append(
-                sum(
-                    prediction[k][1]
-                    for k in ("live_zombies", "defeated_zombies", "pending_zombies")
+        for prediction_stage in ("pre_prediction", "prediction"):
+            prediction = prediction_settings(cfg, prediction_stage)
+            if prediction is not None:
+                counts.append(
+                    sum(
+                        prediction[k][1]
+                        for k in ("live_zombies", "defeated_zombies", "pending_zombies")
+                    )
                 )
-            )
         self.batch = AccountingCudaBatch(
             count,
             zombie_capacity=max(1, *counts),
@@ -504,12 +520,10 @@ class CudaVecEnv(VecEnv):
                 [boards[i]["snapshot"] for i in indices],
                 indices=indices,
             )
-            if self.tile_scenario == "prediction":
+            if is_prediction_skill(self.tile_scenario):
                 from pvz_rl.envs.motion_history import install_motion
 
-                install_motion(
-                    self.batch, [boards[i]["motion"] for i in indices], indices
-                )
+                install_motion(self.batch, [boards[i]["motion"] for i in indices], indices)
                 boards.clear()  # Physical roots and scene seeds already have owners.
             else:
                 self.tile_boards = deepcopy(boards)
@@ -739,9 +753,7 @@ class CudaVecEnv(VecEnv):
         # in action-phase mode they advance zero ticks. Both use the same
         # acceptance bit, while rejected proposals execute as waits.
         self.executed_actions.copy_(torch.where(self._device_active & h[:, 12].bool(), actions, 0))
-        cutoff_tick = (
-            self.cfg["environment"]["cutoff_seconds"] * self.batch.rules.game["tick_rate"]
-        )
+        cutoff_tick = self.cfg["environment"]["cutoff_seconds"] * self.batch.rules.game["tick_rate"]
         if self.batch.prediction_hold_win:
             # The step that leaves the real lawn quiet is the last forecast.
             # A house entry and a defeated horde both keep stepping until that board.
@@ -847,9 +859,9 @@ class CudaVecEnv(VecEnv):
                     episode_metrics=self.episode_metrics(index, header, total),
                     **{"TimeLimit.truncated": bool(compact[index, 1])},
                 )
-                if self.tile_scenario == "prediction":
+                if is_prediction_skill(self.tile_scenario):
                     completed[index]["episode_metrics"].update(
-                        status="scored", tile_scenario="prediction"
+                        status="scored", tile_scenario=self.tile_scenario
                     )
                 if is_placement_skill(self.tile_scenario):
                     action = int(actions[index, 0])

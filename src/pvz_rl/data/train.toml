@@ -187,6 +187,27 @@ cuda_warmup = true # Natural initial cooldown only; distance labels use no candi
 oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown warmup.
 oracle_vram_mib = 1024
 
+[training.pre_prediction]
+# One opening-frame forecast; exact private targets suppress future spawns.
+forecast_mode = "prediction_only"
+extra_actions = 0
+env_success_threshold = 1.00 # With one forecast, only an exact 15/15 match passes.
+stop = "one_frame"
+target = "opening_static_then_probe" # Untouched opening field, then one settled-board probe.
+breach = "until_quiet" # The private continuation keeps resolving after a house entry.
+n_envs = 640
+probe_interval_games = 10000
+validation_cases = 200 # Inactive panel. The cohort bar is each environment's forecast success rate.
+plants = [0, 20]
+live_zombies = [0, 10]
+defeated_zombies = [0, 30]
+pending_zombies = [0, 20]
+# On-field plus still-due zombies. Relative exponential weights, normalized
+# over every legal total. One zombie weighs 0.1 and ten weigh 0.01.
+surviving_curve = [1, 0.1, 10, 0.01]
+sun = [0, 500]
+ready_probability = 0.5 # Applied independently to each card slot and mower.
+
 [training.prediction]
 # The stage bar is this cohort's pre-pass check. Training does not run the held-out panel.
 # An environment succeeds when its labeled forecasts are strictly above this rate.

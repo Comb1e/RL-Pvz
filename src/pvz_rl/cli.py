@@ -243,7 +243,7 @@ def main(argv=None):
     training.add_argument(
         "--stage",
         choices=SELECTABLE_STAGES,
-        help="train only the selected stage; prediction fits this frame's pre-action board",
+        help="train only the selected stage; pre_prediction forecasts one opening frame; prediction forecasts until quiet",
     )
     training.add_argument(
         "--until-stage-complete",

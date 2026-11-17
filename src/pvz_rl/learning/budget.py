@@ -8,7 +8,7 @@ def validation_interval_games(cfg, domain="normal"):
         return curriculum.get(
             "cherry_bomb_probe_interval_games", curriculum["probe_interval_games"]
         )
-    if domain in ("attacker_pre", "prediction", "attacker"):
+    if domain in ("attacker_pre", "pre_prediction", "prediction", "attacker"):
         return curriculum.get(f"{domain}_probe_interval_games", curriculum["probe_interval_games"])
     return curriculum["probe_interval_games"]
 

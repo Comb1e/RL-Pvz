@@ -61,8 +61,8 @@ def _draw_surviving_counts(rng, settings):
     return live, chosen - live
 
 
-def prediction_snapshot(cfg, seed, rules):
-    settings = prediction_settings(cfg)
+def prediction_snapshot(cfg, seed, rules, *, skill="prediction"):
+    settings = prediction_settings(cfg, skill)
     rng = Random(namespace_seed("prediction-frame-v1", seed))
     g = rules.game
     plant_types, zombie_types = (cfg["environment"][key] for key in ("plants", "zombies"))

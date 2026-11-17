@@ -69,7 +69,7 @@ Start autonomous training when ready:
 ```
 
 Default progression is
-`prediction → cherry_bomb → cherry_bomb_obstacle → attacker_pre → attacker → easy → standard → shared`.
+`pre_prediction → prediction → cherry_bomb → cherry_bomb_obstacle → attacker_pre → attacker → easy → standard → shared`.
 Use `--stage NAME --until-stage-complete` for one stage, or `--games N` for a
 completed-episode budget. Explicit normal stages skip preliminary stages. Omit
 `--init-from` to start with random weights.
@@ -83,12 +83,35 @@ Each stage can start from the previous stage's weights;
   --gpu 0 --gpu-profile rtx4070-laptop
 ```
 
-`prediction`, cherry bomb, cherry-bomb obstacle, attacker pre, and attacker
+`pre_prediction` forecasts only the opening frame. Its isolated target resolves
+only zombies already present, suppresses scheduled spawns, then probes the settled
+surviving defenses. Each scene contributes one forecast and one exact target job.
+It trains only the encoder and prediction head; all 15 classes must match for a
+scene to count at its inclusive `env_success_threshold = 1.00`. `prediction`
+keeps its strict threshold and forecasts through the last quiet board.
+Initialize it from `pre_prediction/final.zip` when chaining stages.
+
+For a capacity check from fresh weights, recollect the same 640 scenes and fit
+exactly one pass between checks until all 640 forecasts are fully correct:
+
+```powershell
+.\.venv\Scripts\python.exe tools\overfit_pre_prediction.py --seed 101 `
+  --output runs\diagnostics\pre-prediction-overfit --gpu 0 --gpu-profile rtx4070-laptop
+```
+
+The control checks opening/target hashes, logs separate target losses and missing
+labels in `overfit-metrics/`, and saves the first 100% weights without another
+update. `overfit-state.json`, `overfit-config.json` and `scene-seeds.json` remain
+beside the weights. Resume with the same command plus
+`--resume runs\diagnostics\pre-prediction-overfit\interrupted.zip`.
+It has no time ceiling; Ctrl+C saves recovery. Live controls are disabled.
+
+`pre_prediction`, `prediction`, cherry bomb, cherry-bomb obstacle, attacker pre, and attacker
 take one fitting pass per cohort. Each cohort is scored once before that pass,
 and the pass still runs when the score is already perfect. The fitting line
 shows that score as an integer ratio, such as `612/640`, and `streak k/10`.
 On prediction the same line also prints `forecasts N/M`. The report charts the
-check from before the first fitting pass for these five stages. Prediction draws
+check from before the first fitting pass for these six stages. Prediction draws
 successful environments and fully-correct forecasts. The charts redraw every 10
 cohorts and when a stage advances, and do not chart exploration for them.
 Episode rows are written at that same refresh. A checkpoint that omits the
@@ -122,7 +145,7 @@ environment succeeds, obstacle, attacker pre, and attacker at 100%, cherry bomb
 strictly above 0.95. Easy, standard, and shared require every game of each of
 their tasks to be won, and every required task has to occur. Training does not
 run a held-out panel. The live view draws the three bands and hides action
-scores that were not recorded. Prediction trains the shared board encoder and
+scores that were not recorded. Both forecast stages train the shared board encoder and
 effect head, and its forward stops there. Later stages freeze both and still
 run them. The teacher on
 every stage uses EMA decay 0.99. Placement trains and runs the tile decoder and

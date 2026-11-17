@@ -70,6 +70,7 @@ def plot_panels(
         cherry_bomb="#b54e59",
         cherry_bomb_obstacle="#9b69ad",
         attacker_pre="#c58e46",
+        pre_prediction="#6b829f",
         prediction="#377e83",
         attacker="#5379ac",
         easy="#399471",

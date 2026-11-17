@@ -15,7 +15,12 @@ import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
 
 from pvz_rl.config import cohort_envs, forecast_version
-from pvz_rl.envs.tile_scenarios import BombGenerationFailure, is_placement_skill, placement_settings
+from pvz_rl.envs.tile_scenarios import (
+    BombGenerationFailure,
+    is_placement_skill,
+    is_prediction_skill,
+    placement_settings,
+)
 from pvz_rl.learning.cohort import (
     CohortPhase,
     atomic_transition,
@@ -455,7 +460,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
                         ranking = is_placement_skill(self.tile_skills.phase)
-                        prediction = self.tile_skills.phase == "prediction"
+                        prediction = is_prediction_skill(self.tile_skills.phase)
                         rules = getattr(self, "peashooter_rule_training", False)
                         self.prefit_errors = self._buffer.finalize(
                             cohort=self.cohort_number,

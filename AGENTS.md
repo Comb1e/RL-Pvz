@@ -7,13 +7,29 @@ If the user has not declared it in advance. Ignore the existing runs by default.
 
 ## Scope and invariants
 
+- `pre_prediction` precedes `prediction` in fresh stage orders. It shares seeded
+  scene generation and motion warmup, records one opening forecast and submits
+  one immutable pre-action Wait root through the bounded outcome service. Its
+  private fork suppresses scheduled spawns and resolves field/settling/probe;
+  only the encoder and effect head train, without warmup or other losses.
+  All 15 classes must match at the inclusive threshold 1.0; ordinary Prediction
+  keeps its strict threshold. The regular stage retains the configured streak.
+  Existing Prediction last-quiet trajectories and model identity stay unchanged.
+- `tools/overfit_pre_prediction.py` starts fresh weights and optimizer, persists
+  a distinct fixed scene-seed panel, then recollects and scores it before each
+  single fitting pass. Opening physical/motion and exact target hashes must
+  remain equal. First complete 100% scoring skips the next update and retains
+  those exact weights. Missing labels prevent success. Fixed-panel state and
+  unpublished jobs survive recovery; live controls and memorized multi-pass
+  schedules are disabled. Diagnostic JSONL uses the central bounded log writer.
+
 - Use `.venv\Scripts\python.exe`. Keep one training/model framework and the
   separate pinned game dependency; never edit the installed engine or its pin.
   No dependency downloads in smoke checks or formal training without a request.
 - `src/pvz_rl/data/train.toml` is the single parameter source for training and demo
   overlays. Preserve user tuning. Group stage settings under `training.cherry_bomb`,
-  `cherry_bomb_obstacle`, `attacker_pre`, `prediction`, `attacker`, and `normal`; resolve once
-  into the runtime layout. `prediction`, `cherry_bomb`, `cherry_bomb_obstacle`, `attacker_pre`,
+  `cherry_bomb_obstacle`, `attacker_pre`, `pre_prediction`, `prediction`, `attacker`, and `normal`; resolve once
+  into the runtime layout. `pre_prediction`, `prediction`, `cherry_bomb`, `cherry_bomb_obstacle`, `attacker_pre`,
   and `attacker` score each cohort once, then take one fitting pass. A saved file that still
   has `training.cohorts_per_epoch` keeps that file's one-pass block and memorized cohort.
   `easy`, `standard`, and `shared` each own `n_epochs`. A live `3×` request
@@ -26,7 +42,7 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   Each existing token also carries a deterministic 8-tick motion summary.
   Simulated field/probe outcomes are private auxiliary targets, never observations.
   Future spawns are suppressed inside forks; IDs, schedules, seeds and snapshots stay private.
-- Encode once per decision/fitting call. Prediction runs the shared encoder, the
+- Encode once per decision/fitting call. Both forecast stages run the shared encoder, the
   effect head, then submits Wait. Placement
   adds the tile decoder and tile head for the supplied card. Easy,
   standard, and shared also run the ten-score action MLP.
@@ -169,7 +185,7 @@ If the user has not declared it in advance. Ignore the existing runs by default.
 - Main-game guarded CUDA field traces record per-tick depth before defeat and
   actual home entries after mower resolution. They contain no factual horizons or
   bite-contact targets. Resource failures preserve exact work without creating labels.
-- Preliminary stages retain automatic placement objectives. Prediction trains the
+- Preliminary stages retain automatic placement objectives. Both forecast stages train the
   shared encoder and the effect head. Later stages
   freeze both. Placement trains the tile decoder and tile
   head. Easy, standard, and shared train the action MLP, tile
@@ -232,7 +248,7 @@ If the user has not declared it in advance. Ignore the existing runs by default.
 
 ## Stages and validation
 
-- Fresh progression: `prediction → cherry_bomb → cherry_bomb_obstacle → attacker_pre → attacker → easy
+- Fresh progression: `pre_prediction → prediction → cherry_bomb → cherry_bomb_obstacle → attacker_pre → attacker → easy
 → standard → shared`. Explicit normal stages start directly. Preserve
   normal stage indices, independent budgets/counters and saved stage orders.
 - Both bomb stages have no exploration/search. Obstacle boards have exactly one
@@ -308,7 +324,7 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   standard, and shared require every game of each required task to be won, and every
   required task to occur. A short cohort does not move the streak. Ten consecutive passes
   advance a full run, or mark a `--stage` run mastered. The report charts before-fit
-  accuracy for the five stages. Prediction draws successful environments and
+  accuracy for the six stages. Prediction draws successful environments and
   fully-correct forecasts. The charts omit exploration and redraw every
   `visualization.report_interval_cohorts` cohorts, on a stage change, and at the end.
   A checkpoint that omits the before-fit pair, the forecast pair, or the streak still resumes.
@@ -332,7 +348,7 @@ recovery roots, shared by capture and restore.
 | `envs/scratch_game.py`, `bomb_preparation.py`, `cuda_bomb_oracle.py`, `cuda_snapshots.py`, `attacker_scenarios.py`, `prediction_scenarios.py`, `prediction_stop.py`                       | Validated automatic exercises, persistent preparation, bounded oracles, conservative attacker labels, seeded prediction frames, and the last-quiet prediction stop.                                                                                                                       |
 | `learning/training.py`, `cuda_q.py`, `sequential_training.py`                                                                                                                           | Cohort orchestration, collection/fitting, reporting and atomic recovery.                                                                                                                                                                                                                   |
 | `envs/field_tracking.py`, `wait_capture.py`, `static_fork.py`, `cuda_static_fork.py`, `fork_service.py`, `fork_execution.py/.cu`                                                        | Guarded field observations, exact real-tick capture, isolated field/probe phases, bounded refillable workers, verified suffix caching and queue recovery.                                                                                                                                  |
-| `learning/forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py`                                                                                                           | Absolute field/probe targets, shared-forward categorical losses, hard static/probe indicators, and calibration.                                                                                                            |
+| `learning/forecast_labels.py`, `forecast_objective.py`, `forecast_metrics.py`, `fixed_prediction.py`                                                                                                           | Absolute field/probe targets, shared-forward categorical losses, hard static/probe indicators, calibration and fixed-panel overfitting integrity.                                                                                                            |
 | `learning/auxiliary_service.py`, `auxiliary_settings.py`, `envs/auxiliary_cpu.py`, `auxiliary_cuda.py`, `snapshot_packet.py`, `teacher_rules.py`, `outcome_math.py` | Shared interval-outcome execution, immutable packed device roots, event-polled exact continuations, CPU workers and model-free simulation rules. |
 | `learning/effect_collection.py`, `wait_outcomes.py`, `placement_outcomes.py`, `prediction_labels.py`, `td_targets.py`                                                                  | Saved candidate tickets, deferred interval and single-placement targets, the prediction episode target, and frozen-cohort n-step TD.                                                                                                                                                       |
 | `learning/flat_q.py`, `objective.py`, `action_routing.py`, `placement_labels.py`, `bomb_objective.py`, `cohort_accuracy.py`                                                            | Shared Q fitting/economics, legality attribution, automatic placement losses, and the collected-cohort accuracy stop.                                                                                                      |
@@ -344,7 +360,7 @@ recovery roots, shared by capture and restore.
 | Repository `tools/benchmark_peashooter.py`, `tools/draw_collection_process.py`                                                                                                          | Seed-matched easy-stage total-time/latency sweeps. The benchmark keeps its filename. Optional real-collection host/CUDA event timing and two chronological CPU/GPU timelines. Collapse loops to start/end markers; identify waits and unavailable device timing explicitly.                    |
 | Repository `tools/profile_training_workflow.py`                                                                                                                                         | Bounded actual-CLI startup, collection and recovery audits, or one fully fitted production cohort with CPU/CUDA trace capture. Preserve production cutoff, initialization and presentation; do not equate shortened frozen-policy benchmarks with full training.                           |
 | Repository `tools/profiling_metrics.py`, `tools/report_training_hotspots.py`                                                                                                            | Per-thread exclusive host attribution, GC pauses, calibrated stage events, bounded CUPTI/cProfile windows, per-pass losses and costs per batch/board decision. Tracing must not retain released CUDA scratch; parameter sweeps release each model's graphs before creating the next model. |
-| `presentation/`                                                                                                                                                                         | Demo recording/replay, live cohort subscriptions and retained reports. The five early stages chart accuracy before fit and omit exploration. Prediction draws successful environments and fully-correct forecasts. `outcome_view.py` shows this frame's pre-action field, breach bin, and probe when the journal recorded them; unknown targets stay blank. Viewers reuse timestamped episode-scoped journal predictions without model calls. |
+| `presentation/`                                                                                                                                                                         | Demo recording/replay, live cohort subscriptions and retained reports. The six early stages chart accuracy before fit and omit exploration. Prediction draws successful environments and fully-correct forecasts. `outcome_view.py` shows this frame's pre-action field, breach bin, and probe when the journal recorded them; unknown targets stay blank. Viewers reuse timestamped episode-scoped journal predictions without model calls. |
 
 ## Test ownership
 
