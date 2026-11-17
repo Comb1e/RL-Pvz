@@ -36,7 +36,7 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   its own tokens. The residual cross-attention hidden vectors before the prediction
   MLP form five lane tokens after CLS. Policy memory is exactly those six vectors,
   with no entity tokens or class embeddings. The action MLP applies shared
-  per-token LayerNorm, flattens, then uses one configured GELU hidden layer and
+  per-token LayerNorm, flattens, then uses four configured GELU hidden layers and
   ten unrestricted scores. Tile queries still combine coordinates and the selected
   action embedding. Autonomous policy fitting stops gradients at that memory;
   Prediction logits and demonstration fitting retain their differentiable paths.
@@ -50,6 +50,13 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   is finished. A dig cell is a candidate only when it holds a plant. Dig itself
   is excluded when no cell has a plant, and every plant card is excluded when
   the lawn is full. Cache memory within one forward only.
+- All twelve MLPs use the shared `policy/mlp.py` builder and configured
+  `policy.mlp_hidden_layers` (four), plus one unrestricted output layer. Board
+  FFNs use hidden width 128, tile FFNs and prediction use 96, the action MLP
+  uses 128, and tile scoring uses 48. GELU follows every hidden layer except
+  tile scoring, which uses ReLU. Attention, residual widths and the six-token
+  policy boundary are unchanged. Counts include biases and the 56-slot carrier;
+  EMA, FP32 masters and optimizer state are duplicate storage, not more model parameters.
 - All models are outcome-only. Factual prediction heads, horizon/snapshot labels,
   losses, summaries, storage and legacy resumes are removed. Early stages use
   `placement_outcomes`: exactly one pre-action field/probe job per exercise,
@@ -157,7 +164,7 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   Preserve existing user datasets/recordings. Retain human recording, replay
   verification and demo initialization with their demonstration objectives and
   no auxiliary supervision.
-- Only `shared_public_outcomes_q_v12` checkpoints are supported. Reject every older
+- Only `shared_public_outcomes_q_v13` checkpoints are supported. Reject every older
   checkpoint before environment/CUDA preparation for inference, resume and
   initialization; no conversions or legacy execution. New-version recovery retains
   optimizer/counters, owned roots/rows/choices, partial jobs, unpublished results

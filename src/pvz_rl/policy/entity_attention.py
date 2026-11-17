@@ -9,6 +9,7 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
 from pvz_rl.policy.cudagraph_backend import CollectionGraphCache, FittingGraphBackend
+from pvz_rl.policy.mlp import build_mlp
 
 
 def feature_dtype(device):
@@ -57,14 +58,12 @@ def stable_norm(layer, value):
 
 
 class AttentionBlock(nn.Module):
-    def __init__(self, width, heads, feedforward, query_chunk):
+    def __init__(self, width, heads, feedforward, query_chunk, hidden_layers):
         super().__init__()
         self.heads, self.query_chunk = heads, query_chunk
         self.norm1, self.norm2 = nn.LayerNorm(width), nn.LayerNorm(width)
         self.qkv, self.output = nn.Linear(width, 3 * width), nn.Linear(width, width)
-        self.ff = nn.Sequential(
-            nn.Linear(width, feedforward), nn.GELU(), nn.Linear(feedforward, width)
-        )
+        self.ff = build_mlp(width, feedforward, width, hidden_layers)
         self.force_fallback = False
 
     def attention(self, q, k, v, mask):
@@ -158,6 +157,7 @@ class SpatialTransformer(nn.Module):
                     board["heads"],
                     board["feedforward"],
                     execution["query_chunk"],
+                    spec["mlp_hidden_layers"],
                 )
                 for _ in range(board["blocks"])
             ]

@@ -32,6 +32,19 @@ def test_cpu_agent_inference():
     cfg = load_config()
     torch.set_num_threads(cfg["training"]["torch_threads"])
     policy = TwoStageTransformerPolicy(cfg).eval()
+    mlps = [
+        *(block.ff for block in policy.board_encoder.layers),
+        *(block.self_attention.ff for block in policy.tile_decoder.layers),
+        policy.effect_head.mlp,
+        policy.action_head.mlp,
+        policy.tile_head,
+    ]
+    assert len(mlps) == 12
+    assert all(
+        sum(isinstance(layer, torch.nn.Linear) for layer in mlp)
+        == cfg["policy"]["mlp_hidden_layers"] + 1
+        for mlp in mlps
+    )
     with closing(PvZEnv(cfg, level="easy")) as env:
         observation, _ = env.reset(seed=1)
         board = collate_observations(observation)

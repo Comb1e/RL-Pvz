@@ -574,7 +574,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
     if (cfg["encoding"]["version"], cfg["policy"]["kind"]) not in {
-        ("entity_public_v4", "shared_public_outcomes_q_v12"),
+        ("entity_public_v4", "shared_public_outcomes_q_v13"),
     }:
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
@@ -681,7 +681,7 @@ def validate_config(cfg: dict) -> None:
         cfg.get("encoding", {}).get("version"),
         cfg.get("policy", {}).get("kind"),
     ) in {
-        ("entity_public_v4", "shared_public_outcomes_q_v12"),
+        ("entity_public_v4", "shared_public_outcomes_q_v13"),
     }
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -816,20 +816,20 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("encoding.max_entities must be an integer of at least 5")
     policy = cfg["policy"]
     required = {
-        "board": ("blocks", "heads"),
+        "board": ("blocks", "heads", "feedforward"),
         "action": ("hidden_width",),
-        "tile": ("blocks", "heads"),
-        "effect": ("heads",),
+        "tile": ("blocks", "heads", "feedforward", "readout_hidden_width"),
+        "effect": ("heads", "hidden_width"),
         "execution": ("microbatch", "query_chunk", "token_budget"),
     }
     optional = {
-        "board": {"feedforward", "width"},
+        "board": {"width"},
         "action": set(),
-        "tile": {"feedforward", "width"},
+        "tile": {"width"},
         "effect": {"width"},
         "execution": set(),
     }
-    if set(policy) != {"kind", "action_distribution", "head_dim", *required}:
+    if set(policy) != {"kind", "action_distribution", "head_dim", "mlp_hidden_layers", *required}:
         raise ValueError(
             "policy must contain only the stateless two-stage model and execution settings"
         )
@@ -838,6 +838,8 @@ def validate_config(cfg: dict) -> None:
     head_dim = policy.get("head_dim")
     if type(head_dim) is not int or head_dim < 1:
         raise ValueError("policy.head_dim must be a positive integer")
+    if type(policy["mlp_hidden_layers"]) is not int or policy["mlp_hidden_layers"] < 1:
+        raise ValueError("policy.mlp_hidden_layers must be a positive integer")
     for name, keys in required.items():
         group = policy[name]
         allowed = set(keys) | optional[name]
@@ -851,11 +853,6 @@ def validate_config(cfg: dict) -> None:
                 raise ValueError(f"policy.{name}.{key} must be a positive integer")
         if name in ("execution", "action"):
             continue
-        if "feedforward" in group:
-            if type(group["feedforward"]) is not int or group["feedforward"] < 1:
-                raise ValueError(f"policy.{name}.feedforward must be a positive integer")
-        elif name != "effect":
-            group["feedforward"] = 4 * head_dim
         width = group["heads"] * head_dim
         if "width" in group and (type(group["width"]) is not int or group["width"] != width):
             raise ValueError(

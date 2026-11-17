@@ -344,23 +344,28 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "shared_public_outcomes_q_v12"
+kind = "shared_public_outcomes_q_v13"
 action_distribution = "sequential_q_unmasked_tiles_v2"
 head_dim = 64
+mlp_hidden_layers = 4 # Every MLP has four hidden layers plus its output layer.
 
 [policy.board]
 blocks = 6
 heads = 4
+feedforward = 128 # Width of each hidden layer in the board transformer FFNs.
 
 [policy.action]
-hidden_width = 256 # CLS and five lane vectors -> hidden GELU -> ten action scores.
+hidden_width = 128 # CLS and five lane vectors -> four GELU layers -> ten scores.
 
 [policy.tile]
 blocks = 3
 heads = 2
+feedforward = 96 # Width of each hidden layer in the tile decoder FFNs.
+readout_hidden_width = 48 # Four ReLU hidden layers shared across all 45 tiles.
 
 [policy.effect]
 heads = 4
+hidden_width = 96 # Four GELU hidden layers; the 56-slot outcome carrier is unchanged.
 
 [policy.execution]
 microbatch = 128

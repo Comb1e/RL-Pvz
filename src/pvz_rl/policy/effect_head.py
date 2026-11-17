@@ -4,6 +4,7 @@ import torch
 from torch import nn
 
 from pvz_rl.policy.entity_attention import attend, stable_norm
+from pvz_rl.policy.mlp import build_mlp
 
 
 class EffectHead(nn.Module):
@@ -13,7 +14,16 @@ class EffectHead(nn.Module):
     chosen cell, or these outputs.
     """
 
-    def __init__(self, query_width, memory_width, effect_width, heads, query_chunk):
+    def __init__(
+        self,
+        query_width,
+        memory_width,
+        effect_width,
+        heads,
+        query_chunk,
+        hidden_width,
+        hidden_layers,
+    ):
         super().__init__()
         if query_width % heads:
             raise ValueError("policy.effect.width must be divisible by policy.effect.heads")
@@ -25,9 +35,7 @@ class EffectHead(nn.Module):
         self.query = nn.Linear(query_width, query_width)
         self.key_value = nn.Linear(memory_width, query_width * 2)
         self.output = nn.Linear(query_width, query_width)
-        self.mlp = nn.Sequential(
-            nn.Linear(query_width, query_width), nn.GELU(), nn.Linear(query_width, effect_width)
-        )
+        self.mlp = build_mlp(query_width, hidden_width, effect_width, hidden_layers)
 
     def forward(self, memory, valid):
         if memory.ndim != 3 or valid.shape != memory.shape[:2]:

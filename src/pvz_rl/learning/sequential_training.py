@@ -144,7 +144,7 @@ def flat_batches(buffer, decision_budget, spool=None):
 
 
 class CudaSequentialQ(CudaCohortLifecycle):
-    policy_protocol = "shared_public_outcomes_q_v12"
+    policy_protocol = "shared_public_outcomes_q_v13"
     optimizer_version = FIT_SCHEDULE_PROTOCOL
 
     def _open_cohort_number(self):

@@ -15,6 +15,7 @@ from pvz_rl.policy.action_head import ActionHead
 from pvz_rl.policy.active_batch import encode_active
 from pvz_rl.policy.effect_head import EffectHead
 from pvz_rl.policy.entity_attention import SpatialTransformer
+from pvz_rl.policy.mlp import build_mlp
 from pvz_rl.policy.sequential_q import (
     POLICY_SIGNATURE,
     action_branch_mask,
@@ -61,14 +62,24 @@ class TwoStageTransformerPolicy(nn.Module):
         self.tile_decoder = TileDecoder(self.layout, spec)
         board_width = spec["board"]["width"]
         tile_width = spec["tile"]["width"]
-        self.action_head = ActionHead(board_width, spec["action"]["hidden_width"])
-        self.tile_head = nn.Sequential(nn.Linear(tile_width, 128), nn.ReLU(), nn.Linear(128, 1))
+        self.action_head = ActionHead(
+            board_width, spec["action"]["hidden_width"], spec["mlp_hidden_layers"]
+        )
+        self.tile_head = build_mlp(
+            tile_width,
+            spec["tile"]["readout_hidden_width"],
+            1,
+            spec["mlp_hidden_layers"],
+            activation=nn.ReLU,
+        )
         self.effect_head = EffectHead(
             spec["effect"]["width"],
             board_width,
             self.effect_width,
             spec["effect"]["heads"],
             spec["execution"]["query_chunk"],
+            spec["effect"]["hidden_width"],
+            spec["mlp_hidden_layers"],
         )
         self._master_parameters = []
         self._master_names = []

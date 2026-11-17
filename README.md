@@ -14,13 +14,13 @@ network on the public board.
 flowchart LR
     B[Public board] --> E[Shared transformer]
     E --> P[Prediction cross-attention]
-    P --> F[Field / breach / probe readout]
+    P --> F[Prediction MLP: four hidden layers]
     E --> C[CLS + five hidden lane vectors]
     P --> C
-    C --> A[Action MLP]
+    C --> A[Action MLP: four hidden layers]
     C --> T[Tile decoder]
     A -->|Selected action| T
-    T --> O[45 tile scores]
+    T --> O[Tile MLP: four hidden layers / 45 scores]
 ```
 
 ## Requirements
@@ -113,7 +113,7 @@ reads the full encoder memory before the action is chosen. Use the prediction
 Across stages, a probe starts once the field clears, queued shots fire and their
 projectiles clear, moving mowers finish, and surviving Chompers are ready. The
 static-field **H** cell is 1 when the predicted field class is home. Start fresh
-with `shared_public_outcomes_q_v12` and use its checkpoints for `--resume` and
+with `shared_public_outcomes_q_v13` and use its checkpoints for `--resume` and
 `--init-from`. Earlier architectures cannot resume or initialize this model.
 
 `attacker` mixes the three placement exercises in shuffled 640-board cohorts
@@ -133,8 +133,11 @@ kills and restores the original physical state, kill counts and fitting progress
 ```
 
 No seed is required; `--seed` optionally fixes initialization. Start a new run:
-attention widths are each group's heads times `head_dim`; the action MLP uses
-`policy.action.hidden_width` (256 by default). The live view's gradient field scales the next cohort's update and
+attention widths are each group's heads times `head_dim`. Every MLP has
+`policy.mlp_hidden_layers` hidden layers (four by default), followed by its output
+layer. Board FFNs use 128 hidden units; prediction and tile FFNs use 96; the
+action MLP uses 128; tile scoring uses 48. Set these widths in the corresponding
+policy groups in [train.toml](src/pvz_rl/data/train.toml). The live view's gradient field scales the next cohort's update and
 still clips at `max_grad_norm`. Its `3×` control arms the next cohort at
 `learning_rate_restart` times `learning_rate` for one pass. The cohort line
 prints each pass's gradient norm before that clip. A checkpoint of this model

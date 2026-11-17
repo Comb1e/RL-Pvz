@@ -113,7 +113,7 @@ def current_model_config(cfg):
         identity
         in {
             (
-                "shared_public_outcomes_q_v12",
+                "shared_public_outcomes_q_v13",
                 "entity_public_v4",
                 CURRENT_OBJECTIVE,
                 CURRENT_OBJECTIVE,
@@ -274,6 +274,7 @@ def transfer_protocol(cfg, condition="masked"):
         "policy": {
             "kind": p["kind"],
             "head_dim": p["head_dim"],
+            "mlp_hidden_layers": p["mlp_hidden_layers"],
             "board": dict(p["board"]),
             "action": dict(p["action"]),
             "tile": dict(p["tile"]),
