@@ -158,6 +158,11 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   and committed passes. Publish every target once before fitting.
   A setup failure before any issued decision may rebuild an empty scheduler from
   the saved boards. Missing tickets after collection starts remain invalid.
+- Prediction recovery uses `prediction-accounting-v1` exit metadata. Validate
+  `spawned = defeated + non-headless present + exited` and use resolved counts
+  only in temporary engine-validation copies. Upload the original physical state
+  and actual kills. Compatible Prediction recovery without metadata derives exits
+  at ingestion; other stages retain strict engine snapshot validation.
 - Preserve CPU/CUDA cadence, legality, physical trajectories, reward conversion and
   attribution agreement. Viewers and diagnostics must not affect actions, rewards,
   or any other learning value. The live gradient scale is the exception: it multiplies
@@ -240,6 +245,9 @@ If the user has not declared it in advance. Ignore the existing runs by default.
 ## Code structure
 
 Paths are relative to `src/pvz_rl/` unless stated otherwise.
+
+`envs/prediction_snapshots.py` owns Prediction exit accounting and validated
+recovery roots, shared by capture and restore.
 
 | Area                                                                                                                                                                                    | Ownership                                                                                                                                                                                                                                                                                  |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

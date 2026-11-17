@@ -883,9 +883,15 @@ class CudaVecEnv(VecEnv):
 
     def snapshot_training(self):
         """Complete private simulator/queue state, never part of model inputs."""
+        from pvz_rl.envs.prediction_snapshots import capture_prediction_accounting
+
         header = self.batch.header.get()
+        games = [self.batch.snapshot(i) for i in range(self.num_envs)]
         return {
-            "games": [self.batch.snapshot(i) for i in range(self.num_envs)],
+            "games": games,
+            "prediction_accounting": capture_prediction_accounting(games)
+            if self.tile_scenario == "prediction"
+            else None,
             "allowed": header[:, 15].tolist(),
             "digging": header[:, 16].astype(bool).tolist(),
             "enabled": header[:, 17].tolist(),
@@ -926,6 +932,26 @@ class CudaVecEnv(VecEnv):
 
     def restore_training(self, state):
         skill = state.get("tile_scenario", "complete")
+        prediction_roots = None
+        if skill == "prediction":
+            from pvz_rl.envs.prediction_snapshots import validated_prediction_snapshots
+
+            prediction_roots = validated_prediction_snapshots(
+                state["games"], state.get("prediction_accounting"), self.batch.rules
+            )
+        elif state.get("prediction_accounting") is not None:
+            raise ValueError("Prediction accounting requires the Prediction stage")
+        allowed, digging, enabled = state["allowed"], state["digging"], state["enabled"]
+        if (
+            len(state["games"]) != self.num_envs
+            or len(allowed) != self.num_envs
+            or len(digging) != self.num_envs
+            or len(enabled) != self.num_envs
+            or any(type(value) is not int or not 0 <= value <= 255 for value in allowed)
+            or any(type(value) is not bool for value in digging)
+            or any(type(value) is not int or value not in (0, 1) for value in enabled)
+        ):
+            raise ValueError("Invalid per-game recovery restrictions or environment count")
         if skill in ("attacker_pre", "attacker"):
             from pvz_rl.envs.attacker_scenarios import label_attacker
 
@@ -965,10 +991,19 @@ class CudaVecEnv(VecEnv):
             if rate != expected:
                 raise ValueError("Saved sky-sun rate differs from scenario configuration")
             self.batch.set_sky_sun_rate(rate)
-            self.batch.restore(state["games"], allowed=state["allowed"], digging=state["digging"])
+            if prediction_roots is None:
+                self.batch.restore(state["games"], allowed=allowed, digging=digging)
+            else:
+                from pvz_rl.envs.cuda_snapshots import upload_snapshots
+
+                upload_snapshots(self.batch, prediction_roots, indices=list(range(self.num_envs)))
+                self.batch.header[:, HEADER.index("allowed")] = self.cp.asarray(allowed)
+                self.batch.header[:, HEADER.index("dig")] = self.cp.asarray(digging)
             self._refresh_growth_bounds(range(self.num_envs))
-            self.batch.header[:, 17] = self.cp.asarray(state["enabled"])
-            self.enabled_envs[:] = np.asarray(state["enabled"], dtype=bool)
+            self.batch.header[:, 17] = self.cp.asarray(enabled)
+            self.enabled_envs[:] = np.asarray(enabled, dtype=bool)
+            if prediction_roots is not None:
+                self.batch.action_masks_device()
             self.features.totals[:] = self.cp.asarray(state["totals"])
             if ledger is not None:
                 self.features.home_ledger[:] = self.cp.asarray(ledger)

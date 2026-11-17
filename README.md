@@ -110,6 +110,10 @@ labeled-set check as the other placement stages. Peashooter can start from
 
 Resume an interrupted stage from its recovery checkpoint:
 
+Prediction recovery records house exits separately from actual kills. Compatible
+Prediction checkpoints saved before that metadata was added also resume with
+their original physical state, kill counts and fitting progress.
+
 ```powershell
 .\.venv\Scripts\python.exe -m pvz_rl train --stage cherry_bomb_obstacle --until-stage-complete `
   --resume runs\compact-stages\cherry_bomb_obstacle\interrupted.zip `
