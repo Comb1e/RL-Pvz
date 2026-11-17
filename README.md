@@ -127,6 +127,14 @@ armor follows `zombie_hp_fraction`: a normal distribution centered at 80%, with
 armor first. The count of on-field plus unspawned zombies retains the exponential
 weights 0.1 at one and 0.01 at ten.
 
+Both forecast stages score and fit every recorded forecast. Gameplay keeps the
+first of each pair of repeated Waits within a single Wait interval; spawning,
+accepted planting/Dig, and episode boundaries restart pairing, while deaths do
+not. Reports include raw and retained row counts. TD bootstraps use the highest
+legal online branch and that same branch's EMA value. A pending exploration card
+executes Wait until it can be planted. These collection/fitting corrections require
+fresh runs; same-architecture portable weights still support `--init-from`.
+
 Prediction records a forecast every 10 ticks until the first actual house entry
 after mower resolution, or the quiet-board stop if no entry occurs. The crossing
 step ends at that exact simulator tick. It retains

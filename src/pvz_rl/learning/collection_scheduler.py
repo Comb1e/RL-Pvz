@@ -24,6 +24,7 @@ class CollectionScheduler:
         self.pending = np.zeros(count, dtype=bool)
         self.resets = np.ones(count, dtype=bool)
         self.decisions = np.zeros(count, dtype=np.int64)
+        self.wait_interval_id = np.zeros(count, dtype=np.int64)
         self.order = torch.zeros(count, dtype=torch.long, device=device)
         self.columns = None
         self.species_coins = torch.zeros(count, device=device)
@@ -49,6 +50,7 @@ class CollectionScheduler:
             + self.pending.nbytes
             + self.resets.nbytes
             + self.decisions.nbytes
+            + self.wait_interval_id.nbytes
         )
 
     def ready(self, unfinished):
@@ -76,8 +78,13 @@ class CollectionScheduler:
             torch.where(selected, wait_choices, self.wait_species_choices)
         )
 
-    def commit(self, issued, executing):
+    def commit(self, issued, executing, *, actions, accepted, spawned, done):
         executing = np.asarray(executing, bool)
+        # Rows were stamped from the pre-action frame. Only an executed
+        # boundary changes the identity available to the following decision.
+        boundary = np.asarray(spawned, bool) | np.asarray(done, bool)
+        boundary |= np.asarray(accepted, bool) & (np.asarray(actions) != 0)
+        self.wait_interval_id += executing & boundary
         self.pending = np.asarray(issued, bool) & ~executing
         self.resets[executing] = False
         self.decisions += executing
@@ -85,6 +92,7 @@ class CollectionScheduler:
     def snapshot(self):
         return dict(
             decisions=self.decisions.copy(),
+            wait_interval_id=self.wait_interval_id.copy(),
             resets=self.resets.copy(),
             round=self.round,
             pending=self.pending.copy(),
@@ -96,12 +104,21 @@ class CollectionScheduler:
         )
 
     def restore(self, state):
-        for name, dtype in (("decisions", np.int64), ("resets", bool)):
+        for name, dtype in (
+            ("decisions", np.int64),
+            ("wait_interval_id", np.int64),
+            ("resets", bool),
+        ):
             value = np.asarray(state.get(name))
             if value.shape != getattr(self, name).shape or value.dtype != dtype:
                 raise ValueError("Invalid collection scheduler recovery counters")
             setattr(self, name, value.copy())
-        if np.any(self.decisions < 0) or type(state.get("round")) is not int or state["round"] < 0:
+        if (
+            np.any(self.decisions < 0)
+            or np.any(self.wait_interval_id < 0)
+            or type(state.get("round")) is not int
+            or state["round"] < 0
+        ):
             raise ValueError("Invalid collection scheduler recovery timing")
         self.round = state["round"]
         pending = np.asarray(state.get("pending"))

@@ -220,7 +220,9 @@ class RepeatedRowCompactor:
             # single-row group (the full record contains large trace arrays).
             for i, env in enumerate(environments):
                 key = tuple(
-                    int(rows[field][i]) for field in ("action", "route", "rejection_reason")
+                    int(rows[field][i])
+                    for field in ("action", "route", "rejection_reason", "wait_interval_id")
+                    if field in names
                 )
                 prior = self.state.get(int(env))
                 continuation = prior is not None and prior[1] and not prior[2] and key == prior[0]
@@ -253,7 +255,11 @@ class RepeatedRowCompactor:
             n = len(ix)
             boundary = np.ones(n, bool)
             keys = np.stack(
-                [current[k].astype(np.int64) for k in ("action", "route", "rejection_reason")],
+                [
+                    current[k].astype(np.int64)
+                    for k in ("action", "route", "rejection_reason", "wait_interval_id")
+                    if k in names
+                ],
                 axis=1,
             )
             if n > 1:

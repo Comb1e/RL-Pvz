@@ -187,7 +187,8 @@ class CommittedPlantExploration:
             pending.clamp_min(1),
             self.tile_epsilon,
         )
-        chosen = torch.where(ready, assemble(pending, tiles), actions)
+        chosen = torch.where(committed, torch.zeros_like(actions), actions)
+        chosen = torch.where(ready, assemble(pending, tiles), chosen)
         branches, locations = action_parts(chosen)
         mode = torch.where(committed, int(PlantExplorationMode.WAITING), 0)
         mode = torch.where(ready, int(PlantExplorationMode.PLANTING), mode)
@@ -198,7 +199,9 @@ class CommittedPlantExploration:
         details["coins"][:, 1] = torch.where(committed, fired & ready, details["coins"][:, 1])
         details["branch_value"] = details["branch_q"].gather(1, branches[:, None]).flatten()
         selected_tile = tile_q.gather(1, locations[:, None]).flatten()
-        details["tile_value"] = torch.where(ready, selected_tile, details["tile_value"])
+        details["tile_value"] = torch.where(
+            committed, torch.where(ready, selected_tile, 0), details["tile_value"]
+        )
         details["tile_q"] = torch.where(ready[:, None], tile_q, details["tile_q"])
         details["valid"] &= (torch.isfinite(tile_q) | ~ready[:, None]).all()
         details["selected_value"] = torch.where(

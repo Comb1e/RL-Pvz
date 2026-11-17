@@ -478,7 +478,7 @@ class TwoStageTransformerPolicy(nn.Module):
             result = result.index_copy(0, nonwait, chosen)
         return result
 
-    def _selection_mask(self, observations, branch_usable):
+    def selection_legality(self, observations, branch_usable):
         """Hard branch mask from planted cells, sun, cooldown, and a passed card ban."""
         layout = self.layout
         occupied = occupied_cells(
@@ -541,7 +541,7 @@ class TwoStageTransformerPolicy(nn.Module):
             action_masks = observation_tile_masks(observations)
         if action_masks.shape != (len(observations), A.size):
             raise ValueError("Action masks must match the board batch")
-        occupied, branch_mask, passed_usable = self._selection_mask(observations, branch_usable)
+        occupied, branch_mask, passed_usable = self.selection_legality(observations, branch_usable)
         if supplied_branches is None:
             branches = greedy_choice(species, branch_mask)
             supplied_valid = True

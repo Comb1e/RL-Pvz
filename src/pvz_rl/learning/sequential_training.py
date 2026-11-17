@@ -699,6 +699,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows = np.zeros(self.n_envs, dtype=self._buffer.dtype)
             rows["reset"] = self._scheduler.resets
             rows["env"] = np.arange(self.n_envs)
+            rows["wait_interval_id"] = self._scheduler.wait_interval_id
             source_decisions = self._scheduler.decisions.copy()
             # A resolving warmup win must already be running when availability
             # is recorded. The step accepts Wait on that reopened board.
@@ -915,7 +916,6 @@ class CudaSequentialQ(CudaCohortLifecycle):
                 autoreset=False, active=active, packed=True
             )
             rows["active"] = active
-            self._scheduler.commit(issued_host, active)
             if not bool(host["valid"]):
                 raise ValueError("Q values must be finite and every decision needs a legal action")
             globals_host = np.zeros((self.n_envs, self._last_obs.globals.shape[-1]), np.float32)
@@ -947,12 +947,21 @@ class CudaSequentialQ(CudaCohortLifecycle):
             rows["accepted"] = env.last_action_result_host[:, 0].astype(bool)
             rows["rejection_reason"] = env.last_action_result_host[:, 1]
             branch_available_host = host["branch_available"].numpy().copy()
+            rows["branch_available"] = branch_available_host
             rows["route"][active], rows["branch_usable"][active] = classify_actions(
                 rows["action"][active],
                 rows["accepted"][active],
                 np.broadcast_to(True, (np.count_nonzero(active), A.size)),
                 rows["rejection_reason"][active],
                 branch_available=branch_available_host[active],
+            )
+            self._scheduler.commit(
+                issued_host,
+                active,
+                actions=rows["action"],
+                accepted=rows["accepted"],
+                spawned=env._last_spawned,
+                done=rows["done"],
             )
             rows["components"] = env.last_reward_parts_host[
                 :, [REWARD_FIELDS.index(k) for k in COMPONENTS]
@@ -1328,7 +1337,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
             )
             encoder.token_budget = self.execution_state["token_budget"]
         if getattr(self, "_fitting_spool", None) is None:
-            self._fitting_spool = FittingSpool(self._buffer)
+            self._fitting_spool = FittingSpool(self._buffer, stage=self._execution_phase())
         if self.outcome_training:
             targets = self._fitting_spool.rows
             self._outcome_decisions = len(targets)
@@ -1364,7 +1373,7 @@ class CudaSequentialQ(CudaCohortLifecycle):
 
     def _open_batch_iterator(self):
         if getattr(self, "_fitting_spool", None) is None:
-            self._fitting_spool = FittingSpool(self._buffer)
+            self._fitting_spool = FittingSpool(self._buffer, stage=self._execution_phase())
         groups = self.execution_state["fit_batch_groups"]
         args = self._buffer, self.batch_size * groups, self._fitting_spool
         if self.cfg["training"].get("performance", {}).get(

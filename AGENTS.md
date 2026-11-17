@@ -7,6 +7,20 @@ If the user has not declared it in advance. Ignore the existing runs by default.
 
 ## Scope and invariants
 
+- Fitting spools require the active stage explicitly, including diagnostics.
+  `pre_prediction` and `prediction` retain every active forecast for scoring and
+  loss. Gameplay's configured first-of-pair compaction stays within collector-owned
+  `wait_interval_id`, environment, episode and consecutive decisions, including
+  cross-block carry. Stamp the pre-action identity independently of auxiliaries;
+  actual spawn-counter changes, accepted planting/Dig and episode end establish
+  the next interval. Deaths preserve it. Save full pre-action ten-branch availability;
+  TD and selection share public geometry/permissions and select the legal online
+  maximum (lowest-ID ties), evaluating that same EMA branch without exploration.
+  Pending exploration follows normal/waiting/planting: unready commitments execute
+  Wait with Wait value, zero tile value/gap and no tile coin; preserve the original
+  policy proposal and commitment until planting or episode completion.
+  Recovery uses trajectory v11 and autonomous state v4; reject earlier recovery
+  before environment/CUDA setup. Model v13 and portable initialization stay unchanged.
 - `pre_prediction` precedes `prediction` in fresh stage orders. It shares seeded
   scene generation and motion warmup, records one opening forecast and submits
   one immutable pre-action Wait root through the bounded outcome service. Its

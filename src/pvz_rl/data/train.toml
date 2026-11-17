@@ -297,7 +297,7 @@ accepted_outcome_share = 0.5
 species_consistency_weight = 1.0 # Verified demo objective only; normal Q fitting omits consistency.
 species_consistency_huber_delta = 1.0
 invalid_action_q_offset = -0.1 # Illegal target = detached current head minimum Q + this offset.
-invalid_fit_group_size = 2 # Shared first-of-window size for invalid proposals and waits.
+invalid_fit_group_size = 2 # Gameplay first-of-pair, within one Wait interval; forecast stages keep all rows.
 dense_multiplier = 10.0
 ema_decay = 0.99
 demo_rank_loss_weight = 0.10

@@ -30,7 +30,7 @@ from pvz_rl.learning.objective import (
 from pvz_rl.learning.source_actions import AppendReceipt, SourceActionRef
 from pvz_rl.monitoring.moments import RunningMoments
 
-TRAJECTORY_PROTOCOL = "pvz-rl/action-outcome-trajectory-v10"
+TRAJECTORY_PROTOCOL = "pvz-rl/action-outcome-trajectory-v11"
 
 
 def trajectory_dtype(cfg=None):
@@ -47,6 +47,7 @@ def trajectory_dtype(cfg=None):
         ("env", "<u2"),
         ("episode", "<u8"),
         ("decision", "<u8"),
+        ("wait_interval_id", "<i8"),
         ("run_break", "?"),
         ("duration", "<u2"),
         ("reward", "<f8"),
@@ -76,6 +77,7 @@ def trajectory_dtype(cfg=None):
         ("accepted", "?"),
         ("route", "u1"),
         ("branch_usable", "?"),
+        ("branch_available", "?", 10),
         ("rejection_reason", "u1"),
         ("done", "?"),
         ("executed_action", "<u2"),
@@ -1143,6 +1145,14 @@ class CompleteGameBuffer:
                     raise ValueError("Non-finite trajectory Q values or placement gap")
                 if not np.all(rows["active"]) or np.any(rows["env"] >= obj.n_envs):
                     raise ValueError("Compact trajectories contain only active canonical rows")
+                if np.any(rows["wait_interval_id"] < 0):
+                    raise ValueError("Invalid collector Wait interval identity")
+                branches = np.where(rows["action"] == 0, 0, 1 + (rows["action"] - 1) // A.tiles)
+                if not np.array_equal(
+                    rows["branch_usable"],
+                    rows["branch_available"][np.arange(len(rows)), branches],
+                ):
+                    raise ValueError("Recorded branch availability disagrees with attribution")
                 obj._index_records(rows, at)
                 actual = rows
                 validate_routes(actual)

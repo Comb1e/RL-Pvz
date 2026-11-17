@@ -25,7 +25,7 @@ from pvz_rl.learning.training_requirements import (
 
 DEMO_PROTOCOL = "pvz-rl/shared-demo-initialization-v1"
 MODEL_STATE_PROTOCOL = "pvz-rl/shared-board-outcomes-bf16-master-state-v3"
-AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/shared-outcomes-state-v3"
+AUTONOMOUS_STATE_PROTOCOL = "pvz-rl/shared-outcomes-state-v4"
 
 
 class SnapshotStager:
