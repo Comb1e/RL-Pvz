@@ -250,8 +250,9 @@ If the user has not declared it in advance. Ignore the existing runs by default.
 - Fitting encoders compile once per shape and keep that cache across cohorts and
   validation; releases free CUDA captures only. Recompile only for shape-changing
   pass fallbacks; per-cohort recompilation leaks compiler objects and slows fitting.
-  The RTX 4070 Laptop profile uses one 512-row fitting group by default to
-  reduce peak memory. Keep cohort-wide loss normalization and the optimizer schedule.
+  The default fitting batch has up to 1,024 rows. The RTX 4070 Laptop profile
+  uses one fitting group and the generic BF16 profile uses two. Keep cohort-wide
+  loss normalization and the optimizer schedule.
   Capture encoder graphs with `capture_begin(capture_error_mode="thread_local")`, not
   `torch.cuda.graph()`: auxiliary threads poll CUDA events during capture, and the
   context manager runs a full `gc.collect()` per capture.

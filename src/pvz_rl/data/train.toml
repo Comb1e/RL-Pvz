@@ -98,7 +98,7 @@ random_cohort_seeds = true # Independent fresh cohort seeds; pending draws persi
 device = "cuda"
 max_minutes = 120
 finalization_minutes = 15
-batch_size = 512 # Fitting rows per batch. Gradients accumulate across the cohort before each optimizer update.
+batch_size = 1024 # Fitting rows per batch. Gradients accumulate across the cohort before each optimizer update.
 learning_rate = 0.0003
 max_grad_norm = 1.0 # File default for the clip. The live view can replace it for the next cohort. Demonstration initialization keeps this value.
 eval_interval = 250000 # Used only by bounded decision-window diagnostics.
@@ -418,7 +418,7 @@ benchmark_min_cohorts = 1
 [gpu_profiles.generic-bf16]
 status = "conservative-unmeasured"
 torch_threads = 1
-performance = {fit_species_microbatch = 32, fit_tile_microbatch = 32, fit_token_budget = 8192, fit_batch_groups = 1, collection_vram_headroom_mib = 1024}
+performance = {fit_species_microbatch = 32, fit_tile_microbatch = 32, fit_token_budget = 8192, fit_batch_groups = 2, collection_vram_headroom_mib = 1024}
 
 [gpu_profiles.rtx4070-laptop]
 device_names = ["NVIDIA GeForce RTX 4070 Laptop GPU"]

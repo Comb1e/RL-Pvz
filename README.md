@@ -191,7 +191,7 @@ The default agent has 11.79 million parameters. Its board transformer has eight
 384-wide blocks, and its tile decoder has four 192-wide blocks. Edit model
 dimensions in [train.toml](src/pvz_rl/data/train.toml) and start a fresh run to train
 with them. `--seed` optionally fixes initialization. The RTX 4070 Laptop profile
-processes 512 rows per fitting batch by default and updates once per fitting pass.
+uses one group of up to 1,024 rows per fitting batch and updates once per fitting pass.
 The live view's gradient field scales the next cohort's update. Its max field
 sets that cohort's clip; the file default stays `max_grad_norm`. Its `3×` control
 arms the next cohort at `learning_rate_restart` times `learning_rate` for one
