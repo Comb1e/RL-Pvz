@@ -23,7 +23,7 @@ live_fps = 5
 live_history_ram_mib = 16
 live_window_size = [1600, 1050]
 enabled = true
-report_interval_cohorts = 10 # Redraw after this many completed cohorts, and when a stage advances.
+report_interval_cohorts = 10 # Save latest.zip and redraw after this many cohorts or a stage advance.
 demos = true
 videos = false
 video_fps = 25
@@ -192,7 +192,7 @@ scene_protocol = "prediction-frame-v2"
 # One opening-frame forecast; exact private targets suppress future spawns.
 forecast_mode = "prediction_only"
 extra_actions = 0
-env_success_threshold = 1.00 # With one forecast, only an exact 15/15 match passes.
+env_success_threshold = 0.98 # With one forecast, only an exact 15/15 match passes.
 stop = "one_frame"
 target = "opening_static_then_probe" # Untouched opening field, then one settled-board probe.
 breach = "until_quiet" # The private continuation keeps resolving after a house entry.

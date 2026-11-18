@@ -2063,7 +2063,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             self.env.auxiliary = AuxiliarySimulationService(
                 self.env, self._buffer, extra.get("auxiliary_simulation") if extra else None
             )
-        if extra and extra.get("plant_exploration") is not None:
+        # Idle recovery starts a new cohort with its own exploration rates.
+        if self.phase != CohortPhase.IDLE and extra and extra.get("plant_exploration") is not None:
             self._plant_exploration = CommittedPlantExploration(
                 self.n_envs, self.device, self.plant_exploration_rate, self.exploration_rate
             )
@@ -2297,7 +2298,8 @@ class CudaSequentialQ(CudaCohortLifecycle):
             if getattr(self, "_scheduler", None)
             else None,
             plant_exploration=self._plant_exploration.snapshot()
-            if getattr(self, "_plant_exploration", None) is not None
+            if self.phase != CohortPhase.IDLE
+            and getattr(self, "_plant_exploration", None) is not None
             else None,
             teacher={k: v.cpu() for k, v in self._teacher.runtime_state_dict().items()},
             teacher_version=self._teacher_version,

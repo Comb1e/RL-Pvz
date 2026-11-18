@@ -870,7 +870,7 @@ class ResearchCallback(BaseCallback):
         self.last_optimizer_metrics = dict(values)
         self.model.logger.dump(step=self.model.num_timesteps)
 
-    def refresh_report(self):
+    def refresh_report(self, *, save_latest=True):
         if not self.settings["visualization"]["enabled"]:
             return
         from pvz_rl.presentation.visualization import build_run_report
@@ -883,6 +883,8 @@ class ResearchCallback(BaseCallback):
             for stream in (self.stream, self.metrics_stream):
                 if stream and not stream.closed:
                     stream.flush()
+            if save_latest:
+                self.save_checkpoint("latest.zip")
             report = build_run_report(self.output, self.cfg)
             self.progress.emit(f"Report refreshed: {report}", force=True, key="report")
         except Exception as exc:
@@ -1155,10 +1157,10 @@ class ResearchCallback(BaseCallback):
         return False
 
     def _refresh_due_report(self):
-        if self._commit_stage_gate():
-            self._report_due = True
-        if self._report_due:
-            self.refresh_report()
+        stage_changed = self._commit_stage_gate()
+        if self._report_due or stage_changed:
+            # The stage gate already saved the committed transition.
+            self.refresh_report(save_latest=not stage_changed)
             self._report_due = False
 
     def _on_rollout_start(self):
@@ -1291,7 +1293,7 @@ class ResearchCallback(BaseCallback):
             self.save_checkpoint("latest.zip")
             write_json(self.output / "status.json", self.snapshot())
         if checked and not allowed:
-            self.refresh_report()
+            self.refresh_report(save_latest=False)
         return allowed
 
     def complete_validation(self, kind):
@@ -1418,7 +1420,8 @@ class ResearchCallback(BaseCallback):
             return operation(**kwargs)
         finally:
             self.eval_seconds += perf_counter() - started
-            self.refresh_report()
+            # Validation saves when it reserves a panel and commits its result.
+            self.refresh_report(save_latest=False)
             self.hardware_context(previous_activity)
 
     def probe_curriculum(self, *, final=False):
@@ -1600,9 +1603,12 @@ class ResearchCallback(BaseCallback):
                 f"stage mastered {self.curriculum.mastered}",
                 force=True,
             )
-            if selected_stage(self.cfg) or self.stage_validation:
+            if (
+                selected_stage(self.cfg)
+                or self.stage_validation
+                or self.settings["visualization"]["enabled"]
+            ):
                 self.save_checkpoint("latest.zip")
-                self.progress.emit("Saved stage progress to latest.zip", force=True)
             write_json(self.output / "status.json", self.snapshot())
 
     def _on_rollout_end(self):
@@ -2260,7 +2266,7 @@ def train(
         final_status.update(time_budget=wall_budget.state(), wall_seconds=perf_counter() - started)
         write_json(output / "status.json", final_status)
         progress.phase(Phase.COMPLETE, f"Training complete: {output.resolve()}")
-        callback.refresh_report()
+        callback.refresh_report(save_latest=False)
         final_status.update(time_budget=wall_budget.state(), wall_seconds=perf_counter() - started)
         write_json(output / "status.json", final_status)
         retain_weights = completed_learning
@@ -2308,7 +2314,7 @@ def train(
             f"Training stopped: {exc}; recovery checkpoint saved when available",
         )
         if callback:
-            callback.refresh_report()
+            callback.refresh_report(save_latest=False)
         raise
     finally:
         if callback:

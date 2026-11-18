@@ -26,8 +26,8 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   one immutable pre-action Wait root through the bounded outcome service. Its
   private fork suppresses scheduled spawns and resolves field/settling/probe;
   only the encoder and effect head train, without warmup or other losses.
-  All 15 classes must match at the inclusive threshold 1.0; ordinary Prediction
-  keeps its strict threshold. The regular stage retains the configured streak.
+  All 15 classes must match at the configured inclusive threshold. Ordinary
+  Prediction keeps its strict threshold. The regular stage retains the configured streak.
   Prediction stops forecasting at first mower-resolved house entry or quiet;
   its private suffix and probe retain the full episode target. Model identity stays unchanged.
 - Both forecast stages use `prediction-frame-v2`. Unspawned zombies are count-only
@@ -260,7 +260,10 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   Fresh cohorts draw independent seeds; save pending draws before prefetch so
   recovery reproduces unfinished boards. Seed-matched diagnostics disable this mode.
 - Completed autonomous runs retain portable weights and visualizations. Interrupted,
-  failed and incomplete runs retain recovery. Validation passes/skips/completion
+  failed and incomplete runs retain recovery. Save the atomic recovery `latest.zip`
+  with each in-training report refresh, reusing checkpoints already written at
+  the same boundary. Report cadence is outside resume identity. Restore committed
+  exploration only for unfinished cohorts. Validation passes/skips/completion
   create or refresh reports. Close cohort sidecar owners before the trajectory
   directory owner; recovery archives retain unfinished work independently.
   Leave `docs/` untouched unless explicitly requested.

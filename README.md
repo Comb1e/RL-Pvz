@@ -87,7 +87,7 @@ Each stage can start from the previous stage's weights;
 only zombies already present, suppresses scheduled spawns, then probes the settled
 surviving defenses. Each scene contributes one forecast and one exact target job.
 It trains only the encoder and prediction head; all 15 classes must match for a
-scene to count at its inclusive `env_success_threshold = 1.00`. `prediction`
+scene to count at its inclusive `env_success_threshold = 0.98`. `prediction`
 keeps its strict threshold and forecasts until first house entry or a quiet board.
 Initialize it from `pre_prediction/final.zip` when chaining stages.
 
@@ -114,7 +114,8 @@ On prediction the same line also prints `forecasts N/M`. The report charts the
 check from before the first fitting pass for these six stages. Prediction draws
 successful environments and fully-correct forecasts. The charts redraw every 10
 cohorts and when a stage advances, and do not chart exploration for them.
-Episode rows are written at that same refresh. A checkpoint that omits the
+Episode rows and the resumable `latest.zip` are saved at that same refresh.
+Current compatible runs pick this up when resumed. A checkpoint that omits the
 before-fit pair or the forecast pair still resumes. When the open cohort has
 not committed a pass, the finished first check is that point; otherwise the next
 cohort records it. Both forecast stages now require fresh collection runs;
