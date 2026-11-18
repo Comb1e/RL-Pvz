@@ -56,9 +56,9 @@ Record human gameplay into unused paths and finish with a natural win or loss:
   --output runs\human-init --device cuda
 ```
 
-Demo initialization verifies the replay before fitting. `--init-from` starts fresh
-optimizer and counters from same-version weights; `--resume` restores a
-same-version run. Checkpoints from earlier model versions are rejected.
+Demo initialization verifies the replay before fitting. `--init-from` starts with
+fresh optimizer state and counters and requires matching model dimensions.
+`--resume` restores the run's saved architecture and training state.
 
 Start autonomous training when ready:
 
@@ -187,13 +187,12 @@ kills and restores the original physical state, kill counts and fitting progress
   --output runs\compact-stages\cherry_bomb_obstacle
 ```
 
-No seed is required; `--seed` optionally fixes initialization. Start a new run:
-attention widths are each group's heads times `head_dim`. Every MLP has
-`policy.mlp_hidden_layers` hidden layers (four by default), followed by its output
-layer. Board FFNs use 128 hidden units; prediction and tile FFNs use 96; the
-action MLP uses 128; tile scoring uses 48. Set these widths in the corresponding
-policy groups in [train.toml](src/pvz_rl/data/train.toml). The live view's gradient field
-scales the next cohort's update. Its max field
+The default agent has 11.79 million parameters. Its board transformer has eight
+384-wide blocks, and its tile decoder has four 192-wide blocks. Edit model
+dimensions in [train.toml](src/pvz_rl/data/train.toml) and start a fresh run to train
+with them. `--seed` optionally fixes initialization. The RTX 4070 Laptop profile
+processes 512 rows per fitting batch by default and updates once per fitting pass.
+The live view's gradient field scales the next cohort's update. Its max field
 sets that cohort's clip; the file default stays `max_grad_norm`. Its `3×` control
 arms the next cohort at `learning_rate_restart` times `learning_rate` for one
 pass. The cohort line prints each pass's gradient norm before that clip. A

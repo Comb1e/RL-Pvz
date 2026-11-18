@@ -92,13 +92,14 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   is finished. A dig cell is a candidate only when it holds a plant. Dig itself
   is excluded when no cell has a plant, and every plant card is excluded when
   the lawn is full. Cache memory within one forward only.
-- All twelve MLPs use the shared `policy/mlp.py` builder and configured
-  `policy.mlp_hidden_layers` (four), plus one unrestricted output layer. Board
-  FFNs use hidden width 128, tile FFNs and prediction use 96, the action MLP
-  uses 128, and tile scoring uses 48. GELU follows every hidden layer except
-  tile scoring, which uses ReLU. Attention, residual widths and the six-token
-  policy boundary are unchanged. Counts include biases and the 56-slot carrier;
-  EMA, FP32 masters and optimizer state are duplicate storage, not more model parameters.
+- The default 11,792,483-parameter agent uses eight 384-wide bidirectional board
+  blocks, 384-wide lane attention and four 192-wide tile decoder blocks. The
+  six-token policy interface remains. All MLPs use `policy/mlp.py` and four
+  configured hidden layers, plus one unrestricted output layer. The board FFNs
+  and action MLP use width 256, the tile FFNs and prediction MLP use 192, and
+  the tile readout uses 96. GELU follows the hidden layers, with ReLU for tile
+  scoring. Checkpoint transfer requires matching dimensions. Resume uses the
+  saved model dimensions.
 - All models are outcome-only. Factual prediction heads, horizon/snapshot labels,
   losses, summaries, storage and legacy resumes are removed. Early stages use
   `placement_outcomes`: exactly one pre-action field/probe job per decision,
@@ -249,6 +250,8 @@ If the user has not declared it in advance. Ignore the existing runs by default.
 - Fitting encoders compile once per shape and keep that cache across cohorts and
   validation; releases free CUDA captures only. Recompile only for shape-changing
   pass fallbacks; per-cohort recompilation leaks compiler objects and slows fitting.
+  The RTX 4070 Laptop profile uses one 512-row fitting group by default to
+  reduce peak memory. Keep cohort-wide loss normalization and the optimizer schedule.
   Capture encoder graphs with `capture_begin(capture_error_mode="thread_local")`, not
   `torch.cuda.graph()`: auxiliary threads poll CUDA events during capture, and the
   context manager runs a full `gc.collect()` per capture.

@@ -39,7 +39,7 @@ def test_cpu_agent_inference():
         policy.action_head.mlp,
         policy.tile_head,
     ]
-    assert len(mlps) == 12
+    assert len(mlps) == cfg["policy"]["board"]["blocks"] + cfg["policy"]["tile"]["blocks"] + 3
     assert all(
         sum(isinstance(layer, torch.nn.Linear) for layer in mlp)
         == cfg["policy"]["mlp_hidden_layers"] + 1
