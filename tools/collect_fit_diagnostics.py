@@ -1,7 +1,7 @@
 """Collect fitting diagnostics while running the ordinary ``pvz-rl train`` command.
 
 Example: python tools/collect_fit_diagnostics.py --output artifacts/fit-profile --
-         train --output runs/easy --resume runs/easy/latest.zip --no-live-view
+         train --output runs/easy --resume runs/easy/interrupted.zip --no-live-view
 Add --trace-batches 6 for one bounded CPU/CUDA trace after 20 fitting batches.
 """
 

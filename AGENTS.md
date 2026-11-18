@@ -259,10 +259,12 @@ If the user has not declared it in advance. Ignore the existing runs by default.
   sizes staging from transferred live counts, never the full projectile capacity.
   Fresh cohorts draw independent seeds; save pending draws before prefetch so
   recovery reproduces unfinished boards. Seed-matched diagnostics disable this mode.
-- Completed autonomous runs retain portable weights and visualizations. Interrupted,
-  failed and incomplete runs retain recovery. Save the atomic recovery `latest.zip`
-  with each in-training report refresh, reusing checkpoints already written at
-  the same boundary. Report cadence is outside resume identity. Restore committed
+- Completed autonomous runs retain portable weights and visualizations. Export atomic
+  FP32 model weights and load metadata to `latest.zip` with each in-training
+  report refresh. Keep exact recovery in `interrupted.zip` on interruption or failure
+  and `recovery.zip` at stage and validation boundaries. Preserve a legacy full
+  `latest.zip` in the recovery slot on the first export when that slot is empty.
+  Report cadence is outside resume identity. Restore committed
   exploration only for unfinished cohorts. Validation passes/skips/completion
   create or refresh reports. Close cohort sidecar owners before the trajectory
   directory owner; recovery archives retain unfinished work independently.

@@ -80,6 +80,7 @@ from pvz_rl.learning.tile_curriculum import (
     required_validation_wins,
     tile_validation_count,
 )
+from pvz_rl.learning.training_artifacts import RECOVERY_ARCHIVE, save_latest_model
 from pvz_rl.learning.training_requirements import (
     FIT_SCHEDULE_PROTOCOL,
     cohort_epoch_stage,
@@ -884,7 +885,7 @@ class ResearchCallback(BaseCallback):
                 if stream and not stream.closed:
                     stream.flush()
             if save_latest:
-                self.save_checkpoint("latest.zip")
+                self.save_latest_weights()
             report = build_run_report(self.output, self.cfg)
             self.progress.emit(f"Report refreshed: {report}", force=True, key="report")
         except Exception as exc:
@@ -1132,7 +1133,7 @@ class ResearchCallback(BaseCallback):
                 self.progress.emit(f"{previous} stage mastered", force=True)
             else:
                 self.progress.emit(f"{previous} stage mastered; starting easy", force=True)
-            self.save_checkpoint("latest.zip")
+            self.save_checkpoint(RECOVERY_ARCHIVE)
             return True
         if (
             not skills.active
@@ -1152,15 +1153,14 @@ class ResearchCallback(BaseCallback):
                 )
             else:
                 self.progress.emit(f"{previous} stage mastered", force=True)
-            self.save_checkpoint("latest.zip")
+            self.save_checkpoint(RECOVERY_ARCHIVE)
             return True
         return False
 
     def _refresh_due_report(self):
         stage_changed = self._commit_stage_gate()
         if self._report_due or stage_changed:
-            # The stage gate already saved the committed transition.
-            self.refresh_report(save_latest=not stage_changed)
+            self.refresh_report()
             self._report_due = False
 
     def _on_rollout_start(self):
@@ -1290,10 +1290,10 @@ class ResearchCallback(BaseCallback):
                 force=True,
             )
         if allowed or checked:
-            self.save_checkpoint("latest.zip")
+            self.save_checkpoint(RECOVERY_ARCHIVE)
             write_json(self.output / "status.json", self.snapshot())
         if checked and not allowed:
-            self.refresh_report(save_latest=False)
+            self.refresh_report()
         return allowed
 
     def complete_validation(self, kind):
@@ -1364,6 +1364,15 @@ class ResearchCallback(BaseCallback):
             force=True,
         )
 
+    def save_latest_weights(self):
+        started = perf_counter()
+        save_latest_model(self.output, self.model)
+        self.progress.emit(
+            f"Model weights saved: latest.zip in {perf_counter() - started:.2f}s; "
+            f"optimizer step {optimizer_step(self.model):,}",
+            force=True,
+        )
+
     def cached_evaluation(self, seeds, levels, family, destination, split, final=False):
         if self.cache_steps != self.model.num_timesteps:
             self.evaluation_cache.clear()
@@ -1420,8 +1429,7 @@ class ResearchCallback(BaseCallback):
             return operation(**kwargs)
         finally:
             self.eval_seconds += perf_counter() - started
-            # Validation saves when it reserves a panel and commits its result.
-            self.refresh_report(save_latest=False)
+            self.refresh_report()
             self.hardware_context(previous_activity)
 
     def probe_curriculum(self, *, final=False):
@@ -1510,7 +1518,7 @@ class ResearchCallback(BaseCallback):
                         training_steps=self.model.num_timesteps,
                     ),
                 )
-                self.save_checkpoint("latest.zip")
+                self.save_checkpoint(RECOVERY_ARCHIVE)
             detail = "  ".join(f"{skill} {wins}/{count}" for skill, wins in scores.items())
             if prediction_metrics:
                 rate = fully_correct_text(scores[previous], count) or (
@@ -1608,7 +1616,7 @@ class ResearchCallback(BaseCallback):
                 or self.stage_validation
                 or self.settings["visualization"]["enabled"]
             ):
-                self.save_checkpoint("latest.zip")
+                self.save_checkpoint(RECOVERY_ARCHIVE)
             write_json(self.output / "status.json", self.snapshot())
 
     def _on_rollout_end(self):
@@ -1702,8 +1710,7 @@ class ResearchCallback(BaseCallback):
                     },
                 )
                 self.progress.emit(f"Saved shared best.zip at {score:.1%}", force=True)
-            self.save_checkpoint("latest.zip")
-            self.progress.emit("Saved latest.zip", force=True)
+            self.save_checkpoint(RECOVERY_ARCHIVE)
             self.last_eval = self.model.num_timesteps
             self._append_run_log(
                 "learning-curve.jsonl",
@@ -2208,7 +2215,7 @@ def train(
                 callback.curriculum = CurriculumState(**getattr(model, "curriculum_state", {}))
             callback._on_training_end()
         callback.save_checkpoint("final.zip")
-        callback.save_checkpoint("latest.zip")
+        callback.save_latest_weights()
         final_status = {
             **callback.snapshot(),
             "state": "complete",

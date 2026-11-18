@@ -114,8 +114,10 @@ On prediction the same line also prints `forecasts N/M`. The report charts the
 check from before the first fitting pass for these six stages. Prediction draws
 successful environments and fully-correct forecasts. The charts redraw every 10
 cohorts and when a stage advances, and do not chart exploration for them.
-Episode rows and the resumable `latest.zip` are saved at that same refresh.
-Current compatible runs pick this up when resumed. A checkpoint that omits the
+Each refresh publishes episode rows to the run log and exports model weights to
+`latest.zip` for inference or `--init-from`. Use `--resume` with
+`interrupted.zip`, `recovery.zip`, or an existing full recovery archive.
+Current compatible runs pick up the new export when resumed. A checkpoint that omits the
 before-fit pair or the forecast pair still resumes. When the open cohort has
 not committed a pass, the finished first check is that point; otherwise the next
 cohort records it. Both forecast stages now require fresh collection runs;

@@ -206,6 +206,15 @@ def validate_runtime_identity(runtime):
         raise ValueError("Unsupported runtime precision contract; fresh initialization is required")
 
 
+def has_recovery_state(path):
+    """Distinguish legacy full checkpoints from rolling portable weights."""
+    try:
+        with ZipFile(path) as archive:
+            return "cohort-state.pt" in archive.namelist()
+    except FileNotFoundError:
+        return False
+
+
 def inspect_checkpoint(path, *, weights_only=False):
     path = Path(path).resolve()
     if not path.suffix:
@@ -214,7 +223,7 @@ def inspect_checkpoint(path, *, weights_only=False):
         with ZipFile(path) as archive:
             portable = "weights-only.json" in archive.namelist()
         if portable:
-            return _inspect_completed_weights(path, weights_only=weights_only)
+            return _inspect_portable_weights(path, weights_only=weights_only)
     if path.suffix == ".pt":
         saved, snapshot_sha256 = load_torch_snapshot(path)
         if saved.get("protocol") != DEMO_PROTOCOL:
@@ -389,15 +398,15 @@ def inspect_checkpoint(path, *, weights_only=False):
     return metadata
 
 
-def _inspect_completed_weights(path, *, weights_only):
+def _inspect_portable_weights(path, *, weights_only):
     from pvz_rl.learning.cuda_q import checkpoint_metadata
     from pvz_rl.learning.training_artifacts import WEIGHTS_PROTOCOL
 
     checkpoint_metadata(path, weights_only=True)
     if not weights_only:
         raise ValueError(
-            "Completed runs retain weights only; use --init-from or inference. "
-            "Resume requires an interrupted/latest recovery checkpoint."
+            "This archive contains model weights only; use --init-from or inference. "
+            "Resume requires a recovery checkpoint such as interrupted.zip or recovery.zip."
         )
     from pvz_game import Rules
 
@@ -412,20 +421,29 @@ def _inspect_completed_weights(path, *, weights_only):
             "weights-only.json",
         }
         if set(archive.namelist()) != required:
-            raise ValueError("Completed weight archive has unexpected or missing entries")
+            raise ValueError("Portable weight archive has unexpected or missing entries")
         marker = json.loads(archive.read("weights-only.json"))
         metadata = json.loads(archive.read("run.json"))
         cfg = metadata["config"]
         if marker != dict(protocol=WEIGHTS_PROTOCOL, config_digest=digest(cfg)):
-            raise ValueError("Completed weights configuration or protocol does not match")
+            raise ValueError("Portable weights configuration or protocol does not match")
         validate_config(execution_config(inference_config(cfg)))
         if (
             json.loads(archive.read("observation-schema.json"))
             != ObservationEncoder(cfg, Rules()).schema()
         ):
-            raise ValueError("Completed weights entity schema disagrees with configuration")
-        if metadata.get("completion", {}).get("state") != "complete":
-            raise ValueError("Completed weights are missing completion metadata")
+            raise ValueError("Portable weights entity schema disagrees with configuration")
+        if "completion" in metadata:
+            completion = metadata["completion"]
+            if not isinstance(completion, dict) or completion.get("state") != "complete":
+                raise ValueError("Portable weight archive has invalid completion metadata")
+        counters = metadata.get("source_counters")
+        if (
+            not isinstance(counters, dict)
+            or counters.keys() != {"steps", "games", "updates"}
+            or any(type(value) is not int or value < 0 for value in counters.values())
+        ):
+            raise ValueError("Portable weight archive has invalid counters")
     metadata["initialization_type"] = "weights"
     return metadata
 

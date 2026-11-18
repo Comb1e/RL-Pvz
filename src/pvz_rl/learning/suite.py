@@ -11,7 +11,9 @@ from pathlib import Path
 from pvz_rl.config import digest, research_config, seed_values
 from pvz_rl.evaluation.runner import BASELINES, evaluate
 from pvz_rl.jsonl_log import jsonl_series
+from pvz_rl.learning.checkpoints import has_recovery_state
 from pvz_rl.learning.training import load_policy, train
+from pvz_rl.learning.training_artifacts import RECOVERY_ARCHIVE
 from pvz_rl.learning.training_requirements import TRAINING_CONDITIONS, require_cuda_training
 from pvz_rl.presentation.reporting import make_report
 from pvz_rl.provenance import file_hash, metadata, write_json
@@ -64,8 +66,10 @@ def run_suite(cfg, output, *, resume=False):
                         )
                     if status.get("state") == "complete":
                         continue
-                    for name in ("interrupted.zip", "latest.zip"):
+                    for name in ("interrupted.zip", RECOVERY_ARCHIVE, "latest.zip"):
                         if (last / name).exists():
+                            if name == "latest.zip" and not has_recovery_state(last / name):
+                                continue
                             checkpoint = last / name
                             break
                 destination = output / "training" / key / f"attempt-{len(attempts) + 1}"
