@@ -81,7 +81,6 @@ def summarize(rows: list[dict]) -> dict:
             "fraction_wins_without_mowers": (
                 sum(r["mowers_used"] == 0 for r in wins) / len(wins) if wins else None
             ),
-            "invalid_action_rate": sum(r["invalid_actions"] for r in group) / max(1, decisions),
             "waiting_rate": sum(r["wait_actions"] for r in group) / max(1, decisions),
             "win_seconds": float(np.mean([r["simulated_seconds"] for r in wins])) if wins else None,
             "loss_seconds": float(np.mean([r["simulated_seconds"] for r in losses]))

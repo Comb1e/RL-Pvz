@@ -8,7 +8,10 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 
+from pvz_rl.envs.encoding import ENTITY_WIDTH
+from pvz_rl.envs.motion_history import HISTORY_TICKS, SHOT_CLAMP, STATE_CLAMP, UNKNOWN_PHASE
 from pvz_rl.policy.cudagraph_backend import CollectionGraphCache, FittingGraphBackend
+from pvz_rl.policy.mlp import build_mlp
 
 
 def feature_dtype(device):
@@ -57,14 +60,12 @@ def stable_norm(layer, value):
 
 
 class AttentionBlock(nn.Module):
-    def __init__(self, width, heads, feedforward, query_chunk):
+    def __init__(self, width, heads, feedforward, query_chunk, hidden_layers):
         super().__init__()
         self.heads, self.query_chunk = heads, query_chunk
         self.norm1, self.norm2 = nn.LayerNorm(width), nn.LayerNorm(width)
         self.qkv, self.output = nn.Linear(width, 3 * width), nn.Linear(width, width)
-        self.ff = nn.Sequential(
-            nn.Linear(width, feedforward), nn.GELU(), nn.Linear(feedforward, width)
-        )
+        self.ff = build_mlp(width, feedforward, width, hidden_layers)
         self.force_fallback = False
 
     def attention(self, q, k, v, mask):
@@ -146,9 +147,18 @@ class SpatialTransformer(nn.Module):
             torch.tensor(float(layout.rules.plants["peashooter"]["damage"])),
             persistent=False,
         )
+        self.register_buffer(
+            "units_per_tile",
+            torch.tensor(float(layout.rules.game["units_per_tile"])),
+            persistent=False,
+        )
+        self.register_buffer("history_scale", torch.tensor(float(HISTORY_TICKS)), persistent=False)
+        self.register_buffer("shot_scale", torch.tensor(float(SHOT_CLAMP)), persistent=False)
+        self.register_buffer("state_scale", torch.tensor(float(STATE_CLAMP)), persistent=False)
+        self.register_buffer("phase_scale", torch.tensor(float(UNKNOWN_PHASE)), persistent=False)
         self.type_embedding = nn.Embedding(len(layout.types) + 1, width, padding_idx=0)
         self.state_embedding = nn.Embedding(len(layout.states) + 1, width, padding_idx=0)
-        self.numeric = nn.Linear(9, width)
+        self.numeric = nn.Linear(ENTITY_WIDTH - 2, width)
         self.input_norm = nn.LayerNorm(width)
         self.global_projection = nn.Linear(layout.global_width, width)
         self.layers = nn.ModuleList(
@@ -158,6 +168,7 @@ class SpatialTransformer(nn.Module):
                     board["heads"],
                     board["feedforward"],
                     execution["query_chunk"],
+                    spec["mlp_hidden_layers"],
                 )
                 for _ in range(board["blocks"])
             ]
@@ -296,6 +307,12 @@ class SpatialTransformer(nn.Module):
         values[..., 3] /= self.armor_scale_buffer
         values[..., 4:6] /= self.tick_rate
         values[..., 8] /= self.projectile_damage
+        # Eight displacements, then filled, since_shot, state_ticks, seen_phase.
+        values[..., 9:17] /= self.units_per_tile
+        values[..., 17] /= self.history_scale
+        values[..., 18] /= self.shot_scale
+        values[..., 19] /= self.state_scale
+        values[..., 20] /= self.phase_scale
         return kind, state, values
 
     def _embed_tensors(self, entities, entity_mask):

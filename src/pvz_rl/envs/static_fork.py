@@ -63,13 +63,23 @@ def apply_action(game, action):
 
 
 class StaticFork:
-    def __init__(self, game, *, action=0, probe="conehead", sky_sun_rate=1.0, field_only=False):
+    def __init__(
+        self,
+        game,
+        *,
+        action=0,
+        probe="conehead",
+        sky_sun_rate=1.0,
+        field_only=False,
+        individual_breaches=False,
+    ):
         # Public snapshot boundary validates subclasses as well as external input.
         source = restored_game(game.snapshot(), game.rules) if type(game) is not Game else game
         self.game = fork_game(source)
         self.phase, self.start, self.probe = "field", source._tick, probe
         self.field_ticks = self.probe_ticks = 0
         self.field_only, self.anchor_tick = field_only, -1
+        self.individual_breaches = individual_breaches
         self.sky_sun_rate = sky_sun_rate
         self.labels = np.zeros(OUTCOME_SHAPE, np.int64)
         self.labels[:, 1] = -1
@@ -125,7 +135,13 @@ class StaticFork:
                 self.labels[row, 2] = 10
         if breached:
             self.game._zombies = {
-                k: z for k, z in self.game._zombies.items() if z.row not in breached
+                k: z
+                for k, z in self.game._zombies.items()
+                if (
+                    (z.headless or z.health <= 0 or z.x > self.game._g["house_x"])
+                    if self.individual_breaches
+                    else z.row not in breached
+                )
             }
 
     def _settled(self):

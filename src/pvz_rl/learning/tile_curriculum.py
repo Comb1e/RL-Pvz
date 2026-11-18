@@ -10,8 +10,8 @@ TILE_SCENARIO_PROTOCOL = "tile-skill-prerequisites-v1"
 
 
 def tile_validation_count(cfg, skill):
-    if skill == "prediction":
-        return prediction_settings(cfg)["validation_cases"]
+    if skill in ("pre_prediction", "prediction"):
+        return prediction_settings(cfg, skill)["validation_cases"]
     return (
         attacker_mix(cfg)["validation_cases"]
         if skill == "attacker"
@@ -24,7 +24,7 @@ def required_validation_wins(cfg, skill):
     count = tile_validation_count(cfg, skill)
     threshold = (
         cfg["curriculum"].get(f"{skill}_validation_success_threshold")
-        if skill in ("cherry_bomb", "peashooter")
+        if skill == "cherry_bomb"
         else None
     )
     if threshold is None:
@@ -46,6 +46,7 @@ class TileSkillState:
 
     def __post_init__(self):
         self.episodes = dict(self.episodes)
+        self.episodes.setdefault("pre_prediction", 0)
         # Old saved stage orders and joint probes never acquire a new lesson.
         self.episodes.setdefault("cherry_bomb_obstacle", 0)
         self.episodes.setdefault("attacker_pre", 0)
@@ -187,4 +188,6 @@ def initial_tile_state(cfg, family="preset"):
         order = [skill for skill in order if skill != "attacker"]
     if prediction_settings(cfg) is None:
         order = [skill for skill in order if skill != "prediction"]
+    if prediction_settings(cfg, "pre_prediction") is None:
+        order = [skill for skill in order if skill != "pre_prediction"]
     return TileSkillState(phase=order[0] if enabled else "complete", stage_order=order).to_dict()

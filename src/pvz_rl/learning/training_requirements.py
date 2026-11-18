@@ -5,6 +5,7 @@ from functools import lru_cache
 
 from pvz_rl.config import (
     cohorts_per_epoch,
+    load_config,
     outcome_prediction_weights,
     research_config,
     simulator,
@@ -113,8 +114,8 @@ def current_model_config(cfg):
         identity
         in {
             (
-                "shared_public_outcomes_q_v11",
-                "entity_public_v4",
+                "shared_public_outcomes_q_v13",
+                "entity_public_v5",
                 CURRENT_OBJECTIVE,
                 CURRENT_OBJECTIVE,
             ),
@@ -136,7 +137,24 @@ def inference_config(cfg):
         raise ValueError(
             "Incompatible old model. Old checkpoints are incompatible with the outcome-only architecture; start fresh."
         )
-    return weight_engine_config(cfg)
+    result = weight_engine_config(cfg)
+    # Generation/collection changes do not alter weights. Adapt only this
+    # detached inference/initialization validation view, never recovery config.
+    from pvz_rl.envs.prediction_counts import SCENE_PROTOCOL
+
+    for stage in ("pre_prediction", "prediction"):
+        settings = result["training"].get("tile_scenarios", {}).get(stage)
+        if settings is not None and settings.get("scene_protocol") != SCENE_PROTOCOL:
+            defaults = load_config()["training"]["tile_scenarios"][stage]
+            settings["unspawned_zombies"] = settings.pop(
+                "pending_zombies", defaults["unspawned_zombies"]
+            )
+            settings["zombie_hp_fraction"] = defaults["zombie_hp_fraction"]
+            if settings.get("surviving_curve") is None:
+                settings["surviving_curve"] = defaults["surviving_curve"]
+            settings["scene_protocol"] = SCENE_PROTOCOL
+            settings["stop"] = "one_frame" if stage == "pre_prediction" else "first_house_or_quiet"
+    return result
 
 
 def require_supported_policy(cfg, condition="masked"):
@@ -148,7 +166,7 @@ def require_supported_policy(cfg, condition="masked"):
         or not current_model_config(cfg)
     ):
         raise ValueError(
-            "Retired policy or scheduler. Use the shared public encoder and conditional decoder, entity_public_v4, "
+            "Retired policy or scheduler. Use the shared public encoder and conditional decoder, entity_public_v5, "
             "action_global_value_v5 and complete-game collection. "
             "Start fresh with the bundled train profile."
         )
@@ -274,6 +292,7 @@ def transfer_protocol(cfg, condition="masked"):
         "policy": {
             "kind": p["kind"],
             "head_dim": p["head_dim"],
+            "mlp_hidden_layers": p["mlp_hidden_layers"],
             "board": dict(p["board"]),
             "action": dict(p["action"]),
             "tile": dict(p["tile"]),

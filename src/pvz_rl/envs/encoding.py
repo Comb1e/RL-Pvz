@@ -8,6 +8,20 @@ from gymnasium import spaces
 from pvz_game import Observation, Rules
 from pvz_game.cuda.schema import MOWER_STATES, PLANT_STATES, ZOMBIE_STATES
 
+from pvz_rl.envs.motion_history import (
+    HISTORY_FIELDS,
+    HISTORY_TICKS,
+    MOWER,
+    PLANT,
+    SHOT,
+    SHOT_CLAMP,
+    STATE_CLAMP,
+    UNKNOWN_PHASE,
+    ZOMBIE,
+    unknown_history,
+)
+from pvz_rl.envs.prediction_counts import public_counts
+
 ENTITY_FIELDS = (
     "type",
     "state",
@@ -20,6 +34,7 @@ ENTITY_FIELDS = (
     "has_pole",
     "headless",
     "damage",
+    *HISTORY_FIELDS,
 )
 ENTITY_WIDTH = len(ENTITY_FIELDS)
 BOARD_GLOBAL_FIELDS = (
@@ -34,10 +49,11 @@ BOARD_GLOBAL_FIELDS = (
     "zombie_count",
     "projectile_count",
     "mower_count",
+    "shots_since_first",
 )
 GLOBAL_FIELDS = BOARD_GLOBAL_FIELDS
 GLOBAL_WIDTH = len(GLOBAL_FIELDS)
-OBSERVATION_PROTOCOL = "entity_public_v4"
+OBSERVATION_PROTOCOL = "entity_public_v5"
 
 
 def global_fields(cfg):
@@ -290,7 +306,14 @@ class ObservationEncoder:
             selection="mowers_plants_zombies_projectiles_v1",
         )
 
-    def encode(self, obs: Observation):
+    def _history(self, motion, category, ident):
+        if motion is None:
+            return unknown_history()
+        return motion.channels(category, ident)
+
+    def encode(self, obs: Observation, motion=None, *, unspawned=0):
+        if unspawned:
+            obs = public_counts(obs, unspawned)
         rows = []
         unit = self.rules.game["units_per_tile"]
         try:
@@ -308,6 +331,7 @@ class ObservationEncoder:
                         0,
                         0,
                         0,
+                        *self._history(motion, PLANT, p.id),
                     )
                 )
             for z in obs.zombies:
@@ -324,6 +348,7 @@ class ObservationEncoder:
                         z.has_pole,
                         z.headless,
                         0,
+                        *self._history(motion, ZOMBIE, z.id),
                     )
                 )
             for p in obs.projectiles:
@@ -340,6 +365,7 @@ class ObservationEncoder:
                         0,
                         0,
                         p.damage,
+                        *self._history(motion, SHOT, p.id),
                     )
                 )
             for m in obs.mowers:
@@ -356,6 +382,7 @@ class ObservationEncoder:
                         0,
                         0,
                         0,
+                        *self._history(motion, MOWER, int(m.row) + 1),
                     )
                 )
         except KeyError as exc:
@@ -365,7 +392,9 @@ class ObservationEncoder:
             kind = record[0]
             group = 0 if kind == 16 else 1 if kind <= 8 else 2 if kind <= 13 else 3
             lane = record[2] if group <= 1 else 0
-            return group, lane, record[3], *record
+            # Shot order ignores the history tail. Other groups use it only as a tie break.
+            body = record[: -len(HISTORY_FIELDS)] if group == 3 else record
+            return group, lane, record[3], *body
 
         retained = sorted(rows, key=priority)[: self.max_entities]
         if any(not np.iinfo(np.int32).min <= v <= np.iinfo(np.int32).max for r in rows for v in r):
@@ -398,6 +427,7 @@ class ObservationEncoder:
                     len(xs) / self.count_scale
                     for xs in (obs.plants, obs.zombies, obs.projectiles, obs.mowers)
                 ),
+                (0 if motion is None else motion.shots) / self.count_scale,
             ],
             dtype=np.float32,
         )
@@ -447,4 +477,10 @@ class ObservationEncoder:
         values[..., 3] /= self.armor_scale
         values[..., 4:6] /= self.rules.game["tick_rate"]
         values[..., 8] /= self.rules.plants["peashooter"]["damage"]
+        # Eight displacements, then filled, since_shot, state_ticks, seen_phase.
+        values[..., 9:17] /= self.rules.game["units_per_tile"]
+        values[..., 17] /= HISTORY_TICKS
+        values[..., 18] /= SHOT_CLAMP
+        values[..., 19] /= STATE_CLAMP
+        values[..., 20] /= UNKNOWN_PHASE
         return kind, state, values

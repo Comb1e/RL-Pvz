@@ -15,7 +15,7 @@ def board_renderer(size):
 def render_context(values=None):
     from pvz_game.rendering import RenderContext
 
-    from pvz_rl.envs.tile_scenarios import is_placement_skill
+    from pvz_rl.envs.tile_scenarios import is_placement_skill, is_prediction_skill
 
     values = values or {}
     outcome = values.get("outcome")
@@ -25,7 +25,7 @@ def render_context(values=None):
     if (
         isinstance(reward, (int, float))
         and outcome != "scored"
-        and task != "prediction"
+        and not is_prediction_skill(task)
         and not is_placement_skill(task)
     ):
         message = " | ".join(

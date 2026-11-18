@@ -15,7 +15,12 @@ import torch
 from stable_baselines3.common.base_class import BaseAlgorithm
 
 from pvz_rl.config import cohort_envs, forecast_version
-from pvz_rl.envs.tile_scenarios import BombGenerationFailure, is_placement_skill, placement_settings
+from pvz_rl.envs.tile_scenarios import (
+    BombGenerationFailure,
+    is_placement_skill,
+    is_prediction_skill,
+    placement_settings,
+)
 from pvz_rl.learning.cohort import (
     CohortPhase,
     atomic_transition,
@@ -62,7 +67,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
         learning_rate=3e-4,
         batch_size=1024,
         n_epochs=1,
-        max_grad_norm=5,
+        max_grad_norm=1.0,
         policy_kwargs=None,
         seed=None,
         device="cuda",
@@ -107,7 +112,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
 
     @classmethod
     def load(cls, path, *args, **kwargs):
-        if checkpoint_metadata(path)["policy"] not in ("shared_public_outcomes_q_v11",):
+        if checkpoint_metadata(path)["policy"] not in ("shared_public_outcomes_q_v13",):
             raise ValueError("Incompatible checkpoint model family for this loader")
         model = super().load(path, *args, **kwargs)
         model.phase = CohortPhase(model.phase)
@@ -455,7 +460,7 @@ class CudaCohortLifecycle(BaseAlgorithm):
                         self._finalize_rewards(callback)
                     elif phase == CohortPhase.RETURNS:
                         ranking = is_placement_skill(self.tile_skills.phase)
-                        prediction = self.tile_skills.phase == "prediction"
+                        prediction = is_prediction_skill(self.tile_skills.phase)
                         rules = getattr(self, "peashooter_rule_training", False)
                         self.prefit_errors = self._buffer.finalize(
                             cohort=self.cohort_number,

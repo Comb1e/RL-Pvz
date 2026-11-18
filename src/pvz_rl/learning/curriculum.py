@@ -6,26 +6,28 @@ from pvz_rl.learning.budget import uses_games
 
 STAGES = ("easy", "standard", "shared")
 TILE_STAGES = (
+    "pre_prediction",
     "prediction",
     "cherry_bomb",
     "cherry_bomb_obstacle",
     "attacker_pre",
     "attacker",
-    "peashooter",
 )
 SELECTABLE_STAGES = (*TILE_STAGES, *STAGES)
-# These five score every cohort, then take one fitting pass. A saved
-# cohorts_per_epoch still selects its memorized cohort. Peashooter and the
-# three normal stages keep a fixed pass count. Ten full cohorts on the stage
-# bar leave the stage.
+# These six score every cohort, then take one fitting pass. A saved
+# cohorts_per_epoch still selects its memorized cohort. The three normal
+# stages keep a fixed pass count. Ten full cohorts on the stage bar leave
+# the stage. Prediction's perfect cohort is every configured environment
+# succeeding, not every forecast.
 COHORT_PERFECT_STAGES = (
+    "pre_prediction",
     "prediction",
     "cherry_bomb",
     "cherry_bomb_obstacle",
     "attacker_pre",
     "attacker",
 )
-FIXED_EPOCH_STAGES = ("peashooter", *STAGES)
+FIXED_EPOCH_STAGES = STAGES
 
 
 def pre_stage(cfg):

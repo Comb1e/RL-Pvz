@@ -13,8 +13,9 @@ from pvz_rl.config import load_config
 from pvz_rl.learning.action_routing import classify_actions, workload_counts
 from pvz_rl.learning.batch_transport import BatchPrefetch, FittingSpool
 from pvz_rl.learning.cuda_buffer import CompleteGameBuffer
+from pvz_rl.learning.curriculum import SELECTABLE_STAGES
 from pvz_rl.learning.flat_q import CohortCoefficients, batch_loss
-from pvz_rl.learning.training_requirements import fitting_schedule, fixed_passes
+from pvz_rl.learning.training_requirements import cohort_epoch_stage, fitting_schedule, fixed_passes
 from pvz_rl.monitoring.entity_benchmark import observation
 from pvz_rl.policy.two_stage_transformer import TwoStageTransformerPolicy
 from pvz_rl.provenance import write_json
@@ -101,6 +102,7 @@ def benchmark_rows(cfg, widths, rows_per_width, action_mix, dtype):
         )
         rows[index]["action"], rows[index]["accepted"] = action, accepted
         rows[index]["route"], rows[index]["branch_usable"] = route[0], usable[0]
+        rows[index]["branch_available"] = branch_available
         rows[index]["rejection_reason"] = REASONS.index(reason)
         rows[index]["executed_action"] = action if accepted else 0
         rows[index]["target"] = (index % 7 - 3) / 4
@@ -108,9 +110,14 @@ def benchmark_rows(cfg, widths, rows_per_width, action_mix, dtype):
     return rows, boards
 
 
-def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None, cohort=1):
+def measure(
+    cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None, cohort=1, stage=None
+):
     """Each repetition commits the configured passes for the selected cohort."""
-    schedule = fitting_schedule(cfg, cohort)
+    if trajectory is not None and stage is None:
+        raise ValueError("Trajectory fitting benchmarks require the collected --stage")
+    stage = cohort_epoch_stage(cfg) if stage is None else stage
+    schedule = fitting_schedule(cfg, cohort, stage)
     torch.set_num_threads(cfg["training"]["torch_threads"])
     torch.manual_seed(101)
     model = TwoStageTransformerPolicy(cfg).cuda().train()
@@ -149,7 +156,7 @@ def measure(cfg, *, repeats=3, rows_per_width=16, trajectory=None, initial=None,
                     buffer = CompleteGameBuffer.restore(trajectory, state, temporary)
                     rows = None
                 prepared = perf_counter()
-                spool = FittingSpool(buffer)
+                spool = FittingSpool(buffer, stage=stage)
                 spool_seconds = perf_counter() - prepared
                 counts = spool.outcome_counts
                 coefficients = CohortCoefficients.prepare(
@@ -290,6 +297,7 @@ def main():
     parser.add_argument("--rows-per-width", type=int, default=16)
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--trajectory", type=Path)
+    parser.add_argument("--stage", choices=SELECTABLE_STAGES, help="stage that collected the rows")
     parser.add_argument("--init-from", type=Path)
     parser.add_argument("--species-microbatch", type=int)
     parser.add_argument("--tile-microbatch", type=int)
@@ -335,6 +343,7 @@ def main():
             trajectory=args.trajectory,
             initial=args.init_from,
             cohort=args.cohort,
+            stage=args.stage,
         ),
     )
 

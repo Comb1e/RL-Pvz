@@ -32,6 +32,19 @@ def test_cpu_agent_inference():
     cfg = load_config()
     torch.set_num_threads(cfg["training"]["torch_threads"])
     policy = TwoStageTransformerPolicy(cfg).eval()
+    mlps = [
+        *(block.ff for block in policy.board_encoder.layers),
+        *(block.self_attention.ff for block in policy.tile_decoder.layers),
+        policy.effect_head.mlp,
+        policy.action_head.mlp,
+        policy.tile_head,
+    ]
+    assert len(mlps) == cfg["policy"]["board"]["blocks"] + cfg["policy"]["tile"]["blocks"] + 3
+    assert all(
+        sum(isinstance(layer, torch.nn.Linear) for layer in mlp)
+        == cfg["policy"]["mlp_hidden_layers"] + 1
+        for mlp in mlps
+    )
     with closing(PvZEnv(cfg, level="easy")) as env:
         observation, _ = env.reset(seed=1)
         board = collate_observations(observation)
@@ -41,6 +54,9 @@ def test_cpu_agent_inference():
             actions, details = policy.decide(board)
             effect = details["effect_logits"]
         assert not hasattr(policy, "threat_head")
+        assert not hasattr(policy, "action_decoder") and not hasattr(policy, "forecast_input")
+        memory, valid = details["board_memory"]
+        assert memory.shape == (1, 6, cfg["policy"]["board"]["width"]) and valid.all()
         assert effect.shape == (1, 5, 56) and torch.isfinite(effect).all()
         assert species.shape == (1, len(cfg["environment"]["plants"]) + 2)
         assert tiles.shape == (1, env.codec.rows * env.codec.cols)
@@ -67,7 +83,6 @@ def test_cuda_learning_and_checkpoint(tmp_path):
 
         cfg = load_config()
         cfg["training"]["tile_scenarios"]["enabled"] = False
-        cfg["training"].pop("peashooter_rules", None)
         cfg["training"]["forecasts"]["enabled"] = False
         cfg["environment"]["cutoff_seconds"] = 1
         cfg["training"].update(

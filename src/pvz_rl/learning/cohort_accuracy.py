@@ -61,6 +61,28 @@ def _strict_rate(numer, denom, threshold):
     return numer / denom > threshold
 
 
+def prediction_env_succeeds(correct, scored, threshold, *, inclusive=False):
+    """Score labeled forecasts, with an inclusive threshold for opening-only scenes.
+
+    Ordinary Prediction remains strict: nineteen of twenty at 0.95 fails.
+    Pre-prediction uses an inclusive 1.0 so its one exact forecast passes.
+    Empty environments fail; this gate never drops loss rows.
+    """
+    if type(correct) is not int or type(scored) is not int or scored < 1:
+        return False
+    if correct < 0 or correct > scored:
+        return False
+    if isinstance(threshold, bool) or type(threshold) not in (int, float):
+        return False
+    if threshold != threshold or threshold < 0 or threshold > 1:
+        return False
+    if inclusive:
+        return correct / scored >= threshold
+    if threshold == 1:
+        return False
+    return correct / scored > threshold
+
+
 def _tasks_clear(task_wins, tasks):
     if not tasks:
         return False
@@ -100,10 +122,6 @@ def cohort_meets_stage_bar(
         if stage == "cherry_bomb":
             return _strict_rate(correct, scored, threshold)
         return cohort_perfect(correct, scored, expected)
-    if stage == "peashooter":
-        if not _same_count(games, expected):
-            return None
-        return _strict_rate(wins, games, threshold)
     if stage in STAGES:
         if not _same_count(games, expected):
             return None

@@ -7,7 +7,7 @@ from queue import Empty, Full
 from time import monotonic
 
 from pvz_rl.envs.actions import ActionSchema as A
-from pvz_rl.envs.tile_scenarios import is_placement_skill
+from pvz_rl.envs.tile_scenarios import is_placement_skill, is_prediction_skill
 from pvz_rl.presentation.forecast_display import scores_recorded, tile_label
 from pvz_rl.presentation.outcome_view import draw_live_outcomes
 from pvz_rl.presentation.rendering import render_context
@@ -190,6 +190,8 @@ def open_grad_field(renderers):
     renderers["grad_open"] = True
     renderers["grad_text"] = format_grad_scale(pending)
     renderers["grad_invalid"] = False
+    renderers["max_open"] = False
+    renderers["max_invalid"] = False
 
 
 def submit_grad_field(renderers):
@@ -228,6 +230,60 @@ def edit_grad_field(renderers, event):
         renderers["grad_invalid"] = False
 
 
+def _grad_max_fallback(renderers):
+    return float(renderers.get("grad_max_fallback", 1.0))
+
+
+def open_max_field(renderers):
+    from .live_view import format_grad_scale, read_shared_grad_scale
+
+    fallback = _grad_max_fallback(renderers)
+    pending, _active = read_shared_grad_scale(
+        renderers.get("max_requested"), renderers.get("max_active"), fallback
+    )
+    renderers["max_open"] = True
+    renderers["max_text"] = format_grad_scale(pending, fallback)
+    renderers["max_invalid"] = False
+    renderers["grad_open"] = False
+    renderers["grad_invalid"] = False
+
+
+def submit_max_field(renderers):
+    from .live_view import coerce_grad_scale, format_grad_scale
+
+    share = renderers.get("max_requested")
+    accepted = coerce_grad_scale(renderers.get("max_text", ""))
+    if accepted is None or share is None:
+        renderers["max_invalid"] = True
+        return
+    with share.get_lock():
+        share.value = accepted
+    renderers["max_open"] = False
+    renderers["max_invalid"] = False
+    renderers["max_text"] = format_grad_scale(accepted, _grad_max_fallback(renderers))
+
+
+def edit_max_field(renderers, event):
+    import pygame
+
+    if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+        submit_max_field(renderers)
+        return
+    if event.key == pygame.K_ESCAPE:
+        renderers["max_open"] = False
+        renderers["max_invalid"] = False
+        return
+    text = renderers.get("max_text", "")
+    if event.key == pygame.K_BACKSPACE:
+        renderers["max_text"] = text[:-1]
+        renderers["max_invalid"] = False
+        return
+    character = event.unicode
+    if character.isdigit() or (character == "." and "." not in text):
+        renderers["max_text"] = text + character
+        renderers["max_invalid"] = False
+
+
 def draw_grad_scale(surface, font, renderers, origin):
     """Field, accepted next value, then the scale in force."""
     import pygame
@@ -261,6 +317,44 @@ def draw_grad_scale(surface, font, renderers, origin):
     surface.blit(pending_label, (x, y))
     x += pending_label.get_width() + 10
     active_label = font.render(format_grad_scale(current), True, (138, 163, 146))
+    surface.blit(active_label, (x, y))
+    return buttons, x + active_label.get_width()
+
+
+def draw_grad_max(surface, font, renderers, origin):
+    """Field, accepted next clip, then the clip in force."""
+    import pygame
+
+    from .live_view import format_grad_scale, read_shared_grad_scale
+
+    fallback = _grad_max_fallback(renderers)
+    pending, current = read_shared_grad_scale(
+        renderers.get("max_requested"), renderers.get("max_active"), fallback
+    )
+    buttons = []
+    x, y = origin
+    glyph = font.render(
+        "max", True, (232, 214, 140) if renderers.get("max_open") else (216, 226, 212)
+    )
+    rect = glyph.get_rect(topleft=(x, y))
+    surface.blit(glyph, rect)
+    buttons.append((rect.inflate(8, 6), None, ("max", None)))
+    x = rect.right + 10
+    if renderers.get("max_open"):
+        box = pygame.Rect(x, y - 2, 76, font.get_height() + 4)
+        color = (176, 92, 84) if renderers.get("max_invalid") else (214, 222, 214)
+        pygame.draw.rect(surface, (18, 32, 28), box)
+        pygame.draw.rect(surface, color, box, 1)
+        shown = font.render(renderers.get("max_text", ""), True, (232, 237, 226))
+        clip = surface.get_clip()
+        surface.set_clip(box.inflate(-4, -2))
+        surface.blit(shown, (box.x + 4, box.y + 1))
+        surface.set_clip(clip)
+        x = box.right + 8
+    pending_label = font.render(format_grad_scale(pending, fallback), True, (232, 237, 226))
+    surface.blit(pending_label, (x, y))
+    x += pending_label.get_width() + 10
+    active_label = font.render(format_grad_scale(current, fallback), True, (138, 163, 146))
     surface.blit(active_label, (x, y))
     return buttons, x + active_label.get_width()
 
@@ -325,7 +419,9 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
         surface, small, renderers, (12 + activity_label.get_width() + 16, 8)
     )
     buttons.extend(grad_buttons)
-    buttons.extend(draw_lr_restart(surface, small, renderers, (grad_right + 16, 8)))
+    max_buttons, max_right = draw_grad_max(surface, small, renderers, (grad_right + 16, 8))
+    buttons.extend(max_buttons)
+    buttons.extend(draw_lr_restart(surface, small, renderers, (max_right + 16, 8)))
     if renderers.get("learning_settings"):
         mark = "v" if renderers.get("show_settings") else ">"
         glyph = small.render(mark, True, (216, 226, 212))
@@ -391,12 +487,12 @@ def draw_view(surface, packets, activity, *, renderers, boards, pending=(), coun
             pygame.draw.rect(surface, (212, 168, 74), rect, width=2, border_radius=5)
         title = str(packet["env"]) if not frame else f"{packet['env']}  {frame['task']}"
         task = frame.get("task") if frame else None
-        if frame and task != "prediction" and not is_placement_skill(task):
+        if frame and not is_prediction_skill(task) and not is_placement_skill(task):
             reward = frame.get("reward")
             if isinstance(reward, (int, float)):
                 title += f"  {reward:+.3g}{'~' if frame.get('reward_pending') else ''}"
         elif (
-            task == "prediction"
+            is_prediction_skill(task)
             and decision
             and decision.get("effect_prediction_valid")
             and frame.get("observation") is not None
@@ -527,6 +623,8 @@ def viewer_main(
     grad_active=None,
     lr_requested=None,
     lr_active=None,
+    max_requested=None,
+    max_active=None,
 ):
     import pygame
 
@@ -552,6 +650,9 @@ def viewer_main(
         renderers["grad_active"] = grad_active
         renderers["lr_requested"] = lr_requested
         renderers["lr_active"] = lr_active
+        renderers["max_requested"] = max_requested
+        renderers["max_active"] = max_active
+        renderers["grad_max_fallback"] = 1.0
         fullscreen = False
         dirty, displayed_activity = True, None
 
@@ -582,10 +683,14 @@ def viewer_main(
                 elif event.type == pygame.KEYDOWN:
                     if renderers.get("grad_open"):
                         edit_grad_field(renderers, event)
+                    elif renderers.get("max_open"):
+                        edit_max_field(renderers, event)
                     elif event.key == pygame.K_ESCAPE:
                         renderers["focus"] = None
                     elif event.key == pygame.K_g:
                         open_grad_field(renderers)
+                    elif event.key == pygame.K_m:
+                        open_max_field(renderers)
                     elif event.key == pygame.K_r:
                         toggle_lr_restart(renderers)
                     elif event.key == pygame.K_F11:
@@ -643,6 +748,14 @@ def viewer_main(
                                 renderers["grad_invalid"] = False
                             else:
                                 open_grad_field(renderers)
+                            dirty = True
+                            break
+                        if operation == "max":
+                            if renderers.get("max_open"):
+                                renderers["max_open"] = False
+                                renderers["max_invalid"] = False
+                            else:
+                                open_max_field(renderers)
                             dirty = True
                             break
                         if operation == "restart":
@@ -725,6 +838,14 @@ def viewer_main(
             )
             if renderers.get("grad_shown") != shown:
                 renderers["grad_shown"] = shown
+                dirty = True
+            shown_max = read_shared_grad_scale(
+                renderers.get("max_requested"),
+                renderers.get("max_active"),
+                renderers.get("grad_max_fallback", 1.0),
+            )
+            if renderers.get("max_shown") != shown_max:
+                renderers["max_shown"] = shown_max
                 dirty = True
             restart = read_shared_lr_restart(
                 renderers.get("lr_requested"), renderers.get("lr_active")

@@ -124,8 +124,9 @@ class PreparedPlans:
 class FittingSpool(PreparedPlans):
     """Reusable active rows and ragged public inputs for every fitting pass."""
 
-    def __init__(self, buffer):
+    def __init__(self, buffer, *, stage):
         self.buffer = buffer
+        self.stage = stage
         self._ram_arrays, self._temp_paths = [], []
         self._mapped_arrays = []
         self._closed = False
@@ -142,7 +143,13 @@ class FittingSpool(PreparedPlans):
 
         cfg = buffer.cfg or load_config()
         self.buckets = cfg["training"]["performance"]["fit_entity_buckets"]
-        compactor = RepeatedRowCompactor(cfg["training"]["objective"]["invalid_fit_group_size"])
+        # Forecast accuracy and loss have the same denominator: every forecast.
+        group_size = (
+            1
+            if self.stage in ("pre_prediction", "prediction")
+            else cfg["training"]["objective"]["invalid_fit_group_size"]
+        )
+        compactor = RepeatedRowCompactor(group_size)
         self.workloads = dict(
             routes={},
             online_species_rows=0,
@@ -164,6 +171,7 @@ class FittingSpool(PreparedPlans):
             "env",
             "episode",
             "decision",
+            "wait_interval_id",
             "reset",
             "done",
             "run_break",
@@ -194,6 +202,7 @@ class FittingSpool(PreparedPlans):
             entities += int(counts.sum())
             used += len(selected)
         self.compaction, self.outcome_counts = compactor.diagnostics, compactor.counts
+        self.compaction.update(stage=self.stage, group_size=group_size)
         self.tile_outcome_counts = compactor.tile_counts
         self.indices = self._allocate("indices", (used,), np.dtype("<i8"))
         starts = np.r_[0, np.cumsum(populations)]

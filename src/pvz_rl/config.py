@@ -22,6 +22,7 @@ from pvz_rl.envs.tile_scenarios import (
     attacker_mix,
     is_bomb_skill,
     is_placement_skill,
+    is_prediction_skill,
     is_single_frame_skill,
     prediction_settings,
 )
@@ -113,12 +114,19 @@ _STAGE_PARAMETERS = {
                 "plants",
                 "live_zombies",
                 "defeated_zombies",
-                "pending_zombies",
+                "unspawned_zombies",
+                "zombie_hp_fraction",
+                "scene_protocol",
                 "sun",
                 "ready_probability",
             )
         },
+        "surviving_curve": "training.tile_scenarios.prediction.surviving_curve",
         "probe_interval_games": "curriculum.prediction_probe_interval_games",
+        "env_success_threshold": "training.tile_scenarios.prediction.env_success_threshold",
+        "stop": "training.tile_scenarios.prediction.stop",
+        "target": "training.tile_scenarios.prediction.target",
+        "breach": "training.tile_scenarios.prediction.breach",
     },
     "attacker": {
         **{
@@ -127,26 +135,15 @@ _STAGE_PARAMETERS = {
         },
         "probe_interval_games": "curriculum.attacker_probe_interval_games",
     },
-    "peashooter": {
-        "sky_sun_rate": "training.tile_scenarios.peashooter_sky_sun_rate",
-        **{
-            key: f"training.peashooter_rules.{key}"
-            for key in (
-                "fitting_objective",
-                "column_decay",
-                "softmax_temperature",
-                "oracle_lanes",
-                "oracle_vram_mib",
-                "oracle_chunk_ticks",
-                "prepare_workers",
-                "n_envs",
-                "snapshot_cache_mib",
-            )
-        },
-        "probe_interval_games": "curriculum.peashooter_probe_interval_games",
-        "validation_success_threshold": "curriculum.peashooter_validation_success_threshold",
-    },
 }
+
+_STAGE_PARAMETERS["pre_prediction"] = {
+    key: value.replace("prediction", "pre_prediction")
+    for key, value in _STAGE_PARAMETERS["prediction"].items()
+}
+_STAGE_PARAMETERS["pre_prediction"]["fixed_scene_seeds"] = (
+    "training.tile_scenarios.pre_prediction.fixed_scene_seeds"
+)
 
 for _stage, _fields in _STAGE_PARAMETERS.items():
     _fields["forecast_mode"] = f"training.stage_forecast_modes.{_stage}"
@@ -155,13 +152,11 @@ for _stage, _fields in _STAGE_PARAMETERS.items():
         _fields[f"{_outcome}_prediction_weight"] = (
             f"training.stage_outcome_weights.{_stage}.{_outcome}"
         )
-    if _stage == "peashooter":
-        _fields["n_epochs"] = f"training.stage_epochs.{_stage}"
 
 
 def absolute_outcomes(cfg):
     """The supported model uses public inputs and absolute action outcomes."""
-    return cfg["encoding"]["version"] == "entity_public_v4"
+    return cfg["encoding"]["version"] == "entity_public_v5"
 
 
 def forecast_version(cfg):
@@ -178,7 +173,7 @@ def forecast_mode(cfg, stage=None):
 
 def forecast_forks_enabled(cfg, stage=None):
     stage = stage or cfg.get("curriculum", {}).get("run_stage")
-    if stage == "prediction":
+    if is_prediction_skill(stage):
         return forecast_mode(cfg, stage) == "prediction_only"
     return cfg["training"].get("forecasts", {}).get("enabled", False) and forecast_mode(
         cfg, stage
@@ -189,7 +184,7 @@ def outcome_prediction_weights(cfg, stage="normal"):
     """Static-field/probe coefficients; saved single-weight runs retain their loss."""
     training = cfg["training"]
     stage = stage if stage in _STAGE_PARAMETERS else "normal"
-    if stage == "prediction":
+    if is_prediction_skill(stage):
         return 1.0, 1.0
     weights = training.get("stage_outcome_weights", {}).get(stage)
     if weights is not None:
@@ -358,19 +353,18 @@ def stage_pass_text(cfg, stage):
         if per is None:
             return "one pass per cohort"
         return f"{per} one-pass cohorts, then one cohort until fully correct"
-    return f"{stage_epochs(cfg, stage)} passes"
+    count = stage_epochs(cfg, stage)
+    return f"{count} pass" if count == 1 else f"{count} passes"
 
 
 def cohort_envs(cfg, skill=None):
     """Configured real-episode cohort size; missing stage settings retain legacy size."""
-    if skill == "prediction":
-        return prediction_settings(cfg)["n_envs"]
+    if is_prediction_skill(skill):
+        return prediction_settings(cfg, skill)["n_envs"]
     if skill == "attacker":
         return attacker_mix(cfg)["n_envs"]
     if skill == "attacker_pre":
         return cfg["training"]["tile_scenarios"]["attacker"]["n_envs"]
-    if skill == "peashooter":
-        return cfg["training"].get("peashooter_rules", {}).get("n_envs", cfg["training"]["n_envs"])
     if is_bomb_skill(skill):
         return (
             cfg["training"]
@@ -434,10 +428,13 @@ def training_env_capacity(cfg, family="preset"):
         mixed = (attacker_mix(cfg) or {}).get("n_envs", 0)
         prediction = (prediction_settings(cfg) or {}).get("n_envs", 0)
         return max(
-            cherry, attacker, mixed, prediction, cohort_envs(cfg, "peashooter"), cohort_envs(cfg)
+            cherry,
+            attacker,
+            mixed,
+            prediction,
+            (prediction_settings(cfg, "pre_prediction") or {}).get("n_envs", 0),
+            cohort_envs(cfg),
         )
-    if stage == "peashooter":
-        return cohort_envs(cfg, "peashooter")
     return cohort_envs(cfg)
 
 
@@ -574,7 +571,7 @@ def load_demo_config(path: str | Path | None = None, *, profile: str = "demo") -
     """Recording verification profile; execution options are supplied separately."""
     cfg = load_config(path, profile=profile)
     if (cfg["encoding"]["version"], cfg["policy"]["kind"]) not in {
-        ("entity_public_v4", "shared_public_outcomes_q_v11"),
+        ("entity_public_v5", "shared_public_outcomes_q_v13"),
     }:
         raise ValueError("Human demonstrations require the stateless two-stage Transformer profile")
     return copy.deepcopy(cfg)
@@ -586,9 +583,6 @@ def validate_config(cfg: dict) -> None:
         raise ValueError(
             f"Removed training settings: {sorted(removed)}; start from the shared-encoder train.toml"
         )
-    from pvz_rl.learning.peashooter_rules import validate_rule_settings
-
-    validate_rule_settings(cfg)
     objective = cfg["training"].get("objective")
     if not isinstance(objective, dict):
         raise ValueError("training.objective must describe the stateless two-stage objective")
@@ -681,7 +675,7 @@ def validate_config(cfg: dict) -> None:
         cfg.get("encoding", {}).get("version"),
         cfg.get("policy", {}).get("kind"),
     ) in {
-        ("entity_public_v4", "shared_public_outcomes_q_v11"),
+        ("entity_public_v5", "shared_public_outcomes_q_v13"),
     }
     if cfg["training"].get("validation_schedule", "periodic") not in (
         "periodic",
@@ -692,6 +686,14 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("simulation.backend must be cpu or cuda")
     if not current_policy:
         raise ValueError("Retired observation/policy format; use the bundled public model profile")
+    history = cfg.get("encoding", {}).get("history")
+    expected_history = {"ticks": 8, "shot_clamp": 30, "state_clamp": 50}
+    if not isinstance(history, dict):
+        raise ValueError("encoding.history must set ticks, shot_clamp and state_clamp")
+    for key, expected in expected_history.items():
+        value = history.get(key)
+        if type(value) is not int or value != expected:
+            raise ValueError(f"encoding.history.{key} must be {expected}")
     if cfg["reward"].get("version") != "action_global_value_v5":
         raise ValueError(
             "Retired reward format; ranked endgame action/global rewards require fresh training with the bundled train profile"
@@ -816,20 +818,20 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("encoding.max_entities must be an integer of at least 5")
     policy = cfg["policy"]
     required = {
-        "board": ("blocks", "heads"),
-        "action": ("blocks", "heads"),
-        "tile": ("blocks", "heads"),
-        "effect": ("heads",),
+        "board": ("blocks", "heads", "feedforward"),
+        "action": ("hidden_width",),
+        "tile": ("blocks", "heads", "feedforward", "readout_hidden_width"),
+        "effect": ("heads", "hidden_width"),
         "execution": ("microbatch", "query_chunk", "token_budget"),
     }
     optional = {
-        "board": {"feedforward", "width"},
-        "action": {"feedforward", "width"},
-        "tile": {"feedforward", "width"},
+        "board": {"width"},
+        "action": set(),
+        "tile": {"width"},
         "effect": {"width"},
         "execution": set(),
     }
-    if set(policy) != {"kind", "action_distribution", "head_dim", *required}:
+    if set(policy) != {"kind", "action_distribution", "head_dim", "mlp_hidden_layers", *required}:
         raise ValueError(
             "policy must contain only the stateless two-stage model and execution settings"
         )
@@ -838,6 +840,8 @@ def validate_config(cfg: dict) -> None:
     head_dim = policy.get("head_dim")
     if type(head_dim) is not int or head_dim < 1:
         raise ValueError("policy.head_dim must be a positive integer")
+    if type(policy["mlp_hidden_layers"]) is not int or policy["mlp_hidden_layers"] < 1:
+        raise ValueError("policy.mlp_hidden_layers must be a positive integer")
     for name, keys in required.items():
         group = policy[name]
         allowed = set(keys) | optional[name]
@@ -849,20 +853,20 @@ def validate_config(cfg: dict) -> None:
         for key in keys:
             if type(group[key]) is not int or group[key] < 1:
                 raise ValueError(f"policy.{name}.{key} must be a positive integer")
-        if name == "execution":
+        if name in ("execution", "action"):
             continue
-        if "feedforward" in group:
-            if type(group["feedforward"]) is not int or group["feedforward"] < 1:
-                raise ValueError(f"policy.{name}.feedforward must be a positive integer")
-        elif name != "effect":
-            group["feedforward"] = 4 * head_dim
         width = group["heads"] * head_dim
         if "width" in group and (type(group["width"]) is not int or group["width"] != width):
             raise ValueError(
                 f"policy.{name}.width must equal policy.{name}.heads * policy.head_dim"
             )
         group["width"] = width
-    optional = {"attacker": attacker_mix(cfg), "prediction": prediction_settings(cfg)}
+    if policy["board"]["width"] != policy["effect"]["width"]:
+        raise ValueError("policy.board and policy.effect widths must match for six-token memory")
+    optional = {
+        "attacker": attacker_mix(cfg),
+        **{stage: prediction_settings(cfg, stage) for stage in ("pre_prediction", "prediction")},
+    }
     stages = tuple(
         stage for stage in _STAGE_PARAMETERS if stage not in optional or optional[stage] is not None
     )
@@ -873,7 +877,7 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Unknown outcome weight stage")
     for stage in stages:
         weights = split_weights.get(stage)
-        if stage == "prediction" and weights is not None:
+        if is_prediction_skill(stage) and weights is not None:
             raise ValueError("Prediction-only fitting uses unweighted outcome loss")
         if stage in split_weights and (
             not isinstance(weights, dict) or set(weights) != {"static_field", "probe"}
@@ -936,17 +940,14 @@ def validate_config(cfg: dict) -> None:
     c = cfg["curriculum"]
     for key in (
         "cherry_bomb_probe_interval_games",
-        "peashooter_probe_interval_games",
         "attacker_pre_probe_interval_games",
         "prediction_probe_interval_games",
+        "pre_prediction_probe_interval_games",
         "attacker_probe_interval_games",
     ):
         if key in c and (type(c[key]) is not int or c[key] < 1):
             raise ValueError(f"{key} must be a positive integer")
-    for key in (
-        "cherry_bomb_validation_success_threshold",
-        "peashooter_validation_success_threshold",
-    ):
+    for key in ("cherry_bomb_validation_success_threshold",):
         if key in c and (
             type(c[key]) not in (int, float) or not math.isfinite(c[key]) or not 0 <= c[key] < 1
         ):
@@ -1120,44 +1121,110 @@ def validate_config(cfg: dict) -> None:
         raise ValueError("Tile stages require training.tile_scenarios.enabled")
     if c.get("run_stage") == "attacker_pre" and "attacker" not in tile:
         raise ValueError("attacker_pre requires its training configuration section")
-    prediction = prediction_settings(cfg)
-    if prediction is not None:
-        if type(prediction.get("n_envs")) is not int or prediction["n_envs"] < 1:
-            raise ValueError("prediction.n_envs must be a positive integer")
-        if (
-            type(prediction.get("validation_cases")) is not int
-            or prediction["validation_cases"] != 200
-        ):
-            raise ValueError("Prediction validation requires exactly 200 cases")
-        for key, limit in (("ready_probability", 1),):
-            value = prediction.get(key)
+    for prediction_stage in ("pre_prediction", "prediction"):
+        prediction = prediction_settings(cfg, prediction_stage)
+        if prediction is not None:
+            from pvz_rl.envs.prediction_counts import SCENE_PROTOCOL
+
+            if prediction.get("scene_protocol") != SCENE_PROTOCOL or "pending_zombies" in prediction:
+                raise ValueError("Prediction scene generation changed; start a fresh run")
+            if type(prediction.get("n_envs")) is not int or prediction["n_envs"] < 1:
+                raise ValueError("prediction.n_envs must be a positive integer")
             if (
-                type(value) not in (int, float)
-                or not math.isfinite(value)
-                or not 0 <= value <= limit
+                type(prediction.get("validation_cases")) is not int
+                or prediction["validation_cases"] != 200
             ):
-                raise ValueError(f"Invalid prediction.{key}")
-        for key, limit in (
-            ("plants", 45),
-            ("live_zombies", math.inf),
-            ("defeated_zombies", math.inf),
-            ("pending_zombies", math.inf),
-            ("sun", rules.game["sun_cap"]),
-        ):
-            values = prediction.get(key)
+                raise ValueError("Prediction validation requires exactly 200 cases")
+            for key, limit in (("ready_probability", 1),):
+                value = prediction.get(key)
+                if (
+                    type(value) not in (int, float)
+                    or not math.isfinite(value)
+                    or not 0 <= value <= limit
+                ):
+                    raise ValueError(f"Invalid prediction.{key}")
+            for key, limit in (
+                ("plants", 45),
+                ("live_zombies", math.inf),
+                ("defeated_zombies", math.inf),
+                ("unspawned_zombies", math.inf),
+                ("sun", rules.game["sun_cap"]),
+            ):
+                values = prediction.get(key)
+                if (
+                    not isinstance(values, list)
+                    or len(values) != 2
+                    or any(type(n) is not int for n in values)
+                    or not 0 <= values[0] <= values[1] <= limit
+                ):
+                    raise ValueError(f"Invalid prediction.{key} range")
+            if not prediction["live_zombies"][1] and not prediction["unspawned_zombies"][1]:
+                raise ValueError("Prediction scenes need live or unspawned zombies")
+            hp = prediction.get("zombie_hp_fraction")
             if (
-                not isinstance(values, list)
-                or len(values) != 2
-                or any(type(n) is not int for n in values)
-                or not 0 <= values[0] <= values[1] <= limit
+                not isinstance(hp, dict)
+                or set(hp) != {"mean", "std", "min", "max"}
+                or any(type(v) not in (int, float) or not math.isfinite(v) for v in hp.values())
+                or not 0 < hp["min"] <= hp["mean"] <= hp["max"] <= 1
+                or hp["min"] == hp["max"]
+                or hp["std"] <= 0
             ):
-                raise ValueError(f"Invalid prediction.{key} range")
-        if not prediction["live_zombies"][1] and not prediction["pending_zombies"][1]:
-            raise ValueError("Prediction scenes need live or pending zombies")
-        if "prediction_probe_interval_games" not in c:
-            raise ValueError("Prediction requires its own validation interval")
-    elif c.get("run_stage") == "prediction":
-        raise ValueError("prediction requires its training configuration section")
+                raise ValueError(f"Invalid {prediction_stage}.zombie_hp_fraction")
+            curve = prediction.get("surviving_curve")
+            if curve is None:
+                raise ValueError("Prediction scenes require their configured surviving_curve")
+            else:
+                weights_ok = (
+                    isinstance(curve, list)
+                    and len(curve) == 4
+                    and all(
+                        type(weight) in (int, float) and math.isfinite(weight) and weight > 0
+                        for weight in (curve[1], curve[3])
+                    )
+                )
+                if (
+                    not weights_ok
+                    or type(curve[0]) is not int
+                    or type(curve[2]) is not int
+                    or curve[0] < 0
+                    or curve[2] < 0
+                    or curve[0] == curve[2]
+                ):
+                    raise ValueError(
+                        "prediction.surviving_curve must be two distinct counts and two positive weights"
+                    )
+            if f"{prediction_stage}_probe_interval_games" not in c:
+                raise ValueError("Prediction requires its own validation interval")
+            if prediction_stage == "pre_prediction":
+                from pvz_rl.learning.fixed_prediction import validate_fixed_seeds
+
+                validate_fixed_seeds(prediction, c.get("run_stage"))
+            threshold = prediction.get("env_success_threshold")
+            if (
+                isinstance(threshold, bool)
+                or type(threshold) not in (int, float)
+                or not math.isfinite(threshold)
+                or not 0 <= threshold <= 1
+                or (prediction_stage == "prediction" and threshold == 1)
+            ):
+                bounds = "[0, 1]" if prediction_stage == "pre_prediction" else "[0, 1)"
+                raise ValueError(
+                    f"{prediction_stage}.env_success_threshold must be finite and in {bounds}"
+                )
+            if prediction.get("stop") != (
+                "one_frame" if prediction_stage == "pre_prediction" else "first_house_or_quiet"
+            ):
+                raise ValueError(f"Invalid {prediction_stage}.stop")
+            if prediction.get("target") != (
+                "opening_static_then_probe"
+                if prediction_stage == "pre_prediction"
+                else "episode_static_then_probe"
+            ):
+                raise ValueError(f"Invalid {prediction_stage}.target")
+            if prediction.get("breach") != "until_quiet":
+                raise ValueError("prediction.breach must be until_quiet")
+        elif c.get("run_stage") == prediction_stage:
+            raise ValueError("prediction requires its training configuration section")
     mix = attacker_mix(cfg)
     if mix is not None:
         from fractions import Fraction
@@ -1303,7 +1370,7 @@ def validate_config(cfg: dict) -> None:
     for stage in stages:
         expected = (
             "prediction_only"
-            if stage == "prediction"
+            if is_prediction_skill(stage)
             else "placement_outcomes"
             if is_placement_skill(stage)
             else "action_outcomes"
@@ -1592,9 +1659,7 @@ def validate_config(cfg: dict) -> None:
     accepted = (fixed, fixed | frozenset(COHORT_PERFECT_STAGES))
     if epochs is None:
         if type(legacy) is not int or isinstance(legacy, bool) or legacy < 1:
-            raise ValueError(
-                "peashooter, easy, standard, and shared each need a positive n_epochs"
-            )
+            raise ValueError("easy, standard, and shared each need a positive n_epochs")
     elif (
         legacy is not None
         or not isinstance(epochs, dict)
@@ -1604,9 +1669,7 @@ def validate_config(cfg: dict) -> None:
             for count in epochs.values()
         )
     ):
-        raise ValueError(
-            "peashooter, easy, standard, and shared each need their own positive n_epochs"
-        )
+        raise ValueError("easy, standard, and shared each need their own positive n_epochs")
     per_epoch = train.get("cohorts_per_epoch")
     if per_epoch is not None and (
         type(per_epoch) is not int or isinstance(per_epoch, bool) or per_epoch < 1

@@ -159,6 +159,7 @@ class AuxiliarySimulationService:
             raise ValueError("Invalid saved auxiliary execution families")
         self.packed_only = self.families == {"outcomes"}
         self.forecasts = dict(env.cfg["training"]["forecasts"])
+        self.forecasts["individual_breaches"] = env.tile_scenario in ("prediction", "pre_prediction")
         self.teacher_settings = dict(env.cfg["training"].get("peashooter_rules", {}))
         self.teacher_settings.update(
             cutoff=int(
@@ -481,6 +482,7 @@ class AuxiliarySimulationService:
                 probe=self.forecasts["probe"],
                 sky_sun_rate=self.env.batch.sky_sun_rate,
                 cutoff=self.teacher_settings["cutoff"],
+                individual_breaches=self.forecasts["individual_breaches"],
                 **metadata,
             )
             if continuation is not None:
@@ -1029,6 +1031,8 @@ class AuxiliarySimulationService:
                 record["root"] = roots[record["root"]]
                 self.store.entries[record["root"]]["refs"] += 1
         for key, job in self.jobs.items():
+            if job.get("individual_breaches", False) != self.forecasts["individual_breaches"]:
+                raise ValueError("Saved Prediction continuation uses different breach handling")
             if (
                 tuple(job["id"]) != key
                 or job["family"] not in self.queues

@@ -82,7 +82,7 @@ def batch_loss(
     dense_species = torch.zeros((n, 10), device=device, dtype=torch.bfloat16)
     dense_tiles = torch.zeros((n, 45), device=device, dtype=torch.bfloat16)
     features = None
-    with policy.board_context(observations) as memory:
+    with policy.board_context(observations, detach_policy_features=not demonstration) as memory:
         if len(species_rows):
             # The complete board batch was encoded once, including tile-only routes.
             species = policy.action_values(memory, rows=species_rows)

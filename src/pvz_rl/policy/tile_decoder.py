@@ -8,9 +8,9 @@ from pvz_rl.policy.entity_attention import AttentionBlock, SpatialTransformer, s
 
 
 class DecoderBlock(nn.Module):
-    def __init__(self, width, heads, feedforward, query_chunk, memory_width):
+    def __init__(self, width, heads, feedforward, query_chunk, memory_width, hidden_layers):
         super().__init__()
-        self.self_attention = AttentionBlock(width, heads, feedforward, query_chunk)
+        self.self_attention = AttentionBlock(width, heads, feedforward, query_chunk, hidden_layers)
         self.query_norm, self.memory_norm = nn.LayerNorm(width), nn.LayerNorm(memory_width)
         self.query = nn.Linear(width, width)
         self.key_value = nn.Linear(memory_width, width * 2)
@@ -124,6 +124,7 @@ class TileDecoder(nn.Module):
                     tile["feedforward"],
                     execution["query_chunk"],
                     spec["board"]["width"],
+                    spec["mlp_hidden_layers"],
                 )
                 for _ in range(tile["blocks"])
             ]

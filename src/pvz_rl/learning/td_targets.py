@@ -7,6 +7,9 @@ from pvz_rl.envs.actions import ActionSchema
 from pvz_rl.envs.static_fork import reference_tau
 from pvz_rl.learning.action_routing import FitRoute
 from pvz_rl.learning.objective import selected_action_targets, training_rewards
+from pvz_rl.policy.sequential_q import greedy_choice
+
+TD_PREPARATION_PROTOCOL = "pvz-rl/legal-branch-double-q-v1"
 
 
 def nstep_returns(rewards, durations, bootstrap, terminal, *, n, gamma):
@@ -64,6 +67,16 @@ class TDTargetBuilder:
         self.bootstrap = np.zeros(self.buffer.size, np.float32)
         self.keys = sorted(self.buffer._source_index)
         if state:
+            if (
+                state.get("protocol") != TD_PREPARATION_PROTOCOL
+                or type(state.get("cursor")) is not int
+                or not 0 <= state["cursor"] <= self.buffer.size
+                or type(state.get("episode_cursor")) is not int
+                or not 0 <= state["episode_cursor"] <= len(self.keys)
+                or np.shape(state.get("bootstrap")) != self.bootstrap.shape
+                or not np.isfinite(state["bootstrap"]).all()
+            ):
+                raise ValueError("Invalid legal TD preparation recovery state")
             self.cursor, self.episode_cursor = state["cursor"], state["episode_cursor"]
             self.bootstrap[:] = state["bootstrap"]
 
@@ -75,7 +88,8 @@ class TDTargetBuilder:
             obs = buffer.observations(rows, device=model.device)
             with torch.no_grad():
                 online = model.policy.species_values(obs).float()
-                selected = online.argmax(-1)
+                _, legal, _ = model.policy.selection_legality(obs, rows["branch_available"])
+                selected = greedy_choice(online, legal)
                 target = model._teacher.species_values(obs).float()
                 self.bootstrap[self.cursor : last] = (
                     target.gather(1, selected[:, None]).flatten().cpu().numpy()
@@ -115,7 +129,10 @@ class TDTargetBuilder:
 
     def snapshot(self):
         return dict(
-            cursor=self.cursor, episode_cursor=self.episode_cursor, bootstrap=self.bootstrap.copy()
+            protocol=TD_PREPARATION_PROTOCOL,
+            cursor=self.cursor,
+            episode_cursor=self.episode_cursor,
+            bootstrap=self.bootstrap.copy(),
         )
 
     def diagnostics(self):

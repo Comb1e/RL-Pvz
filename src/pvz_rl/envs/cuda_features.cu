@@ -10,13 +10,39 @@ __device__ double asset_value(Header &h, Plant *p) {
 __device__ void clear_record(int *o) {
   for (I f = 0; f < ENTITY_WIDTH; f++) o[f] = 0;
 }
-__device__ void plant_record(const Header &h, const Plant &a, int *o) {
+__device__ const I *motion_find(const I *row, I slots, I category, I id) {
+  if (!row || slots <= 0) return nullptr;
+  I mask = slots - 1;
+  I start = (category * 0x9E3779B1LL ^ id) & mask;
+  for (I n = 0; n < slots; n++) {
+    const I *t = row + MOTION_HEADER + ((start + n) & mask) * MOTION_STRIDE;
+    if (t[0] == 0) return nullptr;
+    if (t[0] == -1) continue;
+    if (t[0] == id && t[1] == category) return t;
+  }
+  return nullptr;
+}
+__device__ void write_history(int *o, const I *t) {
+  if (!t || !t[17]) {
+    o[E_since_shot] = SHOT_CLAMP;
+    o[E_seen_phase] = UNKNOWN_PHASE;
+    return;
+  }
+  for (I k = 0; k < HISTORY_TICKS; k++) o[E_dx_0 + k] = (int)t[8 + k];
+  o[E_history_filled] = (int)t[7];
+  o[E_since_shot] = (int)t[5];
+  o[E_state_ticks] = (int)t[4];
+  I seen = t[6];
+  o[E_seen_phase] = seen < 0 ? UNKNOWN_PHASE : (int)(seen % HISTORY_TICKS);
+}
+__device__ void plant_record(const Header &h, const Plant &a, int *o, const I *motion, I slots) {
   clear_record(o);
   o[E_type]=a.kind+1; o[E_state]=a.state+1; o[E_row]=a.row;
   o[E_x]=a.col*G_units_per_tile+G_units_per_tile/2; o[E_health]=a.health;
   o[E_phase_ticks]=hi(0, a.due-h.tick);
+  write_history(o, motion_find(motion, slots, MOTION_PLANT, a.id));
 }
-__device__ void zombie_record(const Header &h, const Zombie &a, int *o) {
+__device__ void zombie_record(const Header &h, const Zombie &a, int *o, const I *motion, I slots) {
   clear_record(o);
   o[E_type]=a.kind+ZOMBIE_TYPE_START; o[E_state]=a.state+ZOMBIE_STATE_START;
   o[E_row]=a.row; o[E_x]=a.x; o[E_health]=a.health; o[E_armor]=a.armor;
@@ -24,14 +50,17 @@ __device__ void zombie_record(const Header &h, const Zombie &a, int *o) {
     ? (hi(0,G_bite_ticks*2-a.bite_progress)+(h.tick<a.slow_until ? 0:1))
       / (h.tick<a.slow_until ? 1:2) : 0;
   o[E_slow_ticks]=hi(0,a.slow_until-h.tick); o[E_has_pole]=a.has_pole; o[E_headless]=a.headless;
+  write_history(o, motion_find(motion, slots, MOTION_ZOMBIE, a.id));
 }
-__device__ void shot_record(const Shot &a, int *o) {
+__device__ void shot_record(const Shot &a, int *o, const I *motion, I slots) {
   clear_record(o);
   o[E_type]=PROJECTILE_TYPE_START+a.icy; o[E_row]=a.row; o[E_x]=a.x; o[E_damage]=a.damage;
+  write_history(o, motion_find(motion, slots, MOTION_SHOT, a.id));
 }
-__device__ void mower_record(const Mower &a, int *o) {
+__device__ void mower_record(const Mower &a, int *o, const I *motion, I slots) {
   clear_record(o);
   o[E_type]=MOWER_TYPE; o[E_state]=MOWER_STATE_START+a.state; o[E_row]=a.row; o[E_x]=a.x;
+  write_history(o, motion_find(motion, slots, MOTION_MOWER, a.row + 1));
 }
 
 // Canonical order within one group: lane (mowers and plants), x, then every
@@ -61,8 +90,10 @@ __device__ int shot_order(const Shot &a, const Shot &b) {
 // past ENTITY_LIMIT are omitted and counted; later store positions are cleared.
 extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     const I *zombies, const I *projectiles, const I *mowers, const I *cooldowns,
+    const I *unspawned,
     int *records, int *entities, bool *mask, float *globals, double *assets,
-    I *summary, short *lane_zombies, I n) {
+    I *summary, short *lane_zombies, I n, const I *motion, I motion_slots,
+    I motion_width) {
   I i = blockIdx.x;
   if (i >= n) return;
   Header h = ((Header *)headers)[i];
@@ -84,6 +115,7 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
   Zombie *z = (Zombie *)(zombies + i * ZCAP * GAME_ZOMBIE_WIDTH);
   Shot *q = (Shot *)(projectiles + i * QCAP * GAME_PROJECTILE_WIDTH);
   Mower *m = (Mower *)(mowers + i * 5 * GAME_MOWER_WIDTH);
+  const I *motion_row = (motion && motion_slots > 0) ? motion + i * motion_width : nullptr;
   int *staged = records + i * RECORD_CAPACITY * ENTITY_WIDTH;
   int *out = entities + i * ENTITY_LIMIT * ENTITY_WIDTH;
   I staged_count = 5 + h.np + h.nz;
@@ -98,7 +130,7 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     g[O_elapsed] = (double)h.tick / G_tick_rate / CUTOFF_SECONDS;
     g[O_wave] = (double)h.wave / WAVE_SCALE;
     g[O_total_waves] = (double)h.total_waves / WAVE_SCALE;
-    g[O_initial] = (double)h.total_spawns / COUNT_SCALE;
+    g[O_initial] = (double)(h.total_spawns + unspawned[i]) / COUNT_SCALE;
     g[O_defeated] = (double)h.defeated / COUNT_SCALE;
     const I recharge[8] = {CD_0, CD_1, CD_2, CD_3, CD_4, CD_5, CD_6, CD_7};
     for (I j=0; j<8; j++) g[O_cooldown_0+j] = (double)cooldowns[i*8+j] / recharge[j];
@@ -106,6 +138,7 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
     g[O_zombie_count] = (double)h.nz / COUNT_SCALE;
     g[O_projectile_count] = (double)h.nq / COUNT_SCALE;
     g[O_mower_count] = 5.0 / COUNT_SCALE;
+    g[O_shots_since_first] = motion_row ? (double)motion_row[0] / COUNT_SCALE : 0;
     assets[i] = asset_value(h, p);
     I *s = summary + i * 4;
     s[0] = kept;
@@ -115,9 +148,9 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
   }
   for (I j = threadIdx.x; j < staged_count; j += blockDim.x) {
     int *o = staged + j * ENTITY_WIDTH;
-    if (j < 5) mower_record(m[j], o);
-    else if (j < 5 + h.np) plant_record(h, p[j - 5], o);
-    else zombie_record(h, z[j - 5 - h.np], o);
+    if (j < 5) mower_record(m[j], o, motion_row, motion_slots);
+    else if (j < 5 + h.np) plant_record(h, p[j - 5], o, motion_row, motion_slots);
+    else zombie_record(h, z[j - 5 - h.np], o, motion_row, motion_slots);
   }
   __syncthreads();
   for (I j = threadIdx.x; j < staged_count; j += blockDim.x) {
@@ -144,7 +177,8 @@ extern "C" __global__ void encode_canonical(const I *headers, const I *plants,
       int order = shot_order(q[k], a);
       rank += order < 0 || (order == 0 && k < j);
     }
-    if (rank < available) shot_record(a, out + (staged_count + rank) * ENTITY_WIDTH);
+    if (rank < available)
+      shot_record(a, out + (staged_count + rank) * ENTITY_WIDTH, motion_row, motion_slots);
   }
   for (I index = threadIdx.x; index < ENTITY_LIMIT; index += blockDim.x) {
     mask[i * ENTITY_LIMIT + index] = index < kept;

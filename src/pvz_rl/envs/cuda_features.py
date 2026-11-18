@@ -18,6 +18,17 @@ from pvz_rl.envs.encoding import (
     global_width,
     width_bucket,
 )
+from pvz_rl.envs.motion_history import (
+    HISTORY_TICKS,
+    MOTION_HEADER,
+    MOTION_STRIDE,
+    MOWER,
+    PLANT,
+    SHOT,
+    SHOT_CLAMP,
+    UNKNOWN_PHASE,
+    ZOMBIE,
+)
 from pvz_rl.envs.rewards import LEDGER_METRICS, REWARD_METRICS
 
 REWARD_FIELDS = (*REWARD_METRICS, "total")
@@ -72,6 +83,15 @@ class CudaFeatures:
             "REWARD_SIZE": len(REWARD_FIELDS),
             "METRIC_SIZE": METRIC_SIZE,
             "EMPTY_TILE_REASON": REASONS.index("empty_tile"),
+            "HISTORY_TICKS": HISTORY_TICKS,
+            "MOTION_HEADER": MOTION_HEADER,
+            "MOTION_STRIDE": MOTION_STRIDE,
+            "SHOT_CLAMP": SHOT_CLAMP,
+            "UNKNOWN_PHASE": UNKNOWN_PHASE,
+            "MOTION_PLANT": PLANT,
+            "MOTION_ZOMBIE": ZOMBIE,
+            "MOTION_SHOT": SHOT,
+            "MOTION_MOWER": MOWER,
         }
         params.update({f"O_{k}": v for k, v in encoder.global_fields.items()})
         params.update({f"E_{k}": i for i, k in enumerate(ENTITY_FIELDS)})
@@ -123,6 +143,7 @@ class CudaFeatures:
         self.entities = cp.zeros((rows, self.limit, ENTITY_WIDTH), cp.int32)
         self.entity_mask = cp.zeros((rows, self.limit), cp.bool_)
         self.globals = cp.zeros((rows, global_width(cfg)), cp.float32)
+        self.unspawned = cp.zeros(batch.n, cp.int64)
         # Kept count, then plants/zombies/projectiles omitted by the entity cap.
         self.summary = cp.zeros((rows, 4), cp.int64)
         self.lane_zombies = cp.zeros((rows, 5), cp.int16)
@@ -171,6 +192,7 @@ class CudaFeatures:
             "enabled",
             "reward_tensor",
             "mask_tensor",
+            "unspawned",
         ):
             setattr(view, name, getattr(self, name)[: batch.n])
         return view
@@ -196,6 +218,15 @@ class CudaFeatures:
         )
         self.home_entries[indices] = 0
 
+    def _motion_arguments(self):
+        """History pointer for this batch. A missing table encodes the unknown columns."""
+        batch = self.batch
+        motion = getattr(batch, "motion", None)
+        slots = int(getattr(batch, "motion_slots", 0) or 0)
+        if motion is None or slots <= 0:
+            return batch.cp.zeros(1, batch.cp.int64), 0, 0
+        return motion, slots, int(motion.shape[1])
+
     def encode(self, *, offset=0, publish=True):
         """Write canonical records for every game into store rows ``offset:offset+n``.
 
@@ -214,6 +245,7 @@ class CudaFeatures:
                 b.projectiles,
                 b.mowers,
                 b.cooldowns,
+                self.unspawned,
                 self.records,
                 self.entities[rows],
                 self.entity_mask[rows],
@@ -222,6 +254,7 @@ class CudaFeatures:
                 self.summary[rows],
                 self.lane_zombies[rows],
                 b.n,
+                *self._motion_arguments(),
             ),
         )
         self.policy_mask_kernel(

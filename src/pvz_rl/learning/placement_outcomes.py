@@ -1,21 +1,45 @@
-"""One exact pre-action field/probe target per single-frame exercise."""
+"""One exact pre-action field/probe target per placement decision.
+
+Prediction borrows real Wait ticks until first entry or quiet, then privately
+finishes its field suffix and probe without further forecast rows.
+"""
 
 import copy
 from time import perf_counter
 
+import numpy as np
+from pvz_game.cuda.schema import HEADER, STATUSES
+
+from pvz_rl.envs.prediction_counts import COLLECTION_PROTOCOL
+from pvz_rl.envs.prediction_stop import PREDICTION_QUIET
 from pvz_rl.learning.auxiliary_service import root_bytes
+from pvz_rl.learning.prediction_labels import (
+    accumulate_static,
+    freeze_static,
+    merge_static_suffix,
+    prediction_label_action,
+    write_episode_target,
+)
+
+LOST = STATUSES.index("lost")
 
 
 class PlacementOutcomes:
-    protocol = "single-placement-outcomes-v3"
+    protocol = "single-placement-outcomes-v4"
 
     def __init__(self, env, buffer, state=None):
         self.env, self.buffer, self.auxiliary = env, buffer, env.auxiliary
         if self.auxiliary is None:
             raise RuntimeError("Single-frame outcomes require the bounded simulation service")
-        self.family = "prediction" if env.tile_scenario == "prediction" else "placement"
+        self.family = (
+            env.tile_scenario
+            if env.tile_scenario in ("pre_prediction", "prediction")
+            else "placement"
+        )
         self.jobs_metric = f"{self.family}_jobs"
         self.jobs = {}
+        self.opening_seen = set()
+        self.episodes = {}
         self.published = False
         self.metrics = dict(
             published_rows=0,
@@ -25,16 +49,38 @@ class PlacementOutcomes:
             live_jobs=0,
         )
         self.metrics[self.jobs_metric] = 0
+        if self.family == "prediction" and not env.batch.field_enabled:
+            env.batch.enable_field_tracking()
         if state is not None:
             if state.get("protocol") != self.protocol:
                 raise ValueError("Incompatible single-placement outcome recovery")
+            if self.family == "prediction" and (
+                "episodes" not in state
+                or state.get("quiet") != PREDICTION_QUIET
+                or state.get("collection") != COLLECTION_PROTOCOL
+            ):
+                raise ValueError("Prediction outcome recovery predates the idle-plant stop")
+            if state.get("stage", env.tile_scenario) != env.tile_scenario:
+                raise ValueError("Outcome recovery belongs to a different exercise stage")
+            if self.family == "pre_prediction" and state.get("stage") != self.family:
+                raise ValueError("Missing single-frame pre_prediction recovery identity")
             self.jobs = {tuple(key): value for key, value in state["jobs"]}
+            self.opening_seen = {int(index) for index in state.get("opening_seen", ())}
+            for job in self.jobs.values():
+                if job.get("opening"):
+                    self.opening_seen.add(int(job["env"]))
+            for item in state.get("episodes", ()):
+                episode = dict(item)
+                episode["depth"] = np.array(episode["depth"], dtype=np.int64)
+                episode["home"] = np.array(episode["home"], dtype=np.int64)
+                self.episodes[int(episode["env"])] = episode
             self.published = state["published"]
             self.metrics = dict(state["metrics"])
 
     @property
     def estimated_bytes(self):
-        return 512 * len(self.jobs) + sum(
+        rows = sum(len(episode["rows"]) for episode in self.episodes.values())
+        return 512 * (len(self.jobs) + rows) + sum(
             root_bytes(job["root"]) for job in self.jobs.values() if "root" in job
         )
 
@@ -42,16 +88,94 @@ class PlacementOutcomes:
         # The ticket already owns its pre-mutation root; no real Wait capture.
         pass
 
+    def _episode(self, env_index):
+        episode = self.episodes.get(env_index)
+        if episode is None:
+            episode = dict(
+                env=env_index,
+                depth=np.zeros(5, np.int64),
+                home=np.full(5, -1, np.int64),
+                origin=None,
+                rows=[],
+                closed=False,
+                field=None,
+                delay=None,
+                lifecycle="forecasting",
+                first_entry=-1,
+            )
+            self.episodes[env_index] = episode
+        return episode
+
+    def _observe_prediction(self, rows, receipt):
+        timed_out = self.env.last_transition_host[:, 1].astype(bool)
+        status = self.env._physical_header[:, HEADER.index("status")]
+        finished = []
+        for slot, index in zip(receipt.slots, receipt.rows, strict=True):
+            env_index = int(rows["env"][slot])
+            episode = self._episode(env_index)
+            if episode["closed"] or episode["field"] is not None:
+                raise RuntimeError("A finished prediction episode recorded another forecast")
+            if episode["origin"] is None:
+                episode["origin"] = int(rows["tick"][slot])
+            accumulate_static(
+                episode["depth"],
+                episode["home"],
+                rows["field_trace"][slot],
+                rows["field_breach"][slot],
+            )
+            episode["rows"].append(int(index))
+            action = prediction_label_action(
+                bool(rows["done"][slot]),
+                bool(timed_out[slot]),
+                int(status[slot]) == LOST,
+                bool(np.any(episode["home"] >= 0)),
+            )
+            if action == "drop":
+                episode["closed"] = True
+                episode["lifecycle"] = "unlabeled"
+            elif action in ("probe", "continue_static"):
+                episode["closed"] = True
+                episode["lifecycle"] = (
+                    "static_continuation" if action == "continue_static" else "settling"
+                )
+                homes = episode["home"][episode["home"] >= 0]
+                episode["first_entry"] = int(homes.min()) if len(homes) else -1
+                finished.append(env_index)
+        if not finished:
+            return
+        roots = self.auxiliary.capture(
+            self.env.batch, finished, self.env._physical_header[finished]
+        )
+        for env_index, root in zip(finished, roots, strict=True):
+            episode = self.episodes[env_index]
+            identity = ("outcomes", self.family, env_index)
+            self.jobs[identity] = dict(
+                env=env_index,
+                rows=list(episode["rows"]),
+                root_tick=int(self.env._physical_header[env_index, HEADER.index("tick")]),
+                root=root,
+                submitted=False,
+            )
+            self.metrics[self.jobs_metric] += 1
+
     def observe(self, request, rows, receipt):
+        if self.family == "prediction":
+            self._observe_prediction(rows, receipt)
+            return
         for slot, index in zip(receipt.slots, receipt.rows, strict=True):
             identity = ("outcomes", self.family, int(index))
             action = int(request["actions"][slot, 0])
+            env_index = int(rows["env"][slot])
             if request["valid"][slot].sum() != 1:
                 raise RuntimeError("A single-frame exercise must own exactly one proposal")
             if int(rows["executed_action"][slot]) != action:
                 raise RuntimeError("Saved proposal legality differs from execution")
+            opening = env_index not in self.opening_seen
+            self.opening_seen.add(env_index)
             self.jobs[identity] = dict(
                 row=int(index),
+                env=env_index,
+                opening=opening,
                 action=action,
                 root=request["pre_states"][int(slot)],
                 submitted=False,
@@ -67,19 +191,41 @@ class PlacementOutcomes:
                 job["submitted"] = True
                 job.pop("root")
 
+    def _publish_probe(self, job, result):
+        episode = self.episodes[job["env"]]
+        cutoff = (
+            self.env.cfg["environment"]["cutoff_seconds"] * self.env.batch.rules.game["tick_rate"]
+        )
+        if int(result["anchor"]) >= cutoff:
+            episode["lifecycle"] = "unlabeled"
+            return
+        merge_static_suffix(episode["depth"], episode["home"], result["outcome"], job["root_tick"])
+        field, delay = freeze_static(episode["depth"], episode["home"], episode["origin"])
+        episode["field"], episode["delay"] = field, delay
+        probe = np.asarray(result["outcome"])[:, 2]
+        if probe.shape != (5,) or np.any((probe < 0) | (probe > 10)):
+            raise RuntimeError("Prediction probe depths are not five lane classes")
+        write_episode_target(self.buffer, job["rows"], field, delay, probe)
+        episode["lifecycle"] = "ready"
+        self.metrics["published_rows"] += len(job["rows"])
+
     def advance(self):
         started = perf_counter()
         self._submit_pending()
         for identity, result in self.auxiliary.poll("outcomes"):
-            index = self.jobs[identity]["row"]
-            block, offset = divmod(index, self.buffer.block_rows)
-            row = self.buffer.blocks[block][offset]
-            row["baseline_outcomes"] = result["outcome"]
-            row["null_target_valid"] = True
-            row["outcome_ready"] = True
+            job = self.jobs[identity]
+            if "rows" in job:
+                self._publish_probe(job, result)
+            else:
+                index = job["row"]
+                block, offset = divmod(index, self.buffer.block_rows)
+                row = self.buffer.blocks[block][offset]
+                row["baseline_outcomes"] = result["outcome"]
+                row["null_target_valid"] = True
+                row["outcome_ready"] = True
+                self.metrics["published_rows"] += 1
             self.auxiliary.acknowledge(identity)
             del self.jobs[identity]
-            self.metrics["published_rows"] += 1
         for key in ("field_ticks", "probe_ticks"):
             self.metrics[key] = self.auxiliary.metrics.get(key, 0)
         self.metrics["live_jobs"] = len(self.jobs)
@@ -102,14 +248,19 @@ class PlacementOutcomes:
             if "root" in saved and hasattr(saved["root"], "resolve"):
                 saved["root"] = saved["root"].resolve(wait=True)
             jobs.append((identity, saved))
-        return copy.deepcopy(
-            dict(
-                protocol=self.protocol,
-                jobs=jobs,
-                published=self.published,
-                metrics=self.metrics,
-            )
+        saved = dict(
+            protocol=self.protocol,
+            stage=self.env.tile_scenario,
+            jobs=jobs,
+            opening_seen=sorted(self.opening_seen),
+            episodes=[self.episodes[index] for index in sorted(self.episodes)],
+            published=self.published,
+            metrics=self.metrics,
         )
+        if self.family == "prediction":
+            saved["quiet"] = PREDICTION_QUIET
+            saved["collection"] = COLLECTION_PROTOCOL
+        return copy.deepcopy(saved)
 
     def close(self):
         pass

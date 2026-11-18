@@ -13,7 +13,7 @@ progress_seconds = 15
 terminal_progress_seconds = 60
 terminal_mode = "compact"
 hardware_sample_seconds = 1.0
-jsonl_batch_bytes = 5000000 # One open JSONL part, in a folder named for the log. A larger existing file is moved in whole.
+jsonl_batch_bytes = 5000000 # Open JSONL part, in a folder named for the log. Episode rows are written when the report refreshes.
 rolling_window = 100
 
 [visualization]
@@ -23,7 +23,7 @@ live_fps = 5
 live_history_ram_mib = 16
 live_window_size = [1600, 1050]
 enabled = true
-report_interval_cohorts = 10 # Redraw after this many completed cohorts, and when a stage advances.
+report_interval_cohorts = 10 # Export model weights to latest.zip and redraw at this interval.
 demos = true
 videos = false
 video_fps = 25
@@ -46,10 +46,15 @@ zombie_states = ["walking", "carrying_pole", "vaulting", "biting", "dead"]
 mower_states = ["ready", "moving", "spent"]
 
 [encoding]
-version = "entity_public_v4"
+version = "entity_public_v5"
 max_entities = 256 # RTX 4070 Laptop: lower attention cost than 512; see docs/math/entity-inputs.md.
 count_scale = 75
 wave_scale = 15
+
+[encoding.history]
+ticks = 8
+shot_clamp = 30
+state_clamp = 50
 
 [reward]
 version = "action_global_value_v5"
@@ -93,9 +98,9 @@ random_cohort_seeds = true # Independent fresh cohort seeds; pending draws persi
 device = "cuda"
 max_minutes = 120
 finalization_minutes = 15
-batch_size = 1024
+batch_size = 1024 # Fitting rows per batch. Gradients accumulate across the cohort before each optimizer update.
 learning_rate = 0.0003
-max_grad_norm = 5 # Shared by autonomous training and demonstration initialization.
+max_grad_norm = 1.0 # File default for the clip. The live view can replace it for the next cohort. Demonstration initialization keeps this value.
 eval_interval = 250000 # Used only by bounded decision-window diagnostics.
 torch_threads = 1
 learning_rate_restart = 3.0 # Next armed cohort: one pass at this multiple of learning_rate.
@@ -182,17 +187,50 @@ cuda_warmup = true # Natural initial cooldown only; distance labels use no candi
 oracle_lanes = 640 # Independent scratch limits; used only for natural cooldown warmup.
 oracle_vram_mib = 1024
 
-[training.prediction]
-# The stage bar is this cohort's pre-pass check. Training does not run the held-out panel.
+[training.pre_prediction]
+scene_protocol = "prediction-frame-v2"
+# One opening-frame forecast; exact private targets suppress future spawns.
 forecast_mode = "prediction_only"
 extra_actions = 0
+env_success_threshold = 0.98 # With one forecast, only an exact 15/15 match passes.
+stop = "one_frame"
+target = "opening_static_then_probe" # Untouched opening field, then one settled-board probe.
+breach = "until_quiet" # The private continuation keeps resolving after a house entry.
 n_envs = 640
 probe_interval_games = 10000
-validation_cases = 200 # Every environment must match all field, breach, and probe classes.
+validation_cases = 200 # Inactive panel. The cohort bar is each environment's forecast success rate.
 plants = [0, 20]
 live_zombies = [0, 10]
 defeated_zombies = [0, 30]
-pending_zombies = [0, 20]
+unspawned_zombies = [0, 20] # Count only; no scheduled arrivals.
+zombie_hp_fraction = { mean = 0.8, std = 0.1, min = 0.01, max = 1.0 } # Remaining body + armor; truncated normal.
+# On-field plus unspawned zombies. Relative exponential weights, normalized
+# over every legal total. One zombie weighs 0.1 and ten weigh 0.01.
+surviving_curve = [1, 0.1, 10, 0.01]
+sun = [0, 500]
+ready_probability = 0.5 # Applied independently to each card slot and mower.
+
+[training.prediction]
+scene_protocol = "prediction-frame-v2"
+# The stage bar is this cohort's pre-pass check. Training does not run the held-out panel.
+# An environment succeeds when its labeled forecasts are strictly above this rate.
+forecast_mode = "prediction_only"
+extra_actions = 0
+env_success_threshold = 0.95
+stop = "first_house_or_quiet" # Stop forecasts at first house entry; finish static/probe privately.
+target = "episode_static_then_probe" # One real-fight static result, then one quiet-board probe.
+breach = "until_quiet" # Private continuation completes the field after a house entry.
+n_envs = 640
+probe_interval_games = 10000
+validation_cases = 200 # Inactive panel. The cohort bar is each environment's forecast success rate.
+plants = [0, 20]
+live_zombies = [0, 10]
+defeated_zombies = [0, 30]
+unspawned_zombies = [0, 20] # Count only; no scheduled arrivals.
+zombie_hp_fraction = { mean = 0.8, std = 0.1, min = 0.01, max = 1.0 }
+# On-field plus unspawned zombies. Relative exponential weights, normalized
+# over every legal total. One zombie weighs 0.1 and ten weigh 0.01.
+surviving_curve = [1, 0.1, 10, 0.01]
 sun = [0, 500]
 ready_probability = 0.5 # Applied independently to each card slot and mower.
 
@@ -205,26 +243,6 @@ n_envs = 640
 validation_cases = 200 # All must pass.
 ratios = [0.1, 0.4, 0.5] # Cherry Bomb, Cherry Bomb Obstacle, Attacker Pre.
 probe_interval_games = 10000
-
-[training.peashooter]
-n_epochs = 8
-forecast_mode = "action_outcomes" # Teacher plus the untouched pre-action field/probe target.
-extra_actions = 0 # The placement teacher supplies targets; retain actual-action effects only.
-static_field_prediction_weight = 0.5
-probe_prediction_weight = 0.2
-# Independent cohort size, preparation, and fitting passes.
-n_envs = 128
-sky_sun_rate = 1.5 # Divide sky-drop delays by this rate; keep each drop at 25 sun.
-probe_interval_games = 2000
-validation_success_threshold = 0.95 # Strictly exceed this rate (96/100); separate from cohort qualification.
-fitting_objective = "prioritized_lane_cross_entropy_v1"
-column_decay = 0.5 # Preferred-cell target weight halves with each column to the right.
-softmax_temperature = 1.0
-prepare_workers = 0 # In-process projection beat persistent worker IPC after setup reuse.
-snapshot_cache_mib = 256 # Charged against the shared RAM budget; excess spills to owned storage.
-oracle_lanes = 1024 # Fastest repeated 90-second resource screen on the RTX 4070 Laptop.
-oracle_vram_mib = 4096 # Upper bound; actual lanes shrink to preserve profile headroom.
-oracle_chunk_ticks = 4096
 
 [training.normal]
 forecast_mode = "action_outcomes" # Untouched pre-action field/probe targets.
@@ -252,19 +270,19 @@ intermediate_weights = [0.5, 0.5, 0.0]
 final_weights = [0.2, 0.4, 0.4]
 
 [training.normal.curriculum.stages.easy]
-n_epochs = 4 # Fitting passes per easy cohort.
+n_epochs = 1 # Fitting passes per easy cohort.
 tasks = ["easy"]
 weights = [1.0]
 requirements = {easy = 100}
 
 [training.normal.curriculum.stages.standard]
-n_epochs = 4
+n_epochs = 1
 tasks = ["easy", "standard"]
 weights = [0.5, 0.5]
 requirements = {easy = 100, standard = 100}
 
 [training.normal.curriculum.stages.shared]
-n_epochs = 4
+n_epochs = 1
 tasks = ["easy", "standard", "hard"]
 weights = [0.2, 0.4, 0.4]
 requirements = {easy = 100, standard = 100, hard = 100}
@@ -279,7 +297,7 @@ accepted_outcome_share = 0.5
 species_consistency_weight = 1.0 # Verified demo objective only; normal Q fitting omits consistency.
 species_consistency_huber_delta = 1.0
 invalid_action_q_offset = -0.1 # Illegal target = detached current head minimum Q + this offset.
-invalid_fit_group_size = 2 # Shared first-of-window size for invalid proposals and waits.
+invalid_fit_group_size = 2 # Gameplay first-of-pair, within one Wait interval; forecast stages keep all rows.
 dense_multiplier = 10.0
 ema_decay = 0.99
 demo_rank_loss_weight = 0.10
@@ -344,24 +362,28 @@ curriculum = true
 hybrid = false
 
 [policy]
-kind = "shared_public_outcomes_q_v11"
+kind = "shared_public_outcomes_q_v13"
 action_distribution = "sequential_q_unmasked_tiles_v2"
 head_dim = 64
+mlp_hidden_layers = 4 # Every MLP has four hidden layers plus its output layer.
 
 [policy.board]
-blocks = 18
-heads = 12
+blocks = 8
+heads = 6
+feedforward = 256 # Width of each hidden layer in the board transformer FFNs.
 
 [policy.action]
-blocks = 9
-heads = 6
+hidden_width = 256 # CLS and five lane vectors -> four GELU layers -> ten scores.
 
 [policy.tile]
-blocks = 9
-heads = 6
+blocks = 4
+heads = 3
+feedforward = 192 # Width of each hidden layer in the tile decoder FFNs.
+readout_hidden_width = 96 # Four ReLU hidden layers shared across all 45 tiles.
 
 [policy.effect]
-heads = 8
+heads = 6
+hidden_width = 192 # Four GELU hidden layers; the 56-slot outcome carrier is unchanged.
 
 [policy.execution]
 microbatch = 128
@@ -396,13 +418,14 @@ benchmark_min_cohorts = 1
 [gpu_profiles.generic-bf16]
 status = "conservative-unmeasured"
 torch_threads = 1
-performance = {fit_species_microbatch = 32, fit_tile_microbatch = 32, fit_token_budget = 8192, fit_batch_groups = 1, collection_vram_headroom_mib = 1024}
+performance = {fit_species_microbatch = 32, fit_tile_microbatch = 32, fit_token_budget = 8192, fit_batch_groups = 2, collection_vram_headroom_mib = 1024}
 
 [gpu_profiles.rtx4070-laptop]
 device_names = ["NVIDIA GeForce RTX 4070 Laptop GPU"]
 status = "measured-eager-2026-10-15"
 torch_threads = 2
-performance = {compile_collection = true, compile_fitting = false, fit_species_microbatch = 64, fit_tile_microbatch = 64, fit_token_budget = 16384, fit_batch_groups = 2, collection_vram_headroom_mib = 1638}
+# Stage fitting accumulates gradients across batches before the cohort update.
+performance = {compile_collection = true, compile_fitting = false, fit_species_microbatch = 64, fit_tile_microbatch = 64, fit_token_budget = 16384, fit_batch_groups = 1, collection_vram_headroom_mib = 1638}
 
 [gpu_profiles.rtx4080-super]
 device_names = ["NVIDIA GeForce RTX 4080 SUPER"]
